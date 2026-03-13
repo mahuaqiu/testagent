@@ -30,13 +30,17 @@ class Action:
     单个操作动作。
 
     Attributes:
-        action_type: 动作类型，如 navigate/click/fill/wait/assert/screenshot/select/hover/press
+        action_type: 动作类型，如 navigate/click/fill/wait/assert/screenshot/select/hover/press/ocr_click/image_click
         selector: 元素选择器（click/fill/assert 等需要）
-        value: 输入值（fill 需要文本，navigate 需要 URL，select 需要选项）
+        value: 输入值（fill 需要文本，navigate 需要 URL，select 需要选项，ocr_click 需要目标文字）
         wait: 等待时间（毫秒），用于 wait 动作或动作后等待
         expect: 期望结果，用于断言动作
         screenshot: 是否在该动作后截图
         timeout: 该动作的超时时间（毫秒）
+        match_mode: OCR 匹配模式（exact/fuzzy/regex），用于 ocr_click
+        threshold: 图像匹配阈值（0-1），用于 image_click
+        method: 图像匹配方法（template/feature），用于 image_click
+        offset: 点击偏移量 {"x": 0, "y": 0}，用于 ocr_click/image_click
     """
 
     action_type: str
@@ -46,6 +50,10 @@ class Action:
     expect: Optional[str] = None
     screenshot: bool = False
     timeout: Optional[int] = None
+    match_mode: Optional[str] = None
+    threshold: Optional[float] = None
+    method: Optional[str] = None
+    offset: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """转换为字典。"""
@@ -57,6 +65,10 @@ class Action:
             "expect": self.expect,
             "screenshot": self.screenshot,
             "timeout": self.timeout,
+            "match_mode": self.match_mode,
+            "threshold": self.threshold,
+            "method": self.method,
+            "offset": self.offset,
         }
 
     @classmethod
@@ -70,6 +82,10 @@ class Action:
             expect=data.get("expect"),
             screenshot=data.get("screenshot", False),
             timeout=data.get("timeout"),
+            match_mode=data.get("match_mode"),
+            threshold=data.get("threshold"),
+            method=data.get("method"),
+            offset=data.get("offset"),
         )
 
 

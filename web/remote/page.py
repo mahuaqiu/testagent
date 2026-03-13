@@ -440,6 +440,24 @@ class RemotePage:
         self._page.press(selector, key, timeout=timeout)
         self._logger.log_info("press", f"Pressed {key} on {selector}", {"selector": selector, "key": key})
 
+    def mouse_click(self, x: int, y: int) -> None:
+        """
+        通过坐标点击页面。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+        """
+        start_time = time.time()
+        try:
+            self._page.mouse.click(x, y)
+            duration_ms = int((time.time() - start_time) * 1000)
+            self._logger.log_info("mouse_click", f"Clicked at ({x}, {y})", {"x": x, "y": y, "duration_ms": duration_ms})
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            self._logger.log_error("mouse_click", e, {"x": x, "y": y, "duration_ms": duration_ms})
+            raise
+
     def goto(self, url: str, **kwargs) -> str:
         """navigate 的别名，兼容 BasePage。"""
         return self.navigate(url, **kwargs)

@@ -60,6 +60,8 @@ class ActionExecutor:
         "evaluate",
         "scroll",
         "goto",
+        "ocr_click",
+        "image_click",
     }
 
     def __init__(
@@ -280,6 +282,14 @@ class ActionExecutor:
             self._page.evaluate(script)
             return None
 
+        elif action_type == "ocr_click":
+            # OCR 文字点击
+            return self._execute_ocr_click(action)
+
+        elif action_type == "image_click":
+            # 图像匹配点击
+            return self._execute_image_click(action)
+
         else:
             raise ValueError(f"Unknown action type: {action_type}")
 
@@ -291,6 +301,112 @@ class ActionExecutor:
             list[str]: 动作类型列表
         """
         return list(self.BUILTIN_ACTIONS) + list(self._custom_handlers.keys())
+
+    def _execute_ocr_click(self, action: Action) -> dict:
+        """
+        执行 OCR 文字点击。
+
+        Args:
+            action: 动作定义，value 为目标文字。
+
+        Returns:
+            dict: 点击结果，包含坐标信息。
+        """
+        from common.ocr_client import get_ocr_client
+
+        if not action.value:
+            raise ValueError("ocr_click requires 'value' (target text)")
+
+        # 获取截图
+        screenshot_bytes = self._page.screenshot().data
+
+        # OCR 识别
+        client = get_ocr_client()
+        text_block = client.find_text(
+            screenshot_bytes,
+            action.value,
+            match_mode=action.match_mode or "exact",
+        )
+
+        if text_block is None:
+            raise ValueError(f"Text not found: {action.value}")
+
+        # 计算点击坐标
+        x = text_block.center_x
+        y = text_block.center_y
+
+        if action.offset:
+            x += action.offset.get("x", 0)
+            y += action.offset.get("y", 0)
+
+        # 执行点击
+        self._page.mouse_click(x, y)
+
+        return {
+            "text": text_block.text,
+            "confidence": text_block.confidence,
+            "clicked_position": {"x": x, "y": y},
+        }
+
+    def _execute_image_click(self, action: Action) -> dict:
+        """
+        执行图像匹配点击。
+
+        Args:
+            action: 动作定义，value 为模板图片路径或 Base64。
+
+        Returns:
+            dict: 点击结果，包含坐标信息。
+        """
+        import base64
+        import os
+
+        from common.ocr_client import get_ocr_client
+
+        if not action.value:
+            raise ValueError("image_click requires 'value' (template image path or base64)")
+
+        # 获取截图
+        screenshot_bytes = self._page.screenshot().data
+
+        # 获取模板图片
+        if os.path.isfile(action.value):
+            with open(action.value, "rb") as f:
+                template_bytes = f.read()
+        else:
+            # 假设是 Base64 编码
+            try:
+                template_bytes = base64.b64decode(action.value)
+            except Exception:
+                raise ValueError("Invalid template image: must be a file path or base64 string")
+
+        # 图像匹配
+        client = get_ocr_client()
+        match_result = client.find_image(
+            screenshot_bytes,
+            template_bytes,
+            threshold=action.threshold or 0.8,
+            method=action.method or "template",
+        )
+
+        if match_result is None:
+            raise ValueError("Image not matched")
+
+        # 计算点击坐标
+        x = match_result.center_x
+        y = match_result.center_y
+
+        if action.offset:
+            x += action.offset.get("x", 0)
+            y += action.offset.get("y", 0)
+
+        # 执行点击
+        self._page.mouse_click(x, y)
+
+        return {
+            "confidence": match_result.confidence,
+            "clicked_position": {"x": x, "y": y},
+        }
 
     def __repr__(self) -> str:
         return f"ActionExecutor(actions={len(self.get_supported_actions())})"

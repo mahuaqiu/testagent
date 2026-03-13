@@ -60,6 +60,16 @@ dev:
     password: "test123"
     database: "test_db"
 
+  # OCR 服务配置
+  ocr_service:
+    base_url: "http://127.0.0.1:8081"    # OCR 服务地址
+    timeout: 30000                        # 请求超时（毫秒）
+    retry: 2                              # 重试次数
+    lang: "ch"                            # 默认语言
+    image_match:
+      default_threshold: 0.8              # 默认匹配阈值
+      default_method: "template"          # 默认匹配方法: template / feature
+
 staging:
   base_url: "https://staging.example.com"
   api_base_url: "https://staging-api.example.com"
@@ -114,3 +124,13 @@ staging:
     user: "test"
     password: "test123"
     database: "test_db"
+
+  # OCR 服务配置
+  ocr_service:
+    base_url: "http://ocr-service:8081"   # Docker 内网地址
+    timeout: 30000
+    retry: 2
+    lang: "ch"
+    image_match:
+      default_threshold: 0.8
+      default_method: "template"
