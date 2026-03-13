@@ -1,0 +1,32 @@
+[project]
+name = "autotest"
+version = "0.1.0"
+description = "多端自动化测试工程（Web / App / API）"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=7.0",
+    "requests>=2.28",
+    "allure-pytest>=2.13",
+    "pyyaml>=6.0",
+    "faker>=18.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+web = ["playwright>=1.40"]
+app = ["Appium-Python-Client>=3.0"]
+all = [
+    "playwright>=1.40",
+    "Appium-Python-Client>=3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["web/tests", "app/tests", "api/tests"]
+markers = [
+    "web: Web 端 UI 测试",
+    "app: 移动端 App 测试",
+    "api: 接口测试",
+    "smoke: 冒烟测试",
+    "regression: 回归测试",
+]
+addopts = "-v --strict-markers"

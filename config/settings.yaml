@@ -1,0 +1,36 @@
+# 环境配置文件
+# 通过环境变量 ENV 选择 dev / staging / prod
+
+dev:
+  base_url: "https://dev.example.com"
+  api_base_url: "https://dev-api.example.com"
+  app:
+    platform: "Android"
+    appium_server: "http://127.0.0.1:4723"
+    desired_caps:
+      platformName: "Android"
+      automationName: "UiAutomator2"
+      app: "/path/to/app-debug.apk"
+  db:
+    host: "127.0.0.1"
+    port: 3306
+    user: "test"
+    password: "test123"
+    database: "test_db"
+
+staging:
+  base_url: "https://staging.example.com"
+  api_base_url: "https://staging-api.example.com"
+  app:
+    platform: "Android"
+    appium_server: "http://127.0.0.1:4723"
+    desired_caps:
+      platformName: "Android"
+      automationName: "UiAutomator2"
+      app: "/path/to/app-staging.apk"
+  db:
+    host: "staging-db.example.com"
+    port: 3306
+    user: "test"
+    password: "test123"
+    database: "test_db"
