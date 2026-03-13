@@ -1,7 +1,5 @@
 """
-App 端 conftest —— 提供 Appium 相关的 fixtures。
-
-这里的 fixture 只对 app/tests/ 下的用例生效。
+Android 端 conftest —— 提供 Appium 相关的 fixtures。
 """
 
 import pytest
@@ -9,20 +7,18 @@ from appium import webdriver as appium_webdriver
 from appium.options.common import AppiumOptions
 
 from common.config import Config
-from app.steps.login_steps import LoginSteps
+from android.steps.login_steps import LoginSteps
 
 
 @pytest.fixture(scope="session")
 def driver(config: Config):
-    """启动 Appium Driver，整个测试会话共享。
-
-    从 config 中读取 Appium server 地址和 desired capabilities。
+    """启动 Android Appium Driver，整个测试会话共享。
 
     Yields:
         AppiumDriver: Appium 驱动对象。
     """
-    server_url = config.get("app.appium_server")
-    caps = config.get("app.desired_caps", {})
+    server_url = config.get("android.appium_server")
+    caps = config.get("android.desired_caps", {})
 
     options = AppiumOptions()
     for key, value in caps.items():
@@ -36,9 +32,5 @@ def driver(config: Config):
 
 @pytest.fixture
 def login_steps(driver) -> LoginSteps:
-    """App 端登录流程 steps。
-
-    Returns:
-        LoginSteps: 登录流程封装对象。
-    """
+    """Android 端登录流程 steps。"""
     return LoginSteps(driver)

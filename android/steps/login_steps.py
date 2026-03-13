@@ -1,5 +1,5 @@
 """
-App 端登录相关业务流程封装。
+Android 端登录相关业务流程封装。
 
 Usage:
     def test_something_after_login(self, login_steps):
@@ -9,33 +9,18 @@ Usage:
 
 from appium.webdriver import Remote as AppiumDriver
 
-from app.pages.login_page import LoginPage
+from android.pages.login_page import LoginPage
 
 
 class LoginSteps:
-    """App 端登录业务流程封装。
-
-    封装级别说明：
-        - LoginPage.login() → 只是填写表单并提交（页面级操作）
-        - LoginSteps.login_as() → 完整登录流程 + 断言成功（业务流程）
-
-    Args:
-        driver: Appium Driver 对象。
-    """
+    """Android 端登录业务流程封装。"""
 
     def __init__(self, driver: AppiumDriver):
         self.driver = driver
         self.login_page = LoginPage(driver)
 
     def login_as(self, username: str, password: str):
-        """以指定账号完成登录全流程。
-
-        步骤: 输入账号密码 → 提交 → 断言登录成功。
-
-        Args:
-            username: 用户名。
-            password: 密码。
-        """
+        """以指定账号完成登录全流程。"""
         self.login_page.login(username, password)
         self.login_page.should_login_success()
 

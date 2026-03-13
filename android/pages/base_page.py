@@ -1,7 +1,7 @@
 """
-App 端 Page Object 基类 —— 所有 App 页面类的父类。
+Android 端 Page Object 基类 —— 所有 Android 页面类的父类。
 
-基于 Appium，封装常用的移动端元素操作。
+基于 Appium，封装常用的 Android 元素操作。
 新增页面时继承此类，专注编写业务操作。
 
 Usage:
@@ -19,9 +19,9 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 class BasePage:
-    """App 端 Page Object 基类（Appium）。
+    """Android 端 Page Object 基类（Appium）。
 
-    提供通用的移动端元素操作方法。
+    提供通用的 Android 元素操作方法。
     定位器统一使用 tuple 格式: (by, value)，如 ("id", "com.example:id/btn")。
 
     Args:
@@ -47,6 +47,7 @@ class BasePage:
             "xpath": AppiumBy.XPATH,
             "accessibility_id": AppiumBy.ACCESSIBILITY_ID,
             "class": AppiumBy.CLASS_NAME,
+            "uiautomator": AppiumBy.ANDROID_UIAUTOMATOR,
         }
         appium_by = by_map.get(by, by)
         return WebDriverWait(self.driver, timeout).until(

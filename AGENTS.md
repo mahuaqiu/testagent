@@ -1,13 +1,15 @@
 # 项目说明（供 AI Agent 阅读）
 
-这是一个 **Python 多端自动化测试工程**，覆盖 Web、App、API 三端。
+这是一个 **Python 多端自动化测试工程**，覆盖 Web、Android、iOS、Windows、API 五端。
 
 ## 技术栈
 
 - 语言: Python 3.10+
 - 框架: pytest
 - Web UI: Playwright
-- App UI: Appium
+- Android UI: Appium (UiAutomator2)
+- iOS UI: Appium (XCUITest)
+- Windows 桌面: WinAppDriver / Playwright
 - API: requests
 - 数据: Faker
 - 报告: allure
@@ -18,46 +20,125 @@
 autotest/
 ├── common/                  # 公共库（生成用例时优先搜索此目录）
 │   ├── base_api.py          # HTTP 请求基类，所有 API Service 继承它
-│   ├── assertions.py        # 自定义断言函数（assert_status_ok, assert_json_contains 等）
+│   ├── assertions.py        # 自定义断言函数
 │   ├── config.py            # 配置管理，读取 config/settings.yaml
-│   ├── data_factory.py      # 测试数据工厂，基于 Faker 生成随机数据
+│   ├── data_factory.py      # 测试数据工厂
 │   ├── db.py                # 数据库操作封装
-│   └── utils.py             # 通用工具（retry 装饰器、timestamp、wait_until）
+│   └── utils.py             # 通用工具（retry、timestamp、wait_until）
 │
 ├── web/                     # Web 端（Playwright）
-│   ├── pages/               # Page Object 层 —— 单个页面的元素操作
-│   │   ├── base_page.py     # Web BasePage（所有 Web 页面的父类）
-│   │   └── login_page.py    # 示例页面
-│   ├── steps/               # Steps 层 —— 跨页面/多步骤业务流程封装
-│   │   └── login_steps.py   # 登录业务流程（打开页面+填写+提交+断言）
-│   ├── tests/               # 测试用例
-│   │   └── test_login.py    # 示例用例
-│   └── conftest.py          # Web 端 fixtures（browser, page, login_steps）
-│
-├── app/                     # App 端（Appium）
 │   ├── pages/               # Page Object 层
-│   │   ├── base_page.py     # App BasePage（所有 App 页面的父类）
-│   │   └── login_page.py    # 示例页面
 │   ├── steps/               # Steps 层
-│   │   └── login_steps.py   # 登录业务流程
 │   ├── tests/               # 测试用例
-│   │   └── test_login.py    # 示例用例
-│   └── conftest.py          # App 端 fixtures（driver, login_steps）
+│   ├── remote/              # Remote Worker 模块（CDP 远程执行）
+│   │   ├── browser.py       # CDP 浏览器管理
+│   │   ├── session.py       # 会话管理（用户隔离）
+│   │   ├── page.py          # 页面操作封装
+│   │   ├── task.py          # 任务模型和队列
+│   │   ├── worker.py        # Worker 主服务
+│   │   └── server.py        # HTTP API 服务
+│   └── conftest.py          # Web 端 fixtures
+│
+├── android/                 # Android 端（Appium + UiAutomator2）
+│   ├── pages/
+│   ├── steps/
+│   ├── tests/
+│   └── conftest.py
+│
+├── ios/                     # iOS 端（Appium + XCUITest）
+│   ├── pages/
+│   ├── steps/
+│   ├── tests/
+│   └── conftest.py
+│
+├── windows/                 # Windows 桌面端
+│   ├── pages/
+│   ├── steps/
+│   ├── tests/
+│   └── conftest.py
 │
 ├── api/                     # 接口测试
-│   ├── services/            # Service 层（单接口封装）
-│   │   └── user_service.py  # 示例 Service
-│   ├── steps/               # Steps 层（多接口组合的业务流程）
-│   │   └── auth_steps.py    # 认证流程（登录+获取token+注入）
+│   ├── services/            # Service 层
+│   ├── steps/               # Steps 层
 │   ├── tests/               # 测试用例
-│   │   └── test_user_api.py # 示例用例
-│   └── conftest.py          # API 端 fixtures（user_service, auth_steps）
+│   └── conftest.py
 │
 ├── config/
 │   └── settings.yaml        # 多环境配置文件
 ├── data/                    # 测试数据 / 截图存放
-├── conftest.py              # 全局 fixtures（config, data_factory）
+├── conftest.py              # 全局 fixtures
 └── pyproject.toml           # 依赖管理
+```
+
+## Remote Worker 模式
+
+本项目作为 **Test Worker** 运行，可被外部 pytest agent 远程调度执行测试任务。
+
+### 架构说明
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│           外部 pytest-agent（调度方）                        │
+│                   HTTP API / CDP                            │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│           本项目 Test Worker（执行方）                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ web/remote/                                          │   │
+│  │  ├── Worker        主服务，接收任务、管理会话         │   │
+│  │  ├── RemoteBrowser CDP 浏览器管理                   │   │
+│  │  ├── RemotePage    页面操作封装                     │   │
+│  │  └── server.py     HTTP API 服务                    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 启动 Worker 服务
+
+```bash
+# Web 端 Worker（默认端口 8080，CDP 端口 9222）
+python -m web.remote.server --port 8080 --cdp-port 9222
+
+# 有头模式（方便观察）
+python -m web.remote.server --no-headless
+
+# 连接远程浏览器
+python -m web.remote.server --cdp-endpoint ws://remote-host:9222
+```
+
+### HTTP API 接口
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/status` | GET | 服务状态 |
+| `/cdp-endpoint` | GET | 获取 CDP 端点 |
+| `/task` | POST | 提交任务到队列 |
+| `/task/execute` | POST | 提交并立即执行任务 |
+| `/result/{task_id}` | GET | 获取任务结果 |
+| `/session` | POST | 创建会话 |
+| `/session/{id}` | DELETE | 关闭会话 |
+
+### 任务执行示例
+
+```python
+import requests
+
+# 提交并执行任务
+response = requests.post("http://localhost:8080/task/execute", json={
+    "user_id": "user_001",
+    "actions": [
+        {"action_type": "navigate", "value": "https://example.com"},
+        {"action_type": "fill", "selector": "input[name='username']", "value": "test"},
+        {"action_type": "click", "selector": "button[type='submit']"},
+        {"action_type": "screenshot", "value": "result"}
+    ]
+})
+
+result = response.json()
+print(f"Status: {result['status']}")
+print(f"Duration: {result['duration_ms']}ms")
 ```
 
 ## 三层架构（重要）
@@ -114,7 +195,9 @@ autotest/
 
 ### 标记（markers）
 - Web 用例必须加 `@pytest.mark.web`
-- App 用例必须加 `@pytest.mark.app`
+- Android 用例必须加 `@pytest.mark.android`
+- iOS 用例必须加 `@pytest.mark.ios`
+- Windows 用例必须加 `@pytest.mark.windows`
 - API 用例必须加 `@pytest.mark.api`
 - 冒烟用例额外加 `@pytest.mark.smoke`
 
@@ -134,43 +217,35 @@ autotest/
 ### Web/App 用例断言
 使用 Page Object 中的 `should_*` 方法封装断言逻辑。
 
-## 公共库使用指南
+## 配置管理
 
-### 测试数据（data_factory fixture）
-```python
-def test_example(self, data_factory):
-    user = data_factory.random_user()        # 随机用户数据
-    user = data_factory.template_user(name="固定名")  # 部分固定
-    phone = data_factory.random_phone()      # 随机手机号
-```
+配置文件 `config/settings.yaml` 按端分组：
 
-### Steps（fixture 注入使用）
-```python
-# Web 端
-def test_home_page(self, login_steps, page):
-    login_steps.login_as("user", "pass")     # 一行完成登录
-    # 后续测试首页功能...
+```yaml
+dev:
+  web:
+    base_url: "https://dev.example.com"
+    remote:
+      cdp_port: 9222
+      headless: false     # 默认有头模式，方便观察
 
-# API 端
-def test_create_order(self, auth_steps, order_service):
-    auth_steps.login_and_set_token(order_service)  # 一行完成认证
-    resp = order_service.create_order(...)
-```
+  android:
+    appium_server: "http://127.0.0.1:4723"
+    desired_caps:
+      platformName: "Android"
+      automationName: "UiAutomator2"
 
-### 重试（retry 装饰器）
-```python
-from common.utils import retry
+  ios:
+    appium_server: "http://127.0.0.1:4724"
+    desired_caps:
+      platformName: "iOS"
+      automationName: "XCUITest"
 
-@retry(max_attempts=3, delay=2)
-def flaky_step():
-    ...
-```
+  windows:
+    app_path: "/path/to/app.exe"
 
-### 数据库（db fixture 需自行在 conftest 中添加）
-```python
-from common.db import DB
-db = DB(host="...", port=3306, user="...", password="...", database="...")
-rows = db.query("SELECT * FROM users WHERE phone = %s", ("13800001111",))
+  db:
+    host: "127.0.0.1"
 ```
 
 ## 运行测试
@@ -185,11 +260,17 @@ pytest
 # 只运行 Web 端
 pytest web/tests/ -m web
 
+# 只运行 Android 端
+pytest android/tests/ -m android
+
+# 只运行 iOS 端
+pytest ios/tests/ -m ios
+
+# 只运行 Windows 端
+pytest windows/tests/ -m windows
+
 # 只运行 API 端
 pytest api/tests/ -m api
-
-# 只运行 App 端
-pytest app/tests/ -m app
 
 # 冒烟测试
 pytest -m smoke
