@@ -1,0 +1,574 @@
+"""
+Mac 桌面平台执行引擎。
+
+基于 pyautogui 实现，支持 OCR/图像识别定位。
+"""
+
+import logging
+import time
+import uuid
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+import pyautogui
+
+from worker.platforms.base import PlatformManager, Session
+from worker.task import Action, ActionResult, ActionStatus
+from worker.config import PlatformConfig
+
+logger = logging.getLogger(__name__)
+
+# 设置 pyautogui 安全措施
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.1
+
+
+class MacPlatformManager(PlatformManager):
+    """
+    Mac 桌面平台管理器。
+
+    使用 pyautogui 控制 macOS 桌面，支持 OCR/图像识别定位。
+    """
+
+    def __init__(self, config: PlatformConfig, ocr_client=None):
+        super().__init__(config, ocr_client)
+        self.timeout = config.timeout
+
+    @property
+    def platform(self) -> str:
+        return "mac"
+
+    def start(self) -> None:
+        """启动 Mac 平台。"""
+        if self._started:
+            return
+
+        self._started = True
+        logger.info("Mac platform started")
+
+    def stop(self) -> None:
+        """停止 Mac 平台。"""
+        # 关闭所有会话
+        for session_id in list(self.sessions.keys()):
+            try:
+                self.close_session(session_id)
+            except Exception as e:
+                logger.warning(f"Failed to close session {session_id}: {e}")
+
+        self._started = False
+        logger.info("Mac platform stopped")
+
+    def is_available(self) -> bool:
+        """检查平台是否可用。"""
+        return self._started
+
+    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+        """
+        创建桌面会话。
+
+        Args:
+            device_id: 不使用
+            options: 其他选项
+
+        Returns:
+            Session: 会话对象
+        """
+        if not self.is_available():
+            raise RuntimeError("Mac platform not started")
+
+        session_id = str(uuid.uuid4())[:8]
+
+        session = Session(
+            session_id=session_id,
+            platform=self.platform,
+            context=None,
+            metadata=options or {},
+        )
+
+        self.sessions[session_id] = session
+        logger.info(f"Mac session created: {session_id}")
+
+        return session
+
+    def close_session(self, session_id: str) -> bool:
+        """关闭桌面会话。"""
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+            logger.info(f"Mac session closed: {session_id}")
+            return True
+        return False
+
+    def execute_action(self, session: Session, action: Action) -> ActionResult:
+        """执行动作。"""
+        start_time = time.time()
+
+        try:
+            # 根据动作类型执行
+            if action.action_type == "ocr_click":
+                result = self._action_ocr_click(action)
+            elif action.action_type == "image_click":
+                result = self._action_image_click(action)
+            elif action.action_type == "click":
+                result = self._action_click(action)
+            elif action.action_type == "ocr_input":
+                result = self._action_ocr_input(action)
+            elif action.action_type == "input":
+                result = self._action_input(action)
+            elif action.action_type == "press":
+                result = self._action_press(action)
+            elif action.action_type == "swipe":
+                result = self._action_swipe(action)
+            elif action.action_type == "screenshot":
+                result = self._action_screenshot(action)
+            elif action.action_type == "wait":
+                result = self._action_wait(action)
+            elif action.action_type == "ocr_wait":
+                result = self._action_ocr_wait(action)
+            elif action.action_type == "image_wait":
+                result = self._action_image_wait(action)
+            elif action.action_type == "ocr_assert":
+                result = self._action_ocr_assert(action)
+            elif action.action_type == "image_assert":
+                result = self._action_image_assert(action)
+            elif action.action_type == "ocr_get_text":
+                result = self._action_ocr_get_text(action)
+            elif action.action_type == "launch_app":
+                result = self._action_launch_app(action)
+            else:
+                result = ActionResult(
+                    index=0,
+                    action_type=action.action_type,
+                    status=ActionStatus.FAILED,
+                    error=f"Unknown action type: {action.action_type}",
+                )
+
+            # 更新会话活动时间
+            self._update_session_activity(session.session_id)
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            result.duration_ms = duration_ms
+
+            return result
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            return ActionResult(
+                index=0,
+                action_type=action.action_type,
+                status=ActionStatus.FAILED,
+                duration_ms=duration_ms,
+                error=str(e),
+            )
+
+    def get_screenshot(self, session: Session) -> bytes:
+        """获取当前屏幕截图。"""
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    # ========== 动作实现 ==========
+
+    def _action_launch_app(self, action: Action) -> ActionResult:
+        """启动应用。"""
+        app_name = action.app_path or action.value
+        if not app_name:
+            return ActionResult(
+                index=0,
+                action_type="launch_app",
+                status=ActionStatus.FAILED,
+                error="app_name is required",
+            )
+
+        # macOS 使用 open 命令启动应用
+        import subprocess
+        subprocess.run(["open", "-a", app_name])
+
+        # 等待应用启动
+        time.sleep(2)
+
+        return ActionResult(
+            index=0,
+            action_type="launch_app",
+            status=ActionStatus.SUCCESS,
+            output=f"Launched: {app_name}",
+        )
+
+    def _action_ocr_click(self, action: Action) -> ActionResult:
+        """OCR 文字点击。"""
+        # 获取截图
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+
+        # 查找文字位置
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_click",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 点击
+        pyautogui.click(x, y)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_click",
+            status=ActionStatus.SUCCESS,
+            output=f"Clicked at ({x}, {y})",
+        )
+
+    def _action_image_click(self, action: Action) -> ActionResult:
+        """图像匹配点击。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_click",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        # 使用 pyautogui 内置图像查找
+        try:
+            location = pyautogui.locateOnScreen(action.image_path, confidence=action.threshold)
+            if location:
+                center = pyautogui.center(location)
+                x, y = self._apply_offset(center.x, center.y, action.offset)
+                pyautogui.click(x, y)
+                return ActionResult(
+                    index=0,
+                    action_type="image_click",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Clicked at ({x}, {y})",
+                )
+        except Exception:
+            pass
+
+        return ActionResult(
+            index=0,
+            action_type="image_click",
+            status=ActionStatus.FAILED,
+            error=f"Image not found: {action.image_path}",
+        )
+
+    def _action_click(self, action: Action) -> ActionResult:
+        """坐标点击。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="click",
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        pyautogui.click(action.x, action.y)
+
+        return ActionResult(
+            index=0,
+            action_type="click",
+            status=ActionStatus.SUCCESS,
+            output=f"Clicked at ({action.x}, {action.y})",
+        )
+
+    def _action_ocr_input(self, action: Action) -> ActionResult:
+        """OCR 文字附近输入。"""
+        # 获取截图
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+
+        # 查找文字位置
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_input",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 点击输入框
+        pyautogui.click(x, y)
+
+        # 输入文本 (macOS 使用 pyautogui.write)
+        if action.value:
+            pyautogui.write(action.value)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_input",
+            status=ActionStatus.SUCCESS,
+            output=f"Input at ({x}, {y})",
+        )
+
+    def _action_input(self, action: Action) -> ActionResult:
+        """坐标输入。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="input",
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        # 点击
+        pyautogui.click(action.x, action.y)
+
+        # 输入
+        if action.value:
+            pyautogui.write(action.value)
+
+        return ActionResult(
+            index=0,
+            action_type="input",
+            status=ActionStatus.SUCCESS,
+            output=f"Input at ({action.x}, {action.y})",
+        )
+
+    def _action_press(self, action: Action) -> ActionResult:
+        """按键。"""
+        if not action.value:
+            return ActionResult(
+                index=0,
+                action_type="press",
+                status=ActionStatus.FAILED,
+                error="Key is required",
+            )
+
+        # 支持组合键，如 "command+c"
+        keys = action.value.split("+")
+        if len(keys) > 1:
+            pyautogui.hotkey(*keys)
+        else:
+            pyautogui.press(action.value)
+
+        return ActionResult(
+            index=0,
+            action_type="press",
+            status=ActionStatus.SUCCESS,
+            output=f"Pressed: {action.value}",
+        )
+
+    def _action_swipe(self, action: Action) -> ActionResult:
+        """滑动（鼠标拖拽）。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="swipe",
+                status=ActionStatus.FAILED,
+                error="Start coordinates are required",
+            )
+
+        end_x = action.end_x if action.end_x is not None else action.x
+        end_y = action.end_y if action.end_y is not None else action.y
+
+        pyautogui.moveTo(action.x, action.y)
+        pyautogui.mouseDown()
+        pyautogui.moveTo(end_x, end_y, duration=0.5)
+        pyautogui.mouseUp()
+
+        return ActionResult(
+            index=0,
+            action_type="swipe",
+            status=ActionStatus.SUCCESS,
+            output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y})",
+        )
+
+    def _action_screenshot(self, action: Action) -> ActionResult:
+        """截图。"""
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+        screenshot_base64 = self._bytes_to_base64(screenshot_bytes)
+
+        name = action.value or "screenshot"
+
+        return ActionResult(
+            index=0,
+            action_type="screenshot",
+            status=ActionStatus.SUCCESS,
+            output=name,
+            screenshot=screenshot_base64,
+        )
+
+    def _action_wait(self, action: Action) -> ActionResult:
+        """固定等待。"""
+        wait_time = action.wait or int(action.value or 1000)
+        self._wait(wait_time)
+
+        return ActionResult(
+            index=0,
+            action_type="wait",
+            status=ActionStatus.SUCCESS,
+            output=f"Waited {wait_time}ms",
+        )
+
+    def _action_ocr_wait(self, action: Action) -> ActionResult:
+        """等待文字出现。"""
+        start_time = time.time()
+        timeout = action.timeout / 1000
+
+        while time.time() - start_time < timeout:
+            screenshot = pyautogui.screenshot()
+
+            import io
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="PNG")
+            screenshot_bytes = buffer.getvalue()
+
+            position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+
+            if position:
+                return ActionResult(
+                    index=0,
+                    action_type="ocr_wait",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Text appeared: {action.value}",
+                )
+
+            time.sleep(0.5)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_wait",
+            status=ActionStatus.FAILED,
+            error=f"Text not appeared within timeout: {action.value}",
+        )
+
+    def _action_image_wait(self, action: Action) -> ActionResult:
+        """等待图像出现。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_wait",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        start_time = time.time()
+        timeout = action.timeout / 1000
+
+        while time.time() - start_time < timeout:
+            try:
+                location = pyautogui.locateOnScreen(action.image_path, confidence=action.threshold)
+                if location:
+                    return ActionResult(
+                        index=0,
+                        action_type="image_wait",
+                        status=ActionStatus.SUCCESS,
+                        output=f"Image appeared: {action.image_path}",
+                    )
+            except Exception:
+                pass
+
+            time.sleep(0.5)
+
+        return ActionResult(
+            index=0,
+            action_type="image_wait",
+            status=ActionStatus.FAILED,
+            error=f"Image not appeared within timeout: {action.image_path}",
+        )
+
+    def _action_ocr_assert(self, action: Action) -> ActionResult:
+        """OCR 文字断言。"""
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+
+        if position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_assert",
+                status=ActionStatus.SUCCESS,
+                output=f"Text found: {action.value}",
+            )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="ocr_assert",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+    def _action_image_assert(self, action: Action) -> ActionResult:
+        """图像断言。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_assert",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        try:
+            location = pyautogui.locateOnScreen(action.image_path, confidence=action.threshold)
+            if location:
+                return ActionResult(
+                    index=0,
+                    action_type="image_assert",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Image found: {action.image_path}",
+                )
+        except Exception:
+            pass
+
+        return ActionResult(
+            index=0,
+            action_type="image_assert",
+            status=ActionStatus.FAILED,
+            error=f"Image not found: {action.image_path}",
+        )
+
+    def _action_ocr_get_text(self, action: Action) -> ActionResult:
+        """获取 OCR 文字区域内容。"""
+        if not self.ocr_client:
+            return ActionResult(
+                index=0,
+                action_type="ocr_get_text",
+                status=ActionStatus.FAILED,
+                error="OCR client not available",
+            )
+
+        screenshot = pyautogui.screenshot()
+
+        import io
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+
+        texts = self.ocr_client.recognize(screenshot_bytes)
+
+        all_text = " ".join([t.text for t in texts])
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_get_text",
+            status=ActionStatus.SUCCESS,
+            output=all_text,
+        )

@@ -1,0 +1,609 @@
+"""
+iOS 平台执行引擎。
+
+基于 Appium 实现，支持 OCR/图像识别定位。
+"""
+
+import logging
+import time
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from appium import webdriver
+from appium.options.ios import XCUITestOptions
+from appium.webdriver.common.appiumby import AppiumBy
+
+from worker.platforms.base import PlatformManager, Session
+from worker.task import Action, ActionResult, ActionStatus
+from worker.config import PlatformConfig
+
+logger = logging.getLogger(__name__)
+
+
+class iOSPlatformManager(PlatformManager):
+    """
+    iOS 平台管理器。
+
+    使用 Appium (XCUITest) 控制 iOS 设备，支持 OCR/图像识别定位。
+    """
+
+    def __init__(self, config: PlatformConfig, ocr_client=None):
+        super().__init__(config, ocr_client)
+
+        self.appium_server = config.appium_server  # 必须从配置文件读取
+        self.timeout = config.timeout
+
+        # 设备 ID 到会话的映射
+        self._device_sessions: Dict[str, str] = {}
+
+    @property
+    def platform(self) -> str:
+        return "ios"
+
+    def start(self) -> None:
+        """启动 iOS 平台（检查 Appium Server 连接）。"""
+        if self._started:
+            return
+
+        # 检查 Appium Server 是否可用
+        try:
+            import httpx
+            response = httpx.get(f"{self.appium_server}/status", timeout=5)
+            if response.status_code != 200:
+                raise RuntimeError(f"Appium Server not healthy: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Appium Server check failed: {e}")
+
+        self._started = True
+        logger.info(f"iOS platform started (server={self.appium_server})")
+
+    def stop(self) -> None:
+        """停止 iOS 平台。"""
+        # 关闭所有会话
+        for session_id in list(self.sessions.keys()):
+            try:
+                self.close_session(session_id)
+            except Exception as e:
+                logger.warning(f"Failed to close session {session_id}: {e}")
+
+        self._started = False
+        logger.info("iOS platform stopped")
+
+    def is_available(self) -> bool:
+        """检查平台是否可用。"""
+        return self._started
+
+    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+        """
+        创建 Appium 会话。
+
+        Args:
+            device_id: iOS 设备 UDID
+            options: Appium 选项
+
+        Returns:
+            Session: 会话对象
+        """
+        if not self.is_available():
+            raise RuntimeError("iOS platform not started")
+
+        if not device_id:
+            raise ValueError("device_id is required for iOS platform")
+
+        session_id = str(uuid.uuid4())[:8]
+
+        # 配置 Appium 选项
+        appium_options = options or {}
+        caps = appium_options.get("capabilities", {})
+
+        options_obj = XCUITestOptions()
+        options_obj.platform_name = "iOS"
+        options_obj.automation_name = "XCUITest"
+        options_obj.udid = device_id
+
+        # 应用额外 capabilities
+        for key, value in caps.items():
+            options_obj.set_capability(key, value)
+
+        # 创建 driver
+        driver = webdriver.Remote(
+            command_executor=self.appium_server,
+            options=options_obj
+        )
+        driver.implicitly_wait(10)
+
+        session = Session(
+            session_id=session_id,
+            platform=self.platform,
+            device_id=device_id,
+            context=driver,
+            metadata={},
+        )
+
+        self.sessions[session_id] = session
+        self._device_sessions[device_id] = session_id
+
+        logger.info(f"iOS session created: {session_id} (device={device_id})")
+
+        return session
+
+    def close_session(self, session_id: str) -> bool:
+        """关闭 Appium 会话。"""
+        session = self.sessions.get(session_id)
+        if not session:
+            return False
+
+        try:
+            driver = session.context
+            if driver:
+                driver.quit()
+
+            # 清理映射
+            if session.device_id and session.device_id in self._device_sessions:
+                del self._device_sessions[session.device_id]
+
+            del self.sessions[session_id]
+            logger.info(f"iOS session closed: {session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to close session {session_id}: {e}")
+            return False
+
+    def execute_action(self, session: Session, action: Action) -> ActionResult:
+        """执行动作。"""
+        start_time = time.time()
+
+        driver = session.context
+        if not driver:
+            return ActionResult(
+                index=0,
+                action_type=action.action_type,
+                status=ActionStatus.FAILED,
+                error="Driver not found in session",
+            )
+
+        try:
+            # 根据动作类型执行
+            if action.action_type == "launch_app":
+                result = self._action_launch_app(driver, action)
+            elif action.action_type == "close_app":
+                result = self._action_close_app(driver, action)
+            elif action.action_type == "ocr_click":
+                result = self._action_ocr_click(driver, action)
+            elif action.action_type == "image_click":
+                result = self._action_image_click(driver, action)
+            elif action.action_type == "click":
+                result = self._action_click(driver, action)
+            elif action.action_type == "ocr_input":
+                result = self._action_ocr_input(driver, action)
+            elif action.action_type == "input":
+                result = self._action_input(driver, action)
+            elif action.action_type == "press":
+                result = self._action_press(driver, action)
+            elif action.action_type == "swipe":
+                result = self._action_swipe(driver, action)
+            elif action.action_type == "screenshot":
+                result = self._action_screenshot(driver, action)
+            elif action.action_type == "wait":
+                result = self._action_wait(driver, action)
+            elif action.action_type == "ocr_wait":
+                result = self._action_ocr_wait(driver, action)
+            elif action.action_type == "image_wait":
+                result = self._action_image_wait(driver, action)
+            elif action.action_type == "ocr_assert":
+                result = self._action_ocr_assert(driver, action)
+            elif action.action_type == "image_assert":
+                result = self._action_image_assert(driver, action)
+            elif action.action_type == "ocr_get_text":
+                result = self._action_ocr_get_text(driver, action)
+            else:
+                result = ActionResult(
+                    index=0,
+                    action_type=action.action_type,
+                    status=ActionStatus.FAILED,
+                    error=f"Unknown action type: {action.action_type}",
+                )
+
+            # 更新会话活动时间
+            self._update_session_activity(session.session_id)
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            result.duration_ms = duration_ms
+
+            return result
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            return ActionResult(
+                index=0,
+                action_type=action.action_type,
+                status=ActionStatus.FAILED,
+                duration_ms=duration_ms,
+                error=str(e),
+            )
+
+    def get_screenshot(self, session: Session) -> bytes:
+        """获取当前屏幕截图。"""
+        driver = session.context
+        if driver:
+            return driver.get_screenshot_as_png()
+        return b""
+
+    # ========== 动作实现 ==========
+
+    def _action_launch_app(self, driver, action: Action) -> ActionResult:
+        """启动应用。"""
+        bundle_id = action.bundle_id or action.value
+        if not bundle_id:
+            return ActionResult(
+                index=0,
+                action_type="launch_app",
+                status=ActionStatus.FAILED,
+                error="bundle_id is required",
+            )
+
+        driver.activate_app(bundle_id)
+
+        return ActionResult(
+            index=0,
+            action_type="launch_app",
+            status=ActionStatus.SUCCESS,
+            output=f"Launched: {bundle_id}",
+        )
+
+    def _action_close_app(self, driver, action: Action) -> ActionResult:
+        """关闭应用。"""
+        bundle_id = action.bundle_id or action.value
+        if bundle_id:
+            driver.terminate_app(bundle_id)
+        else:
+            driver.close_app()
+
+        return ActionResult(
+            index=0,
+            action_type="close_app",
+            status=ActionStatus.SUCCESS,
+            output=f"Closed: {bundle_id}",
+        )
+
+    def _action_ocr_click(self, driver, action: Action) -> ActionResult:
+        """OCR 文字点击。"""
+        # 获取截图
+        screenshot = driver.get_screenshot_as_png()
+
+        # 查找文字位置
+        position = self._find_text_position(screenshot, action.value, action.match_mode)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_click",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 点击
+        driver.tap([(x, y)])
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_click",
+            status=ActionStatus.SUCCESS,
+            output=f"Clicked at ({x}, {y})",
+        )
+
+    def _action_image_click(self, driver, action: Action) -> ActionResult:
+        """图像匹配点击。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_click",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        # 获取截图
+        screenshot = driver.get_screenshot_as_png()
+
+        # 查找图像位置
+        position = self._find_image_position(screenshot, action.image_path, action.threshold)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="image_click",
+                status=ActionStatus.FAILED,
+                error=f"Image not found: {action.image_path}",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 点击
+        driver.tap([(x, y)])
+
+        return ActionResult(
+            index=0,
+            action_type="image_click",
+            status=ActionStatus.SUCCESS,
+            output=f"Clicked at ({x}, {y})",
+        )
+
+    def _action_click(self, driver, action: Action) -> ActionResult:
+        """坐标点击。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="click",
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        driver.tap([(action.x, action.y)])
+
+        return ActionResult(
+            index=0,
+            action_type="click",
+            status=ActionStatus.SUCCESS,
+            output=f"Clicked at ({action.x}, {action.y})",
+        )
+
+    def _action_ocr_input(self, driver, action: Action) -> ActionResult:
+        """OCR 文字附近输入。"""
+        # 获取截图
+        screenshot = driver.get_screenshot_as_png()
+
+        # 查找文字位置
+        position = self._find_text_position(screenshot, action.value, action.match_mode)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_input",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 点击输入框
+        driver.tap([(x, y)])
+
+        # 输入文本
+        if action.value:
+            driver.find_element(AppiumBy.CLASS_NAME, "XCUIElementTypeTextField").send_keys(action.value)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_input",
+            status=ActionStatus.SUCCESS,
+            output=f"Input at ({x}, {y})",
+        )
+
+    def _action_input(self, driver, action: Action) -> ActionResult:
+        """坐标输入。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="input",
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        # 点击
+        driver.tap([(action.x, action.y)])
+
+        # 输入
+        if action.value:
+            driver.find_element(AppiumBy.CLASS_NAME, "XCUIElementTypeTextField").send_keys(action.value)
+
+        return ActionResult(
+            index=0,
+            action_type="input",
+            status=ActionStatus.SUCCESS,
+            output=f"Input at ({action.x}, {action.y})",
+        )
+
+    def _action_press(self, driver, action: Action) -> ActionResult:
+        """按键（iOS 使用 press_button）。"""
+        button = action.value
+
+        try:
+            if button:
+                driver.execute_script("mobile: pressButton", {"name": button})
+        except Exception as e:
+            return ActionResult(
+                index=0,
+                action_type="press",
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
+
+        return ActionResult(
+            index=0,
+            action_type="press",
+            status=ActionStatus.SUCCESS,
+            output=f"Pressed: {action.value}",
+        )
+
+    def _action_swipe(self, driver, action: Action) -> ActionResult:
+        """滑动。"""
+        if action.x is None or action.y is None:
+            return ActionResult(
+                index=0,
+                action_type="swipe",
+                status=ActionStatus.FAILED,
+                error="Start coordinates are required",
+            )
+
+        end_x = action.end_x if action.end_x is not None else action.x
+        end_y = action.end_y if action.end_y is not None else action.y
+
+        driver.swipe(action.x, action.y, end_x, end_y, duration=500)
+
+        return ActionResult(
+            index=0,
+            action_type="swipe",
+            status=ActionStatus.SUCCESS,
+            output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y})",
+        )
+
+    def _action_screenshot(self, driver, action: Action) -> ActionResult:
+        """截图。"""
+        screenshot = driver.get_screenshot_as_png()
+        screenshot_base64 = self._bytes_to_base64(screenshot)
+
+        name = action.value or "screenshot"
+
+        return ActionResult(
+            index=0,
+            action_type="screenshot",
+            status=ActionStatus.SUCCESS,
+            output=name,
+            screenshot=screenshot_base64,
+        )
+
+    def _action_wait(self, driver, action: Action) -> ActionResult:
+        """固定等待。"""
+        wait_time = action.wait or int(action.value or 1000)
+        self._wait(wait_time)
+
+        return ActionResult(
+            index=0,
+            action_type="wait",
+            status=ActionStatus.SUCCESS,
+            output=f"Waited {wait_time}ms",
+        )
+
+    def _action_ocr_wait(self, driver, action: Action) -> ActionResult:
+        """等待文字出现。"""
+        start_time = time.time()
+        timeout = action.timeout / 1000
+
+        while time.time() - start_time < timeout:
+            screenshot = driver.get_screenshot_as_png()
+            position = self._find_text_position(screenshot, action.value, action.match_mode)
+
+            if position:
+                return ActionResult(
+                    index=0,
+                    action_type="ocr_wait",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Text appeared: {action.value}",
+                )
+
+            time.sleep(0.5)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_wait",
+            status=ActionStatus.FAILED,
+            error=f"Text not appeared within timeout: {action.value}",
+        )
+
+    def _action_image_wait(self, driver, action: Action) -> ActionResult:
+        """等待图像出现。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_wait",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        start_time = time.time()
+        timeout = action.timeout / 1000
+
+        while time.time() - start_time < timeout:
+            screenshot = driver.get_screenshot_as_png()
+            position = self._find_image_position(screenshot, action.image_path, action.threshold)
+
+            if position:
+                return ActionResult(
+                    index=0,
+                    action_type="image_wait",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Image appeared: {action.image_path}",
+                )
+
+            time.sleep(0.5)
+
+        return ActionResult(
+            index=0,
+            action_type="image_wait",
+            status=ActionStatus.FAILED,
+            error=f"Image not appeared within timeout: {action.image_path}",
+        )
+
+    def _action_ocr_assert(self, driver, action: Action) -> ActionResult:
+        """OCR 文字断言。"""
+        screenshot = driver.get_screenshot_as_png()
+        position = self._find_text_position(screenshot, action.value, action.match_mode)
+
+        if position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_assert",
+                status=ActionStatus.SUCCESS,
+                output=f"Text found: {action.value}",
+            )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="ocr_assert",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}",
+            )
+
+    def _action_image_assert(self, driver, action: Action) -> ActionResult:
+        """图像断言。"""
+        if not action.image_path:
+            return ActionResult(
+                index=0,
+                action_type="image_assert",
+                status=ActionStatus.FAILED,
+                error="image_path is required",
+            )
+
+        screenshot = driver.get_screenshot_as_png()
+        position = self._find_image_position(screenshot, action.image_path, action.threshold)
+
+        if position:
+            return ActionResult(
+                index=0,
+                action_type="image_assert",
+                status=ActionStatus.SUCCESS,
+                output=f"Image found: {action.image_path}",
+            )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="image_assert",
+                status=ActionStatus.FAILED,
+                error=f"Image not found: {action.image_path}",
+            )
+
+    def _action_ocr_get_text(self, driver, action: Action) -> ActionResult:
+        """获取 OCR 文字区域内容。"""
+        if not self.ocr_client:
+            return ActionResult(
+                index=0,
+                action_type="ocr_get_text",
+                status=ActionStatus.FAILED,
+                error="OCR client not available",
+            )
+
+        screenshot = driver.get_screenshot_as_png()
+        texts = self.ocr_client.recognize(screenshot)
+
+        all_text = " ".join([t.text for t in texts])
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_get_text",
+            status=ActionStatus.SUCCESS,
+            output=all_text,
+        )

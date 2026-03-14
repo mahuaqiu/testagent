@@ -1,0 +1,57 @@
+# Worker 配置文件
+# 打包后请根据实际环境修改此文件
+
+# Worker 基础配置
+worker:
+  id: null                          # 自动生成，也可指定
+  port: 8080                        # HTTP 服务端口
+  device_check_interval: 60         # 设备检测间隔(秒)
+
+# 外部服务地址（必须配置）
+external_services:
+  platform_api: ""                  # 配置平台 API（如：http://platform.example.com/api/worker）
+  ocr_service: ""                   # OCR 服务地址（如：http://192.168.1.100:8081）
+
+# 平台配置
+platforms:
+  web:
+    enabled: null                   # 根据系统自动判断
+    headless: true                  # 无头模式
+    browser_type: chromium          # chromium / firefox / webkit
+    timeout: 30000                  # 超时时间(ms)
+    session_timeout: 300            # 会话超时(秒)
+    screenshot_dir: data/screenshots
+
+  android:
+    enabled: null                   # 仅 Windows
+    appium_server: ""               # Appium Server 地址（如：http://192.168.1.100:4723）
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
+  ios:
+    enabled: null                   # 仅 Windows
+    appium_server: ""               # Appium Server 地址（如：http://192.168.1.100:4724）
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
+  windows:
+    enabled: null                   # 仅 Windows
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
+  mac:
+    enabled: null                   # 仅 macOS
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
+# 图像匹配配置
+image_matching:
+  default_threshold: 0.8            # 默认匹配阈值
+  methods:                          # 支持的匹配方法
+    - template                      # 模板匹配
+    - sift                          # 特征点匹配
+
+# 日志配置
+logging:
+  level: INFO                       # 日志级别: DEBUG / INFO / WARNING / ERROR
+  file: logs/worker.log             # 日志文件路径

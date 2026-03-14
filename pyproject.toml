@@ -1,49 +1,59 @@
 [project]
-name = "autotest"
-version = "0.1.0"
-description = "多端自动化测试工程（Web / App / API）"
+name = "test-worker"
+version = "2.0.0"
+description = "多端自动化测试执行基建 - Worker"
 requires-python = ">=3.10"
 dependencies = [
-    "pytest>=7.0",
-    "requests>=2.28",
-    "allure-pytest>=2.13",
+    # HTTP 服务
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "httpx>=0.24.0",
+
+    # Web 平台
+    "playwright>=1.40",
+
+    # 移动端平台
+    "Appium-Python-Client>=3.0",
+
+    # 桌面平台 (Windows/Mac)
+    "pyautogui>=0.9.54",
+    "psutil>=5.9.0",
+    "Pillow>=10.0.0",
+
+    # 图像匹配
+    "opencv-python-headless>=4.8.0",
+
+    # 工具
     "pyyaml>=6.0",
-    "faker>=18.0",
     "python-dotenv>=1.0",
-    "httpx>=0.24.0",  # OCR 客户端 HTTP 请求
 ]
 
 [project.optional-dependencies]
-web = ["playwright>=1.40"]
-app = ["Appium-Python-Client>=3.0"]
-windows = ["pyautogui>=0.9.54"]
-ocr = [
-    "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.23.0",
-    "paddleocr>=2.7.0",
-    "paddlepaddle>=2.5.0",
-    "opencv-python-headless>=4.8.0",
-    "Pillow>=10.0.0",
-]
-all = [
-    "playwright>=1.40",
-    "Appium-Python-Client>=3.0",
-    "pyautogui>=0.9.54",
-    "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.23.0",
-    "paddleocr>=2.7.0",
-    "paddlepaddle>=2.5.0",
-    "opencv-python-headless>=4.8.0",
-    "Pillow>=10.0.0",
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["web/tests", "app/tests", "api/tests"]
-markers = [
-    "web: Web 端 UI 测试",
-    "app: 移动端 App 测试",
-    "api: 接口测试",
-    "smoke: 冒烟测试",
-    "regression: 回归测试",
-]
-addopts = "-v --strict-markers"
+[project.scripts]
+test-worker = "worker.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["worker*", "common*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
