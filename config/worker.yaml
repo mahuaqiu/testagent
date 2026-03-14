@@ -10,7 +10,7 @@ worker:
 # 外部服务地址（必须配置）
 external_services:
   platform_api: ""                  # 配置平台 API（如：http://platform.example.com/api/worker）
-  ocr_service: ""                   # OCR 服务地址（如：http://192.168.1.100:8081）
+  ocr_service: "http://192.168.0.102:9021"                   # OCR 服务地址（如：http://192.168.1.100:8081）
 
 # 平台配置
 platforms:
