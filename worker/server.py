@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from worker.worker import Worker
+from worker.worker import Worker, TaskConflictError
 from worker.task import Task
 
 logger = logging.getLogger(__name__)
@@ -71,67 +71,131 @@ async def get_devices():
 
 @app.post("/task/execute")
 async def execute_task(request: TaskRequest):
-    """同步执行任务。"""
+    """
+    同步执行任务。
+
+    执行完成后返回结果，不生成 task_id。
+
+    Returns:
+        Dict: 执行结果（不含 task_id）
+    """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     # 记录任务请求
     logger.info(
-        f"Task request: platform={request.platform}, "
+        f"Sync task request: platform={request.platform}, "
         f"device_id={request.device_id}, actions={len(request.actions)}"
     )
 
-    # 创建任务对象
-    task = Task.create(
+    # 同步执行（不生成 task_id）
+    result = worker.execute_sync(
         platform=request.platform,
         actions=request.actions,
         device_id=request.device_id,
         user_id=request.user_id,
         config=request.config,
-        callback_url=request.callback_url,
-        priority=request.priority,
     )
-
-    # 执行任务
-    result = worker.execute_task(task)
 
     # 记录任务结果
     logger.info(
-        f"Task result: task_id={task.task_id}, status={result.status}, "
-        f"duration={result.duration_ms}ms"
+        f"Sync task result: status={result.get('status')}, "
+        f"duration={result.get('duration_ms')}ms"
     )
 
-    return result.to_dict()
+    return result
 
 
-@app.post("/task")
-async def submit_task(request: TaskRequest):
-    """提交任务到队列（异步）。"""
+@app.post("/task/execute_async")
+async def execute_task_async(request: TaskRequest):
+    """
+    异步执行任务。
+
+    立即返回 task_id，任务在后台执行。
+
+    Returns:
+        Dict: {"task_id": "xxx", "status": "running"}
+
+    Raises:
+        HTTPException: 409 如果设备/平台正被占用
+    """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # TODO: 实现任务队列
-    raise HTTPException(status_code=501, detail="Task queue not implemented yet")
+    # 记录任务请求
+    logger.info(
+        f"Async task request: platform={request.platform}, "
+        f"device_id={request.device_id}, actions={len(request.actions)}"
+    )
+
+    try:
+        task_id, status = worker.execute_async(
+            platform=request.platform,
+            actions=request.actions,
+            device_id=request.device_id,
+            user_id=request.user_id,
+            config=request.config,
+        )
+
+        return {"task_id": task_id, "status": status}
+
+    except TaskConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
 
 
 @app.get("/task/{task_id}")
 async def get_task_result(task_id: str):
-    """查询任务结果。"""
+    """
+    查询任务结果。
+
+    一次性查询：查询后任务从内存中销毁，下次查询返回 404。
+
+    Returns:
+        Dict: 任务状态和结果
+
+    Raises:
+        HTTPException: 404 如果任务不存在
+    """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # TODO: 实现任务结果存储
-    raise HTTPException(status_code=501, detail="Task result storage not implemented yet")
+    result = worker.get_task_result(task_id)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    logger.info(f"Task result queried: task_id={task_id}, status={result.get('status')}")
+
+    return result
 
 
 @app.delete("/task/{task_id}")
 async def cancel_task(task_id: str):
-    """取消任务。"""
+    """
+    取消任务。
+
+    取消正在执行的任务，销毁 task_id。
+
+    Returns:
+        Dict: {"success": bool, "message": str}
+
+    Raises:
+        HTTPException: 404 如果任务不存在
+    """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # TODO: 实现任务取消
-    raise HTTPException(status_code=501, detail="Task cancellation not implemented yet")
+    success, message = worker.cancel_task(task_id)
+
+    if not success and "not found" in message.lower():
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    logger.info(f"Task cancelled: task_id={task_id}, success={success}")
+
+    return {"success": success, "message": message}
 
 
 @app.post("/devices/refresh")

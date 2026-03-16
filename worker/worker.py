@@ -24,6 +24,7 @@ from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
 from worker.platforms.mac import MacPlatformManager
 from worker.task import Task, TaskResult, TaskStatus, ActionResult, ActionStatus
+from worker.task.store import TaskStore, TaskEntry
 
 from common.ocr_client import OCRClient, get_ocr_client
 
@@ -134,6 +135,9 @@ class Worker:
 
         # 任务调度器
         self.scheduler = TaskScheduler()
+
+        # 任务存储（异步任务管理）
+        self.task_store = TaskStore()
 
         # 上报客户端
         self.reporter: Optional[Reporter] = None
@@ -613,12 +617,45 @@ class Worker:
 
             self.scheduler.release(platform, task.device_id)
 
-    def _execute_actions(self, manager: PlatformManager, context: Any, task: Task) -> TaskResult:
-        """执行动作列表。"""
+    def _execute_actions(
+        self,
+        manager: PlatformManager,
+        context: Any,
+        task: Task,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> TaskResult:
+        """
+        执行动作列表。
+
+        Args:
+            manager: 平台管理器
+            context: 执行上下文
+            task: 任务对象
+            cancel_event: 取消信号（可选）
+
+        Returns:
+            TaskResult: 任务结果
+        """
         started_at = datetime.now()
         actions_results = []
 
         for i, action in enumerate(task.actions):
+            # 取消检查点：在执行每个 action 之前检查
+            if cancel_event and cancel_event.is_set():
+                # 只有多个 action 且不是最后一个时才取消
+                total_actions = len(task.actions)
+                if total_actions > 1 and i < total_actions - 1:
+                    logger.info(f"Task cancelled at action {i}: task_id={task.task_id}")
+                    return TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.CANCELLED,
+                        platform=task.platform,
+                        started_at=started_at,
+                        finished_at=datetime.now(),
+                        actions=actions_results,
+                        error="Task cancelled by user",
+                    )
+
             result = manager.execute_action(context, action)
             result.index = i
             actions_results.append(result)
@@ -671,3 +708,276 @@ class Worker:
         )
 
         return result
+
+    # ========== 同步/异步执行方法 ==========
+
+    def execute_sync(
+        self,
+        platform: str,
+        actions: List[Dict[str, Any]],
+        device_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        同步执行任务（不生成 task_id）。
+
+        Args:
+            platform: 目标平台
+            actions: 动作列表
+            device_id: 设备 ID
+            user_id: 用户 ID
+            config: 任务配置
+
+        Returns:
+            Dict: 执行结果（不含 task_id）
+        """
+        # 创建任务对象（不生成 task_id）
+        task = Task.create(
+            platform=platform,
+            actions=actions,
+            device_id=device_id,
+            user_id=user_id,
+            config=config,
+            generate_id=False,  # 不生成 task_id
+        )
+
+        # 执行任务
+        result = self.execute_task(task)
+
+        # 返回结果（不含 task_id）
+        return result.to_dict(include_task_id=False)
+
+    def execute_async(
+        self,
+        platform: str,
+        actions: List[Dict[str, Any]],
+        device_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> tuple:
+        """
+        异步执行任务（生成 task_id）。
+
+        Args:
+            platform: 目标平台
+            actions: 动作列表
+            device_id: 设备 ID
+            user_id: 用户 ID
+            config: 任务配置
+
+        Returns:
+            Tuple[str, str]: (task_id, status)
+
+        Raises:
+            TaskConflictError: 设备/平台正被占用
+        """
+        # 检查冲突
+        if self.task_store.is_busy(platform, device_id):
+            busy_task_id = self.task_store.get_busy_task_id(platform, device_id)
+            raise TaskConflictError(
+                f"Device/Platform is busy",
+                task_id=busy_task_id,
+            )
+
+        # 创建任务对象（生成 task_id）
+        task = Task.create(
+            platform=platform,
+            actions=actions,
+            device_id=device_id,
+            user_id=user_id,
+            config=config,
+            generate_id=True,
+        )
+
+        # 创建任务条目
+        entry = TaskEntry(
+            task_id=task.task_id,
+            task=task,
+            status=TaskStatus.RUNNING,
+        )
+
+        # 存储任务
+        self.task_store.store(entry)
+
+        # 启动后台线程执行
+        thread = threading.Thread(
+            target=self._run_async_task,
+            args=(entry,),
+            daemon=True,
+        )
+        entry.thread = thread
+        thread.start()
+
+        logger.info(f"Async task started: task_id={task.task_id}")
+
+        return task.task_id, "running"
+
+    def _run_async_task(self, entry: TaskEntry) -> None:
+        """
+        后台线程执行异步任务。
+
+        Args:
+            entry: 任务条目
+        """
+        task = entry.task
+        platform = task.platform
+
+        try:
+            # 获取平台管理器
+            manager = self.platform_managers.get(platform)
+            if not manager:
+                entry.status = TaskStatus.FAILED
+                entry.result = TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=platform,
+                    error=f"Platform manager not available: {platform}",
+                )
+                return
+
+            # 前置验证
+            validation_result = self._validate_task(task, manager)
+            if validation_result:
+                entry.status = TaskStatus.FAILED
+                entry.result = validation_result
+                return
+
+            # 启动平台（如果未启动）
+            if not manager.is_available():
+                try:
+                    manager.start()
+                except Exception as e:
+                    entry.status = TaskStatus.FAILED
+                    entry.result = TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.FAILED,
+                        platform=platform,
+                        error=f"Failed to start platform: {e}",
+                    )
+                    return
+
+            # 获取执行锁
+            acquired = self.scheduler.acquire(platform, task.device_id, blocking=False)
+            if not acquired:
+                entry.status = TaskStatus.FAILED
+                entry.result = TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=platform,
+                    error="Device is busy, please retry later",
+                )
+                return
+
+            context = None
+            try:
+                # 创建执行上下文
+                context = manager.create_context(device_id=task.device_id, options=task.metadata)
+
+                # 执行动作列表（支持取消）
+                result = self._execute_actions(
+                    manager, context, task, cancel_event=entry.cancel_event
+                )
+
+                entry.result = result
+                entry.status = result.status
+
+            finally:
+                # 清理执行上下文
+                if context is not None:
+                    try:
+                        manager.close_context(context)
+                    except Exception as e:
+                        logger.warning(f"Failed to close context: {e}")
+
+                self.scheduler.release(platform, task.device_id)
+
+        except Exception as e:
+            logger.error(f"Async task error: task_id={task.task_id}, error={e}")
+            entry.status = TaskStatus.FAILED
+            entry.result = TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                platform=task.platform,
+                error=str(e),
+            )
+
+        finally:
+            # 清理忙碌状态（任务已完成）
+            self.task_store.clear_busy(platform, task.device_id)
+            logger.info(
+                f"Async task completed: task_id={task.task_id}, status={entry.status}"
+            )
+
+    def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取任务结果（一次性查询，查询后销毁）。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            Dict | None: 任务结果，不存在返回 None
+        """
+        entry = self.task_store.pop(task_id)
+        if entry is None:
+            return None
+
+        # 如果任务还在执行中，返回当前状态
+        if entry.status == TaskStatus.RUNNING:
+            return {
+                "task_id": entry.task_id,
+                "status": "running",
+            }
+
+        # 返回完整结果
+        if entry.result:
+            return entry.result.to_dict(include_task_id=True)
+
+        return {
+            "task_id": entry.task_id,
+            "status": entry.status.value,
+        }
+
+    def cancel_task(self, task_id: str) -> tuple:
+        """
+        取消任务。
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            Tuple[bool, str]: (是否成功, 消息)
+        """
+        entry = self.task_store.get(task_id)
+        if entry is None:
+            return False, "Task not found"
+
+        # 检查任务状态
+        if entry.status in [TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+            # 任务已完成，直接删除
+            self.task_store.remove(task_id)
+            return True, f"Task already {entry.status.value}, removed from store"
+
+        # 设置取消标志
+        entry.cancel_event.set()
+        entry.status = TaskStatus.CANCELLED
+
+        # 等待线程结束（最多等待 5 秒）
+        if entry.thread and entry.thread.is_alive():
+            entry.thread.join(timeout=5.0)
+
+        # 删除任务
+        self.task_store.remove(task_id)
+
+        logger.info(f"Task cancelled: task_id={task_id}")
+
+        return True, "Task cancelled"
+
+
+class TaskConflictError(Exception):
+    """任务冲突异常。"""
+
+    def __init__(self, message: str, task_id: Optional[str] = None):
+        super().__init__(message)
+        self.task_id = task_id

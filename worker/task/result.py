@@ -99,9 +99,9 @@ class TaskResult:
     任务执行结果。
     """
 
-    task_id: str
-    status: TaskStatus
-    platform: str
+    task_id: Optional[str] = None  # 可选，同步执行不生成 task_id
+    status: TaskStatus = TaskStatus.PENDING
+    platform: str = ""
 
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -136,10 +136,13 @@ class TaskResult:
             metadata=data.get("metadata", {}),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典。"""
+    def to_dict(self, include_task_id: bool = True) -> Dict[str, Any]:
+        """转换为字典。
+
+        Args:
+            include_task_id: 是否包含 task_id 字段，默认 True
+        """
         result = {
-            "task_id": self.task_id,
             "status": self.status.value,
             "platform": self.platform,
             "duration_ms": self.duration_ms,
@@ -147,6 +150,10 @@ class TaskResult:
             "screenshots": [s.to_dict() for s in self.screenshots],
             "metadata": self.metadata,
         }
+
+        # task_id 可选输出
+        if include_task_id and self.task_id:
+            result["task_id"] = self.task_id
 
         if self.started_at is not None:
             result["started_at"] = self.started_at.isoformat()

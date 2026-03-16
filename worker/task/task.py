@@ -63,6 +63,7 @@ class Task:
         callback_url: Optional[str] = None,
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
+        generate_id: bool = True,
     ) -> "Task":
         """
         创建任务。
@@ -76,11 +77,15 @@ class Task:
             callback_url: 回调地址
             priority: 优先级
             metadata: 元数据
+            generate_id: 是否生成 task_id（同步执行时不生成）
 
         Returns:
             Task: 任务对象
         """
-        task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        if generate_id:
+            task_id = f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        else:
+            task_id = ""
 
         action_list = [Action.from_dict(a) for a in actions]
 
