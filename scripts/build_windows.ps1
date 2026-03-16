@@ -62,8 +62,8 @@ if (Test-Path $PackageDir) {
 }
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
-# 复制文件
-Copy-Item $ExePath $PackageDir
+# 移动文件到发布目录（而不是复制）
+Move-Item $ExePath $PackageDir
 Copy-Item -Path "config" -Destination $PackageDir -Recurse
 
 # 创建启动脚本
