@@ -38,21 +38,39 @@ if ($LASTEXITCODE -ne 0) {
 # 打包
 Write-Host "[4/6] Building executable..."
 pyinstaller scripts/pyinstaller.spec --clean --noconfirm
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "PyInstaller build failed!"
+    deactivate
+    exit 1
+}
+
+# 检查生成的文件
+$ExePath = "dist\test-worker.exe"
+if (-not (Test-Path $ExePath)) {
+    Write-Error "Executable not found: $ExePath"
+    deactivate
+    exit 1
+}
 
 # 创建发布包
 Write-Host "[5/6] Creating release package..."
 $PackageDir = "$OutputDir\test-worker-$Version"
+
+# 清理旧的发布目录
+if (Test-Path $PackageDir) {
+    Remove-Item -Recurse -Force $PackageDir
+}
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
 # 复制文件
-Copy-Item "dist\test-worker.exe" $PackageDir
+Copy-Item $ExePath $PackageDir
 Copy-Item -Path "config" -Destination $PackageDir -Recurse
 
 # 创建启动脚本
 @"
 @echo off
 cd /d "%~dp0"
-test-worker.exe --port 8080
+test-worker.exe
 pause
 "@ | Out-File "$PackageDir\start.bat" -Encoding ASCII
 
@@ -61,17 +79,16 @@ pause
 Test Worker v$Version - Windows
 
 Usage:
-  1. Double-click start.bat
-  2. Or run from command line: test-worker.exe --port 8080
-
-Options:
-  --port PORT           HTTP server port (default: 8080)
-  --ocr-service URL     OCR service URL
-  --platform-api URL    Platform API URL
-  --help                Show help
+  1. Edit config\worker.yaml to configure settings
+  2. Double-click start.bat to start the worker
+  3. Or run from command line: test-worker.exe
 
 Configuration:
-  Edit config\worker.yaml to customize settings
+  All settings are read from config\worker.yaml, including:
+  - Server port (default: 8080)
+  - OCR service URL
+  - Platform API URL
+  - Platform-specific options
 
 Requirements:
   - For Android/iOS: ADB and libimobiledevice must be installed

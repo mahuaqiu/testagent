@@ -69,7 +69,7 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ['worker/main.py'],
+    [os.path.join(PROJECT_ROOT, 'worker', 'main.py')],
     pathex=[PROJECT_ROOT],
     binaries=[],
     datas=datas,
