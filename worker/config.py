@@ -5,7 +5,7 @@ Worker 配置管理模块。
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Dict, Any
 
 import yaml
 
@@ -19,7 +19,7 @@ class WorkerConfig:
     port: int = 8080
     device_check_interval: int = 60
 
-    # 外部服务地址（必须从配置文件读取）
+    # 外部服务地址
     platform_api: str = ""
     ocr_service: str = ""
 
@@ -29,6 +29,9 @@ class WorkerConfig:
     # 日志配置
     log_level: str = "INFO"
     log_file: str = "logs/worker.log"
+
+    # 图像匹配配置
+    image_matching: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
@@ -40,6 +43,7 @@ class WorkerConfig:
         external = data.get("external_services", {})
         platforms = data.get("platforms", {})
         logging_cfg = data.get("logging", {})
+        image_matching = data.get("image_matching", {})
 
         return cls(
             id=worker_data.get("id") or str(uuid.uuid4())[:8],
@@ -50,6 +54,7 @@ class WorkerConfig:
             platforms=platforms,
             log_level=logging_cfg.get("level", "INFO"),
             log_file=logging_cfg.get("file", "logs/worker.log"),
+            image_matching=image_matching,
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:
@@ -61,7 +66,7 @@ class WorkerConfig:
 class PlatformConfig:
     """平台通用配置。"""
 
-    enabled: Optional[bool] = None
+    enabled: bool = True
     session_timeout: int = 300
     screenshot_dir: str = "data/screenshots"
 
@@ -77,7 +82,7 @@ class PlatformConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "PlatformConfig":
         """从字典创建配置。"""
         return cls(
-            enabled=data.get("enabled"),
+            enabled=data.get("enabled", True),
             session_timeout=data.get("session_timeout", 300),
             screenshot_dir=data.get("screenshot_dir", "data/screenshots"),
             headless=data.get("headless", True),
@@ -96,34 +101,18 @@ def get_default_config_path() -> str:
     )
 
 
-def load_config(config_path: Optional[str] = None) -> WorkerConfig:
+def load_config() -> WorkerConfig:
     """
     加载 Worker 配置。
 
-    优先级：命令行参数 > 环境变量 > 配置文件 > 默认值
-
-    Args:
-        config_path: 配置文件路径，默认使用 config/worker.yaml
+    从 config/worker.yaml 加载配置，若文件不存在则使用默认配置。
 
     Returns:
         WorkerConfig: 配置对象
     """
-    if config_path is None:
-        config_path = get_default_config_path()
+    config_path = get_default_config_path()
 
     if os.path.exists(config_path):
-        config = WorkerConfig.from_yaml(config_path)
+        return WorkerConfig.from_yaml(config_path)
     else:
-        config = WorkerConfig()
-
-    # 环境变量覆盖
-    if os.environ.get("WORKER_ID"):
-        config.id = os.environ["WORKER_ID"]
-    if os.environ.get("WORKER_PORT"):
-        config.port = int(os.environ["WORKER_PORT"])
-    if os.environ.get("PLATFORM_API"):
-        config.platform_api = os.environ["PLATFORM_API"]
-    if os.environ.get("OCR_SERVICE"):
-        config.ocr_service = os.environ["OCR_SERVICE"]
-
-    return config
+        return WorkerConfig()

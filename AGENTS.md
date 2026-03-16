@@ -129,18 +129,11 @@ playwright install chromium
 ### 启动 Worker
 
 ```bash
-# 基本启动
+# 直接启动，配置从 config/worker.yaml 读取
 python -m worker.main
-
-# 指定端口
-python -m worker.main --port 8080
-
-# 指定 OCR 服务
-python -m worker.main --ocr-service http://localhost:8081
-
-# 指定配置平台
-python -m worker.main --platform-api http://platform.example.com/api/worker
 ```
+
+**说明**：所有配置项均在 `config/worker.yaml` 中设置，启动时无需传递任何参数。
 
 ### 打包
 
