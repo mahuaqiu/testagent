@@ -4,17 +4,15 @@ HTTP Server。
 提供 RESTful API 接口供外部平台调用。
 """
 
-import base64
 import logging
-from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from worker.worker import Worker
-from worker.task import Task, TaskResult
+from worker.task import Task
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +40,6 @@ class SessionRequest(BaseModel):
     options: Optional[Dict[str, Any]] = Field(None, description="会话选项")
 
 
-class ScreenshotRequest(BaseModel):
-    """截图请求。"""
-
-    platform: str = Field(..., description="平台")
-    session_id: str = Field(..., description="会话 ID")
-
-
 # FastAPI 应用
 app = FastAPI(
     title="Test Worker API",
@@ -69,32 +60,9 @@ def set_worker(w: Worker) -> None:
 # ========== API 端点 ==========
 
 
-@app.get("/health")
-async def health_check():
-    """健康检查。"""
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
-
-
 @app.get("/status")
 async def get_status():
-    """获取 Worker 详细状态。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    status = worker.get_status()
-    return {
-        "worker_id": status.worker_id,
-        "status": status.status,
-        "started_at": status.started_at.isoformat(),
-        "supported_platforms": status.supported_platforms,
-        "active_sessions": status.active_sessions,
-        "devices_count": status.devices_count,
-    }
-
-
-@app.get("/info")
-async def get_info():
-    """获取 Worker 信息（支持的平台、设备等）。"""
+    """获取 Worker 完整状态信息。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
@@ -103,13 +71,15 @@ async def get_info():
 
     return {
         "worker_id": status.worker_id,
+        "status": status.status,
+        "started_at": status.started_at.isoformat(),
+        "port": worker.port,
         "hostname": worker.host_info.hostname if worker.host_info else "unknown",
         "ip_addresses": worker.host_info.ip_addresses if worker.host_info else [],
         "os_type": worker.host_info.os_type if worker.host_info else "unknown",
         "os_version": worker.host_info.os_version if worker.host_info else "unknown",
         "supported_platforms": status.supported_platforms,
-        "status": status.status,
-        "port": worker.port,
+        "active_sessions": status.active_sessions,
         "devices": devices,
     }
 
@@ -219,15 +189,6 @@ async def close_session(session_id: str, platform: str):
     return {"closed": success}
 
 
-@app.get("/devices")
-async def get_devices():
-    """获取设备列表。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    return worker.get_devices()
-
-
 @app.post("/devices/refresh")
 async def refresh_devices():
     """刷新设备列表。"""
@@ -235,23 +196,6 @@ async def refresh_devices():
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     return worker.refresh_devices()
-
-
-@app.post("/screenshot")
-async def take_screenshot(request: ScreenshotRequest):
-    """获取实时截图。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    try:
-        screenshot_bytes = worker.take_screenshot(request.platform, request.session_id)
-        screenshot_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-        return {
-            "image": screenshot_base64,
-            "format": "png",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # 异常处理

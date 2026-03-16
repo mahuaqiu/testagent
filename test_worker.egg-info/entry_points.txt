@@ -1,2 +1,0 @@
-[console_scripts]
-test-worker = worker.main:main

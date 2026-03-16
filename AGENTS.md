@@ -79,16 +79,14 @@ autotest/
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/health` | GET | 健康检查 |
-| `/status` | GET | Worker 详细状态 |
-| `/info` | GET | 支持的平台、设备列表 |
+| `/status` | GET | Worker 完整状态信息（含设备列表、支持平台等） |
 | `/task/execute` | POST | 同步执行任务 |
 | `/task/{task_id}` | GET | 查询任务结果 |
 | `/session` | POST | 创建会话 |
 | `/session/{session_id}` | DELETE | 关闭会话 |
-| `/devices` | GET | 设备列表 |
-| `/devices/refresh` | POST | 刷新设备 |
-| `/screenshot` | POST | 获取实时截图 |
+| `/devices/refresh` | POST | 刷新设备列表 |
+
+**说明**：截图功能通过 `task/execute` 接口的 `screenshot` 动作实现，不再提供单独的截图接口。
 
 ## 动作类型
 
