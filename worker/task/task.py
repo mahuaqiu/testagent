@@ -46,7 +46,6 @@ class Task:
     actions: List[Action]
     device_id: Optional[str] = None        # 移动设备 UDID
     user_id: Optional[str] = None          # 用户标识
-    session_id: Optional[str] = None       # 会话 ID（复用会话）
     config: TaskConfig = field(default_factory=TaskConfig)
     callback_url: Optional[str] = None     # 回调地址
     created_at: datetime = field(default_factory=datetime.now)
@@ -60,7 +59,6 @@ class Task:
         actions: List[Dict[str, Any]],
         device_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         callback_url: Optional[str] = None,
         priority: int = 0,
@@ -74,7 +72,6 @@ class Task:
             actions: 动作列表
             device_id: 设备 ID
             user_id: 用户 ID
-            session_id: 会话 ID
             config: 任务配置
             callback_url: 回调地址
             priority: 优先级
@@ -95,7 +92,6 @@ class Task:
             actions=action_list,
             device_id=device_id,
             user_id=user_id,
-            session_id=session_id,
             config=task_config,
             callback_url=callback_url,
             priority=priority,
@@ -111,7 +107,6 @@ class Task:
             actions=[Action.from_dict(a) for a in data.get("actions", [])],
             device_id=data.get("device_id"),
             user_id=data.get("user_id"),
-            session_id=data.get("session_id"),
             config=TaskConfig.from_dict(data.get("config", {})),
             callback_url=data.get("callback_url"),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
@@ -127,7 +122,6 @@ class Task:
             "actions": [a.to_dict() for a in self.actions],
             "device_id": self.device_id,
             "user_id": self.user_id,
-            "session_id": self.session_id,
             "config": {
                 "timeout": self.config.timeout,
                 "action_timeout": self.config.action_timeout,

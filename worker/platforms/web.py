@@ -6,13 +6,11 @@ Web 平台执行引擎。
 
 import logging
 import time
-import uuid
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
-from worker.platforms.base import PlatformManager, Session
+from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 
@@ -25,6 +23,9 @@ class WebPlatformManager(PlatformManager):
 
     使用 Playwright 控制 Web 浏览器，支持 OCR/图像识别定位。
     """
+
+    # Web 平台特有动作
+    SUPPORTED_ACTIONS: Set[str] = {"navigate"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -69,12 +70,13 @@ class WebPlatformManager(PlatformManager):
 
     def stop(self) -> None:
         """停止浏览器和 Playwright。"""
-        # 关闭所有会话
-        for session_id in list(self.sessions.keys()):
+        # 关闭所有上下文
+        for context_id in list(self._contexts.keys()):
             try:
-                self.close_session(session_id)
+                self.close_context(self._contexts[context_id])
             except Exception as e:
-                logger.warning(f"Failed to close session {session_id}: {e}")
+                logger.warning(f"Failed to close context: {e}")
+        self._contexts.clear()
 
         # 关闭浏览器
         if self._browser:
@@ -99,21 +101,19 @@ class WebPlatformManager(PlatformManager):
         """检查平台是否可用。"""
         return self._started and self._browser is not None
 
-    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
-        创建浏览器会话（BrowserContext）。
+        创建浏览器上下文（BrowserContext + Page）。
 
         Args:
             device_id: 不使用
             options: 上下文选项
 
         Returns:
-            Session: 会话对象
+            Page: Playwright Page 对象
         """
         if not self.is_available():
             raise RuntimeError("Web platform not started")
-
-        session_id = str(uuid.uuid4())[:8]
 
         # 创建新的浏览器上下文
         context_options = options or {}
@@ -123,48 +123,33 @@ class WebPlatformManager(PlatformManager):
         page = context.new_page()
         page.set_default_timeout(self.timeout)
 
-        session = Session(
-            session_id=session_id,
-            platform=self.platform,
-            context=context,
-            metadata={"page": page},
-        )
+        logger.info(f"Web context created")
 
-        self.sessions[session_id] = session
-        logger.info(f"Web session created: {session_id}")
+        return page
 
-        return session
-
-    def close_session(self, session_id: str) -> bool:
-        """关闭浏览器会话。"""
-        session = self.sessions.get(session_id)
-        if not session:
-            return False
-
-        try:
-            context = session.context
-            if context:
+    def close_context(self, context: Any) -> None:
+        """关闭浏览器上下文。"""
+        if context and isinstance(context, Page):
+            try:
+                browser_context = context.context
                 context.close()
+                if browser_context:
+                    browser_context.close()
+                logger.info("Web context closed")
+            except Exception as e:
+                logger.error(f"Failed to close context: {e}")
 
-            del self.sessions[session_id]
-            logger.info(f"Web session closed: {session_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to close session {session_id}: {e}")
-            return False
-
-    def execute_action(self, session: Session, action: Action) -> ActionResult:
+    def execute_action(self, context: Any, action: Action) -> ActionResult:
         """执行动作。"""
         start_time = time.time()
 
-        page: Page = session.metadata.get("page")
+        page: Page = context
         if not page:
             return ActionResult(
                 index=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
-                error="Page not found in session",
+                error="Page context is invalid",
             )
 
         try:
@@ -207,9 +192,6 @@ class WebPlatformManager(PlatformManager):
                     error=f"Unknown action type: {action.action_type}",
                 )
 
-            # 更新会话活动时间
-            self._update_session_activity(session.session_id)
-
             duration_ms = int((time.time() - start_time) * 1000)
             result.duration_ms = duration_ms
 
@@ -225,9 +207,9 @@ class WebPlatformManager(PlatformManager):
                 error=str(e),
             )
 
-    def get_screenshot(self, session: Session) -> bytes:
+    def get_screenshot(self, context: Any) -> bytes:
         """获取当前页面截图。"""
-        page: Page = session.metadata.get("page")
+        page: Page = context
         if page:
             return page.screenshot(type="png")
         return b""

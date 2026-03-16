@@ -10,6 +10,7 @@
 - **平台上报**：支持向配置平台上报 Worker 状态和设备信息
 - **设备热插拔监控**：定时检测移动设备连接变化（60秒）
 - **并发执行**：支持多设备并行执行任务
+- **失败自动截图**：任务执行失败时自动返回设备截图
 
 ## 平台支持策略
 
@@ -80,10 +81,9 @@ autotest/
 | 接口 | 方法 | 说明 |
 |------|------|------|
 | `/status` | GET | Worker 完整状态信息（含设备列表、支持平台等） |
+| `/devices` | GET | 获取设备信息 |
 | `/task/execute` | POST | 同步执行任务 |
 | `/task/{task_id}` | GET | 查询任务结果 |
-| `/session` | POST | 创建会话 |
-| `/session/{session_id}` | DELETE | 关闭会话 |
 | `/devices/refresh` | POST | 刷新设备列表 |
 
 **说明**：截图功能通过 `task/execute` 接口的 `screenshot` 动作实现，不再提供单独的截图接口。
@@ -92,12 +92,15 @@ autotest/
 
 所有平台统一使用以下动作类型，基于 OCR/图像识别定位：
 
+### 通用动作（所有平台支持）
+
 | 类型 | 说明 |
 |------|------|
 | `ocr_click` | 点击识别到的文字 |
 | `ocr_input` | 在文字附近输入 |
 | `ocr_wait` | 等待文字出现 |
 | `ocr_assert` | 断言文字存在 |
+| `ocr_get_text` | 获取屏幕文字 |
 | `image_click` | 点击匹配的图像 |
 | `image_wait` | 等待图像出现 |
 | `image_assert` | 断言图像存在 |
@@ -106,8 +109,15 @@ autotest/
 | `input` | 坐标输入 |
 | `press` | 按键 |
 | `screenshot` | 截图 |
-| `navigate` | 跳转 URL (Web) |
-| `launch_app` | 启动应用 |
+| `wait` | 固定等待 |
+
+### 平台特有动作
+
+| 类型 | 支持平台 | 说明 |
+|------|----------|------|
+| `navigate` | Web | 跳转 URL |
+| `launch_app` | Android, iOS, Windows, Mac | 启动应用 |
+| `close_app` | Android, iOS | 关闭应用 |
 
 ## 任务并发策略
 
@@ -116,6 +126,26 @@ autotest/
 | Windows/Mac/Web | 同一时刻只能执行一个任务 |
 | Android 设备 | 每台设备独立，同台设备排队 |
 | iOS 设备 | 每台设备独立，同台设备排队 |
+
+## 任务执行流程
+
+1. **前置验证**
+   - 平台支持验证：检查请求的平台是否支持
+   - device_id 验证：移动端必须提供 device_id，且设备必须存在
+   - action_type 验证：检查所有动作类型是否支持
+
+2. **状态检查**
+   - 检查目标设备是否处于任务中
+   - 如果忙碌则返回错误 "Device is busy"
+
+3. **执行任务**
+   - 创建执行上下文（Web 创建 Page，移动端创建 Driver）
+   - 依次执行动作列表
+   - 失败时自动获取设备截图
+
+4. **清理资源**
+   - 关闭执行上下文
+   - 恢复设备状态为空闲
 
 ## 运行方式
 
@@ -184,9 +214,56 @@ platforms:
 }
 ```
 
+### Android 设备请求示例
+
+```json
+{
+  "platform": "android",
+  "device_id": "device_udid_here",
+  "actions": [
+    {"action_type": "launch_app", "package_name": "com.example.app"},
+    {"action_type": "ocr_click", "value": "登录"},
+    {"action_type": "screenshot", "value": "result"}
+  ]
+}
+```
+
+## 任务结果示例
+
+### 成功结果
+
+```json
+{
+  "task_id": "task_20260317_120000_abc123",
+  "status": "success",
+  "platform": "web",
+  "duration_ms": 1500,
+  "actions": [
+    {"index": 0, "action_type": "navigate", "status": "success", "duration_ms": 500},
+    {"index": 1, "action_type": "ocr_click", "status": "success", "duration_ms": 1000}
+  ]
+}
+```
+
+### 失败结果（含截图）
+
+```json
+{
+  "task_id": "task_20260317_120000_abc123",
+  "status": "failed",
+  "platform": "web",
+  "duration_ms": 500,
+  "actions": [
+    {"index": 0, "action_type": "ocr_click", "status": "failed", "error": "Text not found: 登录"}
+  ],
+  "error": "Text not found: 登录",
+  "error_screenshot": "base64_encoded_screenshot_data"
+}
+```
+
 ## 重要说明
 
 1. **OCR 服务独立部署**：本工程通过 HTTP 调用外部 OCR 服务，不包含 OCR 实现代码
 2. **测试用例分离**：测试用例写在其他工程，本工程只作为执行基建
 3. **设备监控**：移动设备热插拔检测间隔为 60 秒
-4. **会话管理**：支持创建会话并复用，用例结束时调用删除接口
+4. **无状态设计**：Worker 不维护会话状态，每次任务独立执行

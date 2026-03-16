@@ -11,29 +11,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Session:
-    """
-    会话数据结构。
-
-    表示一个平台会话，可以复用以执行多个任务。
-    """
-
-    session_id: str
-    platform: str
-    device_id: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.now)
-    last_active: datetime = field(default_factory=datetime.now)
-    context: Any = None  # Playwright BrowserContext / Appium Driver / etc.
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class PlatformManager(ABC):
@@ -43,6 +26,16 @@ class PlatformManager(ABC):
     所有平台执行引擎都需要继承此类并实现抽象方法。
     基于 OCR/图像识别定位，不依赖传统元素选择器。
     """
+
+    # 通用动作列表（所有平台支持）
+    BASE_SUPPORTED_ACTIONS: Set[str] = {
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
+        "image_click", "image_wait", "image_assert",
+        "click", "swipe", "input", "press", "screenshot", "wait"
+    }
+
+    # 子类可覆盖，定义平台特有动作
+    SUPPORTED_ACTIONS: Set[str] = set()
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         """
@@ -54,8 +47,9 @@ class PlatformManager(ABC):
         """
         self.config = config
         self.ocr_client = ocr_client
-        self.sessions: Dict[str, Session] = {}
         self._started = False
+        # 存储当前活跃的执行上下文（driver/context）
+        self._contexts: Dict[str, Any] = {}
 
     @property
     @abstractmethod
@@ -92,39 +86,36 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
-        创建会话。
+        创建执行上下文。
 
         Args:
             device_id: 设备 ID（移动端需要）
             options: 其他选项
 
         Returns:
-            Session: 会话对象
+            Any: 执行上下文（如 Page、Driver 等）
         """
         pass
 
     @abstractmethod
-    def close_session(self, session_id: str) -> bool:
+    def close_context(self, context: Any) -> None:
         """
-        关闭会话。
+        关闭执行上下文。
 
         Args:
-            session_id: 会话 ID
-
-        Returns:
-            bool: 是否成功关闭
+            context: 执行上下文
         """
         pass
 
     @abstractmethod
-    def execute_action(self, session: Session, action: Action) -> ActionResult:
+    def execute_action(self, context: Any, action: Action) -> ActionResult:
         """
         执行动作。
 
         Args:
-            session: 会话对象
+            context: 执行上下文
             action: 动作对象
 
         Returns:
@@ -133,68 +124,38 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def get_screenshot(self, session: Session) -> bytes:
+    def get_screenshot(self, context: Any) -> bytes:
         """
         获取当前屏幕截图。
 
         Args:
-            session: 会话对象
+            context: 执行上下文
 
         Returns:
             bytes: 截图数据
         """
         pass
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    def get_supported_actions(self) -> Set[str]:
         """
-        获取会话。
+        获取支持的动作列表。
+
+        Returns:
+            Set[str]: 支持的动作类型集合
+        """
+        return self.BASE_SUPPORTED_ACTIONS | self.SUPPORTED_ACTIONS
+
+    def is_action_supported(self, action_type: str) -> bool:
+        """
+        检查动作是否支持。
 
         Args:
-            session_id: 会话 ID
+            action_type: 动作类型
 
         Returns:
-            Session | None: 会话对象
+            bool: 是否支持
         """
-        return self.sessions.get(session_id)
-
-    def get_active_sessions(self) -> List[Session]:
-        """
-        获取所有活跃会话。
-
-        Returns:
-            List[Session]: 会话列表
-        """
-        return list(self.sessions.values())
-
-    def cleanup_expired_sessions(self, timeout: int = 300) -> List[str]:
-        """
-        清理超时会话。
-
-        Args:
-            timeout: 超时时间（秒）
-
-        Returns:
-            List[str]: 被清理的会话 ID 列表
-        """
-        now = datetime.now()
-        expired = []
-
-        for session_id, session in list(self.sessions.items()):
-            elapsed = (now - session.last_active).total_seconds()
-            if elapsed > timeout:
-                try:
-                    self.close_session(session_id)
-                    expired.append(session_id)
-                    logger.info(f"Session {session_id} expired and closed")
-                except Exception as e:
-                    logger.error(f"Failed to close expired session {session_id}: {e}")
-
-        return expired
-
-    def _update_session_activity(self, session_id: str) -> None:
-        """更新会话活动时间。"""
-        if session_id in self.sessions:
-            self.sessions[session_id].last_active = datetime.now()
+        return action_type in self.get_supported_actions()
 
     # ========== OCR/图像识别辅助方法 ==========
 

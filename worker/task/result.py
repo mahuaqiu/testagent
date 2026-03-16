@@ -111,6 +111,7 @@ class TaskResult:
     screenshots: List[ScreenshotInfo] = field(default_factory=list)
 
     error: Optional[str] = None
+    error_screenshot: Optional[str] = None  # 失败截图（base64 编码）
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -131,6 +132,7 @@ class TaskResult:
             actions=[ActionResult.from_dict(a) for a in data.get("actions", [])],
             screenshots=[ScreenshotInfo(**s) for s in data.get("screenshots", [])],
             error=data.get("error"),
+            error_screenshot=data.get("error_screenshot"),
             metadata=data.get("metadata", {}),
         )
 
@@ -152,5 +154,7 @@ class TaskResult:
             result["finished_at"] = self.finished_at.isoformat()
         if self.error is not None:
             result["error"] = self.error
+        if self.error_screenshot is not None:
+            result["error_screenshot"] = self.error_screenshot
 
         return result

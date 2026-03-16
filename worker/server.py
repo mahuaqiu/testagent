@@ -26,25 +26,16 @@ class TaskRequest(BaseModel):
     actions: List[Dict[str, Any]] = Field(..., description="动作列表")
     device_id: Optional[str] = Field(None, description="设备 ID（移动端必填）")
     user_id: Optional[str] = Field(None, description="用户标识")
-    session_id: Optional[str] = Field(None, description="会话 ID（复用会话）")
     config: Optional[Dict[str, Any]] = Field(None, description="任务配置")
     callback_url: Optional[str] = Field(None, description="回调地址")
     priority: int = Field(0, description="优先级")
-
-
-class SessionRequest(BaseModel):
-    """会话请求。"""
-
-    platform: str = Field(..., description="平台: web/android/ios/windows/mac")
-    device_id: Optional[str] = Field(None, description="设备 ID（移动端必填）")
-    options: Optional[Dict[str, Any]] = Field(None, description="会话选项")
 
 
 # FastAPI 应用
 app = FastAPI(
     title="Test Worker API",
     description="多端自动化测试执行基建 API",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 # Worker 实例（在 main.py 中初始化）
@@ -58,6 +49,15 @@ def set_worker(w: Worker) -> None:
 
 
 # ========== API 端点 ==========
+
+
+@app.get("/status")
+async def get_status():
+    """获取 Worker 状态。"""
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    return worker.get_status()
 
 
 @app.get("/devices")
@@ -87,7 +87,6 @@ async def execute_task(request: TaskRequest):
         actions=request.actions,
         device_id=request.device_id,
         user_id=request.user_id,
-        session_id=request.session_id,
         config=request.config,
         callback_url=request.callback_url,
         priority=request.priority,
@@ -133,63 +132,6 @@ async def cancel_task(task_id: str):
 
     # TODO: 实现任务取消
     raise HTTPException(status_code=501, detail="Task cancellation not implemented yet")
-
-
-@app.post("/session")
-async def create_session(request: SessionRequest):
-    """创建会话。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    try:
-        session = worker.create_session(
-            platform=request.platform,
-            device_id=request.device_id,
-            options=request.options,
-        )
-        logger.info(
-            f"Session created: platform={session.platform}, "
-            f"session_id={session.session_id}"
-        )
-        return {
-            "session_id": session.session_id,
-            "platform": session.platform,
-            "device_id": session.device_id,
-            "created_at": session.created_at.isoformat(),
-        }
-    except Exception as e:
-        logger.warning(f"Session creation failed: platform={request.platform}, error={e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/session/{session_id}")
-async def get_session(session_id: str, platform: str):
-    """获取会话状态。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    session = worker.get_session(platform, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return {
-        "session_id": session.session_id,
-        "platform": session.platform,
-        "device_id": session.device_id,
-        "created_at": session.created_at.isoformat(),
-        "last_active": session.last_active.isoformat(),
-    }
-
-
-@app.delete("/session/{session_id}")
-async def close_session(session_id: str, platform: str):
-    """关闭会话。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    success = worker.close_session(platform, session_id)
-    logger.info(f"Session closed: platform={platform}, session_id={session_id}")
-    return {"closed": success}
 
 
 @app.post("/devices/refresh")

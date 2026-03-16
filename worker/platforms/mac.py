@@ -4,15 +4,15 @@ Mac 桌面平台执行引擎。
 基于 pyautogui 实现，支持 OCR/图像识别定位。
 """
 
+import io
 import logging
+import subprocess
 import time
-import uuid
-from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 import pyautogui
 
-from worker.platforms.base import PlatformManager, Session
+from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 
@@ -29,6 +29,9 @@ class MacPlatformManager(PlatformManager):
 
     使用 pyautogui 控制 macOS 桌面，支持 OCR/图像识别定位。
     """
+
+    # Mac 平台特有动作
+    SUPPORTED_ACTIONS: Set[str] = {"launch_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -48,13 +51,7 @@ class MacPlatformManager(PlatformManager):
 
     def stop(self) -> None:
         """停止 Mac 平台。"""
-        # 关闭所有会话
-        for session_id in list(self.sessions.keys()):
-            try:
-                self.close_session(session_id)
-            except Exception as e:
-                logger.warning(f"Failed to close session {session_id}: {e}")
-
+        self._contexts.clear()
         self._started = False
         logger.info("Mac platform stopped")
 
@@ -62,43 +59,25 @@ class MacPlatformManager(PlatformManager):
         """检查平台是否可用。"""
         return self._started
 
-    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
-        创建桌面会话。
+        创建桌面上下文（Mac 不需要特殊上下文）。
 
         Args:
             device_id: 不使用
             options: 其他选项
 
         Returns:
-            Session: 会话对象
+            None: 桌面平台不需要上下文
         """
-        if not self.is_available():
-            raise RuntimeError("Mac platform not started")
+        logger.info("Mac context created (no-op)")
+        return None
 
-        session_id = str(uuid.uuid4())[:8]
+    def close_context(self, context: Any) -> None:
+        """关闭桌面上下文（Mac 不需要）。"""
+        logger.info("Mac context closed (no-op)")
 
-        session = Session(
-            session_id=session_id,
-            platform=self.platform,
-            context=None,
-            metadata=options or {},
-        )
-
-        self.sessions[session_id] = session
-        logger.info(f"Mac session created: {session_id}")
-
-        return session
-
-    def close_session(self, session_id: str) -> bool:
-        """关闭桌面会话。"""
-        if session_id in self.sessions:
-            del self.sessions[session_id]
-            logger.info(f"Mac session closed: {session_id}")
-            return True
-        return False
-
-    def execute_action(self, session: Session, action: Action) -> ActionResult:
+    def execute_action(self, context: Any, action: Action) -> ActionResult:
         """执行动作。"""
         start_time = time.time()
 
@@ -142,9 +121,6 @@ class MacPlatformManager(PlatformManager):
                     error=f"Unknown action type: {action.action_type}",
                 )
 
-            # 更新会话活动时间
-            self._update_session_activity(session.session_id)
-
             duration_ms = int((time.time() - start_time) * 1000)
             result.duration_ms = duration_ms
 
@@ -160,11 +136,10 @@ class MacPlatformManager(PlatformManager):
                 error=str(e),
             )
 
-    def get_screenshot(self, session: Session) -> bytes:
+    def get_screenshot(self, context: Any) -> bytes:
         """获取当前屏幕截图。"""
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         return buffer.getvalue()
@@ -183,7 +158,6 @@ class MacPlatformManager(PlatformManager):
             )
 
         # macOS 使用 open 命令启动应用
-        import subprocess
         subprocess.run(["open", "-a", app_name])
 
         # 等待应用启动
@@ -201,7 +175,6 @@ class MacPlatformManager(PlatformManager):
         # 获取截图
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
@@ -291,7 +264,6 @@ class MacPlatformManager(PlatformManager):
         # 获取截图
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
@@ -403,7 +375,6 @@ class MacPlatformManager(PlatformManager):
         """截图。"""
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
@@ -439,7 +410,6 @@ class MacPlatformManager(PlatformManager):
         while time.time() - start_time < timeout:
             screenshot = pyautogui.screenshot()
 
-            import io
             buffer = io.BytesIO()
             screenshot.save(buffer, format="PNG")
             screenshot_bytes = buffer.getvalue()
@@ -502,7 +472,6 @@ class MacPlatformManager(PlatformManager):
         """OCR 文字断言。"""
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
@@ -565,7 +534,6 @@ class MacPlatformManager(PlatformManager):
 
         screenshot = pyautogui.screenshot()
 
-        import io
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()

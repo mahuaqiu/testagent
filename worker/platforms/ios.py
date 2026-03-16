@@ -6,15 +6,13 @@ iOS 平台执行引擎。
 
 import logging
 import time
-import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Set
 
 from appium import webdriver
 from appium.options.ios import XCUITestOptions
 from appium.webdriver.common.appiumby import AppiumBy
 
-from worker.platforms.base import PlatformManager, Session
+from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 
@@ -28,14 +26,14 @@ class iOSPlatformManager(PlatformManager):
     使用 Appium (XCUITest) 控制 iOS 设备，支持 OCR/图像识别定位。
     """
 
+    # iOS 平台特有动作
+    SUPPORTED_ACTIONS: Set[str] = {"launch_app", "close_app"}
+
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
 
         self.appium_server = config.appium_server  # 必须从配置文件读取
         self.timeout = config.timeout
-
-        # 设备 ID 到会话的映射
-        self._device_sessions: Dict[str, str] = {}
 
     @property
     def platform(self) -> str:
@@ -60,12 +58,13 @@ class iOSPlatformManager(PlatformManager):
 
     def stop(self) -> None:
         """停止 iOS 平台。"""
-        # 关闭所有会话
-        for session_id in list(self.sessions.keys()):
+        # 关闭所有上下文（driver）
+        for device_id in list(self._contexts.keys()):
             try:
-                self.close_session(session_id)
+                self.close_context(self._contexts[device_id])
             except Exception as e:
-                logger.warning(f"Failed to close session {session_id}: {e}")
+                logger.warning(f"Failed to close driver: {e}")
+        self._contexts.clear()
 
         self._started = False
         logger.info("iOS platform stopped")
@@ -74,24 +73,22 @@ class iOSPlatformManager(PlatformManager):
         """检查平台是否可用。"""
         return self._started
 
-    def create_session(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
+    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
-        创建 Appium 会话。
+        创建 Appium Driver。
 
         Args:
-            device_id: iOS 设备 UDID
+            device_id: iOS 设备 UDID（必填）
             options: Appium 选项
 
         Returns:
-            Session: 会话对象
+            WebDriver: Appium Driver
         """
         if not self.is_available():
             raise RuntimeError("iOS platform not started")
 
         if not device_id:
             raise ValueError("device_id is required for iOS platform")
-
-        session_id = str(uuid.uuid4())[:8]
 
         # 配置 Appium 选项
         appium_options = options or {}
@@ -113,55 +110,33 @@ class iOSPlatformManager(PlatformManager):
         )
         driver.implicitly_wait(10)
 
-        session = Session(
-            session_id=session_id,
-            platform=self.platform,
-            device_id=device_id,
-            context=driver,
-            metadata={},
-        )
+        # 缓存 driver
+        self._contexts[device_id] = driver
 
-        self.sessions[session_id] = session
-        self._device_sessions[device_id] = session_id
+        logger.info(f"iOS driver created (device={device_id})")
 
-        logger.info(f"iOS session created: {session_id} (device={device_id})")
+        return driver
 
-        return session
+    def close_context(self, context: Any) -> None:
+        """关闭 Appium Driver。"""
+        if context:
+            try:
+                context.quit()
+                logger.info("iOS driver closed")
+            except Exception as e:
+                logger.error(f"Failed to close driver: {e}")
 
-    def close_session(self, session_id: str) -> bool:
-        """关闭 Appium 会话。"""
-        session = self.sessions.get(session_id)
-        if not session:
-            return False
-
-        try:
-            driver = session.context
-            if driver:
-                driver.quit()
-
-            # 清理映射
-            if session.device_id and session.device_id in self._device_sessions:
-                del self._device_sessions[session.device_id]
-
-            del self.sessions[session_id]
-            logger.info(f"iOS session closed: {session_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to close session {session_id}: {e}")
-            return False
-
-    def execute_action(self, session: Session, action: Action) -> ActionResult:
+    def execute_action(self, context: Any, action: Action) -> ActionResult:
         """执行动作。"""
         start_time = time.time()
 
-        driver = session.context
+        driver = context
         if not driver:
             return ActionResult(
                 index=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
-                error="Driver not found in session",
+                error="Driver context is invalid",
             )
 
         try:
@@ -206,9 +181,6 @@ class iOSPlatformManager(PlatformManager):
                     error=f"Unknown action type: {action.action_type}",
                 )
 
-            # 更新会话活动时间
-            self._update_session_activity(session.session_id)
-
             duration_ms = int((time.time() - start_time) * 1000)
             result.duration_ms = duration_ms
 
@@ -224,9 +196,9 @@ class iOSPlatformManager(PlatformManager):
                 error=str(e),
             )
 
-    def get_screenshot(self, session: Session) -> bytes:
+    def get_screenshot(self, context: Any) -> bytes:
         """获取当前屏幕截图。"""
-        driver = session.context
+        driver = context
         if driver:
             return driver.get_screenshot_as_png()
         return b""

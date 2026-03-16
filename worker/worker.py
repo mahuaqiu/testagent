@@ -4,25 +4,26 @@ Worker 主服务。
 负责管理设备发现、平台管理器、任务调度、平台上报等核心功能。
 """
 
+import base64
 import logging
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 
 from worker.config import WorkerConfig, PlatformConfig
 from worker.discovery.host import HostDiscoverer, HostInfo
 from worker.discovery.android import AndroidDiscoverer, AndroidDeviceInfo
 from worker.discovery.ios import iOSDiscoverer, iOSDeviceInfo
 from worker.reporter import Reporter, WorkerReport, WorkerCapabilities, DesktopInfo
-from worker.platforms.base import PlatformManager, Session
+from worker.platforms.base import PlatformManager
 from worker.platforms.web import WebPlatformManager
 from worker.platforms.android import AndroidPlatformManager
 from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
 from worker.platforms.mac import MacPlatformManager
-from worker.task import Task, TaskResult, TaskStatus, ActionResult
+from worker.task import Task, TaskResult, TaskStatus, ActionResult, ActionStatus
 
 from common.ocr_client import OCRClient, get_ocr_client
 
@@ -37,7 +38,6 @@ class WorkerStatus:
     status: str  # online / busy / offline
     started_at: datetime
     supported_platforms: List[str]
-    active_sessions: int
     devices_count: int
 
 
@@ -427,11 +427,6 @@ class Worker:
 
     def get_status(self) -> WorkerStatus:
         """获取 Worker 状态。"""
-        active_sessions = sum(
-            len(m.get_active_sessions())
-            for m in self.platform_managers.values()
-        )
-
         devices_count = len(self.android_devices) + len(self.ios_devices)
 
         return WorkerStatus(
@@ -439,7 +434,6 @@ class Worker:
             status=self._status,
             started_at=self._started_at or datetime.now(),
             supported_platforms=self.supported_platforms,
-            active_sessions=active_sessions,
             devices_count=devices_count,
         )
 
@@ -484,6 +478,64 @@ class Worker:
         self._discover_mobile_devices()
         return self.get_devices()
 
+    def _validate_task(self, task: Task, manager: PlatformManager) -> Optional[TaskResult]:
+        """
+        验证任务。
+
+        Args:
+            task: 任务对象
+            manager: 平台管理器
+
+        Returns:
+            TaskResult | None: 验证失败返回错误结果，通过返回 None
+        """
+        # 1. 平台支持验证
+        if task.platform not in self.supported_platforms:
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                platform=task.platform,
+                error=f"Platform not supported: {task.platform}",
+            )
+
+        # 2. device_id 验证（移动端必填）
+        if task.platform in ["android", "ios"]:
+            if not task.device_id:
+                return TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=task.platform,
+                    error=f"device_id is required for {task.platform} platform",
+                )
+
+            # 验证设备是否连接
+            if task.platform == "android":
+                device_ids = [d.udid for d in self.android_devices]
+            else:
+                device_ids = [d.udid for d in self.ios_devices]
+
+            if task.device_id not in device_ids:
+                return TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=task.platform,
+                    error=f"Device not found: {task.device_id}",
+                )
+
+        # 3. action_type 验证
+        supported_actions = manager.get_supported_actions()
+        for i, action in enumerate(task.actions):
+            action_type = action.action_type
+            if action_type not in supported_actions:
+                return TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=task.platform,
+                    error=f"Action not supported: {action_type} on {task.platform}",
+                )
+
+        return None
+
     def execute_task(self, task: Task) -> TaskResult:
         """
         执行任务。
@@ -500,16 +552,6 @@ class Worker:
             f"device_id={task.device_id}"
         )
 
-        # 检查平台是否支持
-        if platform not in self.supported_platforms:
-            logger.warning(f"Platform not supported: {platform}")
-            return TaskResult(
-                task_id=task.task_id,
-                status=TaskStatus.FAILED,
-                platform=platform,
-                error=f"Platform not supported: {platform}",
-            )
-
         # 获取平台管理器
         manager = self.platform_managers.get(platform)
         if not manager:
@@ -519,6 +561,11 @@ class Worker:
                 platform=platform,
                 error=f"Platform manager not available: {platform}",
             )
+
+        # 前置验证
+        validation_result = self._validate_task(task, manager)
+        if validation_result:
+            return validation_result
 
         # 启动平台（如果未启动）
         if not manager.is_available():
@@ -539,54 +586,64 @@ class Worker:
                 task_id=task.task_id,
                 status=TaskStatus.FAILED,
                 platform=platform,
-                error="Platform is busy, please retry later",
+                error="Device is busy, please retry later",
             )
 
+        context = None
         try:
             self._status = "busy"
 
-            # 创建或复用会话
-            session = None
-            if task.session_id:
-                session = manager.get_session(task.session_id)
+            # 创建执行上下文
+            context = manager.create_context(device_id=task.device_id, options=task.metadata)
 
-            if not session:
-                session = manager.create_session(
-                    device_id=task.device_id,
-                    options=task.metadata,
-                )
-
-            # 执行任务
-            result = self._execute_actions(manager, session, task)
+            # 执行动作列表
+            result = self._execute_actions(manager, context, task)
 
             return result
 
         finally:
             self._status = "online"
+
+            # 清理执行上下文
+            if context is not None:
+                try:
+                    manager.close_context(context)
+                except Exception as e:
+                    logger.warning(f"Failed to close context: {e}")
+
             self.scheduler.release(platform, task.device_id)
 
-    def _execute_actions(self, manager: PlatformManager, session: Session, task: Task) -> TaskResult:
+    def _execute_actions(self, manager: PlatformManager, context: Any, task: Task) -> TaskResult:
         """执行动作列表。"""
         started_at = datetime.now()
         actions_results = []
 
         for i, action in enumerate(task.actions):
-            result = manager.execute_action(session, action)
+            result = manager.execute_action(context, action)
             result.index = i
             actions_results.append(result)
 
             # 记录动作执行结果
             logger.debug(
-                f"Action result: index={i}, type={action.get('action_type')}, "
+                f"Action result: index={i}, type={action.action_type}, "
                 f"status={result.status}, duration={result.duration_ms}ms"
             )
 
             # 如果动作失败且未配置继续，停止执行
-            if result.status != "success" and not task.metadata.get("continue_on_error"):
+            if result.status != ActionStatus.SUCCESS and not task.metadata.get("continue_on_error"):
                 logger.warning(
-                    f"Action failed: index={i}, type={action.get('action_type')}, "
+                    f"Action failed: index={i}, type={action.action_type}, "
                     f"error={result.error}"
                 )
+
+                # 获取失败截图
+                error_screenshot = None
+                try:
+                    screenshot_bytes = manager.get_screenshot(context)
+                    error_screenshot = base64.b64encode(screenshot_bytes).decode("utf-8")
+                except Exception as e:
+                    logger.warning(f"Failed to get error screenshot: {e}")
+
                 return TaskResult(
                     task_id=task.task_id,
                     status=TaskStatus.FAILED,
@@ -595,6 +652,7 @@ class Worker:
                     finished_at=datetime.now(),
                     actions=actions_results,
                     error=result.error,
+                    error_screenshot=error_screenshot,
                 )
 
         result = TaskResult(
@@ -613,42 +671,3 @@ class Worker:
         )
 
         return result
-
-    def create_session(self, platform: str, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
-        """创建会话。"""
-        manager = self.platform_managers.get(platform)
-        if not manager:
-            raise ValueError(f"Platform not supported: {platform}")
-
-        if not manager.is_available():
-            manager.start()
-
-        return manager.create_session(device_id, options)
-
-    def close_session(self, platform: str, session_id: str) -> bool:
-        """关闭会话。"""
-        manager = self.platform_managers.get(platform)
-        if not manager:
-            return False
-
-        return manager.close_session(session_id)
-
-    def get_session(self, platform: str, session_id: str) -> Optional[Session]:
-        """获取会话。"""
-        manager = self.platform_managers.get(platform)
-        if not manager:
-            return None
-
-        return manager.get_session(session_id)
-
-    def take_screenshot(self, platform: str, session_id: str) -> bytes:
-        """获取截图。"""
-        manager = self.platform_managers.get(platform)
-        if not manager:
-            raise ValueError(f"Platform not supported: {platform}")
-
-        session = manager.get_session(session_id)
-        if not session:
-            raise ValueError(f"Session not found: {session_id}")
-
-        return manager.get_screenshot(session)
