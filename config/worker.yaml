@@ -54,4 +54,6 @@ image_matching:
 # 日志配置
 logging:
   level: INFO                       # 日志级别: DEBUG / INFO / WARNING / ERROR
-  file: logs/worker.log             # 日志文件路径
+  file: null                        # 日志文件路径，null 表示使用默认路径（exe同目录/worker.log）
+  max_size: 52428800                # 单文件最大字节数，默认 50MB
+  backup_count: 5                   # 保留的备份文件数量

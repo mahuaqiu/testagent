@@ -141,3 +141,24 @@ class HeartbeatReport:
             "devices_count": self.devices_count,
             "timestamp": self.timestamp.isoformat(),
         }
+
+
+@dataclass
+class DevicesResponse:
+    """
+    设备信息响应模型。
+
+    用于 /devices 接口返回和平台上报。
+    """
+
+    ip: str
+    port: int
+    devices: Dict[str, List[str]]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式。"""
+        return {
+            "ip": self.ip,
+            "port": self.port,
+            "devices": self.devices,
+        }

@@ -170,7 +170,7 @@ class Worker:
         self._init_reporter()
 
         # 5. 上报初始状态
-        self._report_full()
+        self._report_devices()
 
         # 6. 启动设备监控
         self._start_device_monitor()
@@ -336,6 +336,18 @@ class Worker:
 
         self.reporter.report_full(report)
 
+    def _report_devices(self) -> None:
+        """
+        使用新格式上报设备信息。
+
+        用于定期上报和设备变化时上报。
+        """
+        if not self.reporter:
+            return
+
+        data = self.get_devices()
+        self.reporter.report_devices(data)
+
     def _start_device_monitor(self) -> None:
         """启动设备监控线程。"""
         if self.host_info and self.host_info.os_type != "windows":
@@ -389,7 +401,7 @@ class Worker:
 
         # 如果有变化，上报
         if changes and self.reporter:
-            self._report_full()
+            self._report_devices()
             logger.info(f"Device changes detected: {len(changes)} changes")
 
     def _compare_devices(self, platform: str, old_list: List, new_list: List) -> List[str]:
@@ -431,15 +443,40 @@ class Worker:
             devices_count=devices_count,
         )
 
-    def get_devices(self) -> Dict[str, List]:
-        """获取设备列表。"""
+    def get_devices(self) -> Dict[str, Any]:
+        """
+        获取设备信息（新格式）。
+
+        Returns:
+            Dict: 包含 ip, port, devices 的字典
+        """
+        devices: Dict[str, List[str]] = {}
+
+        # 1. 根据操作系统添加桌面平台
+        if self.host_info:
+            if self.host_info.os_type == "windows":
+                devices["windows"] = []
+                devices["web"] = []
+            elif self.host_info.os_type == "macos":
+                devices["mac"] = []
+
+        # 2. Android 设备（返回设备标识列表）
+        if self.android_devices:
+            devices["android"] = [d.udid for d in self.android_devices]
+
+        # 3. iOS 设备（返回 UDID 列表）
+        if self.ios_devices:
+            devices["ios"] = [d.udid for d in self.ios_devices]
+
+        # 4. 获取本机 IP
+        ip = "unknown"
+        if self.host_info and self.host_info.ip_addresses:
+            ip = self.host_info.ip_addresses[0]
+
         return {
-            "android": [d.to_dict() for d in self.android_devices],
-            "ios": [d.to_dict() for d in self.ios_devices],
-            "desktop": {
-                "platform": self.host_info.os_type if self.host_info else "unknown",
-                "resolution": self.host_info.display_resolution if self.host_info else "unknown",
-            } if self.host_info else None,
+            "ip": ip,
+            "port": self.port,
+            "devices": devices,
         }
 
     def refresh_devices(self) -> Dict[str, List]:
@@ -458,9 +495,14 @@ class Worker:
             TaskResult: 任务结果
         """
         platform = task.platform
+        logger.info(
+            f"Task started: task_id={task.task_id}, platform={platform}, "
+            f"device_id={task.device_id}"
+        )
 
         # 检查平台是否支持
         if platform not in self.supported_platforms:
+            logger.warning(f"Platform not supported: {platform}")
             return TaskResult(
                 task_id=task.task_id,
                 status=TaskStatus.FAILED,
@@ -533,8 +575,18 @@ class Worker:
             result.index = i
             actions_results.append(result)
 
+            # 记录动作执行结果
+            logger.debug(
+                f"Action result: index={i}, type={action.get('action_type')}, "
+                f"status={result.status}, duration={result.duration_ms}ms"
+            )
+
             # 如果动作失败且未配置继续，停止执行
             if result.status != "success" and not task.metadata.get("continue_on_error"):
+                logger.warning(
+                    f"Action failed: index={i}, type={action.get('action_type')}, "
+                    f"error={result.error}"
+                )
                 return TaskResult(
                     task_id=task.task_id,
                     status=TaskStatus.FAILED,
@@ -545,7 +597,7 @@ class Worker:
                     error=result.error,
                 )
 
-        return TaskResult(
+        result = TaskResult(
             task_id=task.task_id,
             status=TaskStatus.SUCCESS,
             platform=task.platform,
@@ -553,6 +605,14 @@ class Worker:
             finished_at=datetime.now(),
             actions=actions_results,
         )
+
+        # 记录任务完成
+        logger.info(
+            f"Task completed: task_id={task.task_id}, status={result.status}, "
+            f"duration={result.duration_ms}ms"
+        )
+
+        return result
 
     def create_session(self, platform: str, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Session:
         """创建会话。"""

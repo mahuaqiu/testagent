@@ -14,15 +14,9 @@ import uvicorn
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from worker.config import load_config
+from worker.logger import setup_logging
 from worker.worker import Worker
 from worker.server import app, set_worker
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 def main():
@@ -30,14 +24,21 @@ def main():
     # 加载配置
     config = load_config()
 
-    # 设置日志级别
-    logging.getLogger().setLevel(getattr(logging, config.log_level.upper()))
+    # 初始化日志
+    log_path = setup_logging(
+        level=config.log_level,
+        log_file=config.log_file,
+        max_bytes=config.log_max_size,
+        backup_count=config.log_backup_count,
+    )
+    logger = logging.getLogger(__name__)
 
     # 打印启动信息
     logger.info("=" * 50)
     logger.info("Test Worker Starting...")
     logger.info(f"Worker ID: {config.id}")
     logger.info(f"Port: {config.port}")
+    logger.info(f"Log file: {log_path}")
     logger.info(f"Platform API: {config.platform_api or 'Not configured'}")
     logger.info(f"OCR Service: {config.ocr_service or 'Not configured'}")
     logger.info("=" * 50)

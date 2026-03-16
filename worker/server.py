@@ -60,28 +60,13 @@ def set_worker(w: Worker) -> None:
 # ========== API 端点 ==========
 
 
-@app.get("/status")
-async def get_status():
-    """获取 Worker 完整状态信息。"""
+@app.get("/devices")
+async def get_devices():
+    """获取设备信息。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    status = worker.get_status()
-    devices = worker.get_devices()
-
-    return {
-        "worker_id": status.worker_id,
-        "status": status.status,
-        "started_at": status.started_at.isoformat(),
-        "port": worker.port,
-        "hostname": worker.host_info.hostname if worker.host_info else "unknown",
-        "ip_addresses": worker.host_info.ip_addresses if worker.host_info else [],
-        "os_type": worker.host_info.os_type if worker.host_info else "unknown",
-        "os_version": worker.host_info.os_version if worker.host_info else "unknown",
-        "supported_platforms": status.supported_platforms,
-        "active_sessions": status.active_sessions,
-        "devices": devices,
-    }
+    return worker.get_devices()
 
 
 @app.post("/task/execute")
@@ -89,6 +74,12 @@ async def execute_task(request: TaskRequest):
     """同步执行任务。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    # 记录任务请求
+    logger.info(
+        f"Task request: platform={request.platform}, "
+        f"device_id={request.device_id}, actions={len(request.actions)}"
+    )
 
     # 创建任务对象
     task = Task.create(
@@ -104,6 +95,12 @@ async def execute_task(request: TaskRequest):
 
     # 执行任务
     result = worker.execute_task(task)
+
+    # 记录任务结果
+    logger.info(
+        f"Task result: task_id={task.task_id}, status={result.status}, "
+        f"duration={result.duration_ms}ms"
+    )
 
     return result.to_dict()
 
@@ -150,6 +147,10 @@ async def create_session(request: SessionRequest):
             device_id=request.device_id,
             options=request.options,
         )
+        logger.info(
+            f"Session created: platform={session.platform}, "
+            f"session_id={session.session_id}"
+        )
         return {
             "session_id": session.session_id,
             "platform": session.platform,
@@ -157,6 +158,7 @@ async def create_session(request: SessionRequest):
             "created_at": session.created_at.isoformat(),
         }
     except Exception as e:
+        logger.warning(f"Session creation failed: platform={request.platform}, error={e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -186,6 +188,7 @@ async def close_session(session_id: str, platform: str):
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     success = worker.close_session(platform, session_id)
+    logger.info(f"Session closed: platform={platform}, session_id={session_id}")
     return {"closed": success}
 
 

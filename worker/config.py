@@ -5,7 +5,7 @@ Worker 配置管理模块。
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import yaml
 
@@ -28,7 +28,9 @@ class WorkerConfig:
 
     # 日志配置
     log_level: str = "INFO"
-    log_file: str = "logs/worker.log"
+    log_file: Optional[str] = None  # None 表示使用默认路径
+    log_max_size: int = 52428800  # 50MB
+    log_backup_count: int = 5
 
     # 图像匹配配置
     image_matching: Dict[str, Any] = field(default_factory=dict)
@@ -53,7 +55,9 @@ class WorkerConfig:
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
             log_level=logging_cfg.get("level", "INFO"),
-            log_file=logging_cfg.get("file", "logs/worker.log"),
+            log_file=logging_cfg.get("file"),
+            log_max_size=logging_cfg.get("max_size", 52428800),
+            log_backup_count=logging_cfg.get("backup_count", 5),
             image_matching=image_matching,
         )
 

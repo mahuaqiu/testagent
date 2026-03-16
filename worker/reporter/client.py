@@ -131,6 +131,39 @@ class Reporter:
             logger.error(f"Failed to report device change: {e}")
             return False
 
+    def report_devices(self, data: dict) -> bool:
+        """
+        使用新格式上报设备信息。
+
+        Args:
+            data: 设备信息数据（包含 ip, port, devices）
+
+        Returns:
+            bool: 上报是否成功
+        """
+        if not self._enabled:
+            logger.debug("Reporting disabled, skipping devices report")
+            return True
+
+        try:
+            url = f"{self.platform_api}/devices"
+            response = self._client.post(
+                url,
+                json=data,
+            )
+            response.raise_for_status()
+
+            logger.info(f"Devices report sent successfully to {url}")
+            return True
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to report devices (HTTP {e.response.status_code}): {e}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to report devices: {e}")
+            return False
+
     def unregister(self) -> bool:
         """
         注销 Worker。

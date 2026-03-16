@@ -10,6 +10,7 @@ from worker.reporter.models import (
     WorkerReport,
     DeviceChangeEvent,
     HeartbeatReport,
+    DevicesResponse,
 )
 from worker.reporter.client import Reporter
 
@@ -21,5 +22,6 @@ __all__ = [
     "WorkerReport",
     "DeviceChangeEvent",
     "HeartbeatReport",
+    "DevicesResponse",
     "Reporter",
 ]

@@ -271,6 +271,9 @@ class WebPlatformManager(PlatformManager):
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
 
+        # 记录 OCR 定位结果
+        logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
+
         # 点击
         page.mouse.click(x, y)
 
@@ -306,6 +309,9 @@ class WebPlatformManager(PlatformManager):
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 记录图像匹配结果
+        logger.debug(f"Image matched: position=({x}, {y}), threshold={action.threshold or 0.8}")
 
         # 点击
         page.mouse.click(x, y)
@@ -353,6 +359,9 @@ class WebPlatformManager(PlatformManager):
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 记录 OCR 定位结果
+        logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
         # 点击输入框
         page.mouse.click(x, y)
