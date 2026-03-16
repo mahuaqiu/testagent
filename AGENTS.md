@@ -58,7 +58,8 @@ autotest/
 │   └── task/                  # 任务模型
 │       ├── task.py            # 任务定义
 │       ├── action.py          # 动作定义（OCR/图像识别驱动）
-│       └── result.py          # 结果模型
+│       ├── result.py          # 结果模型
+│       └── store.py           # 内存任务存储（异步任务管理）
 │
 ├── common/                     # 公共库
 │   ├── config.py              # 配置管理
@@ -82,11 +83,17 @@ autotest/
 |------|------|------|
 | `/status` | GET | Worker 完整状态信息（含设备列表、支持平台等） |
 | `/devices` | GET | 获取设备信息 |
-| `/task/execute` | POST | 同步执行任务 |
-| `/task/{task_id}` | GET | 查询任务结果 |
+| `/task/execute` | POST | 同步执行任务（不返回 task_id） |
+| `/task/execute_async` | POST | 异步执行任务（返回 task_id） |
+| `/task/{task_id}` | GET | 查询任务结果（一次性，查询后销毁） |
+| `/task/{task_id}` | DELETE | 取消任务 |
 | `/devices/refresh` | POST | 刷新设备列表 |
 
-**说明**：截图功能通过 `task/execute` 接口的 `screenshot` 动作实现，不再提供单独的截图接口。
+**说明**：
+- 截图功能通过 `screenshot` 动作实现，不再提供单独的截图接口
+- `/task/execute` 同步执行，阻塞等待结果，不生成 task_id
+- `/task/execute_async` 异步执行，立即返回 task_id，任务在后台执行
+- `/task/{task_id}` GET 查询结果后会从内存中销毁，再次查询返回 404
 
 ## 动作类型
 
@@ -230,11 +237,13 @@ platforms:
 
 ## 任务结果示例
 
-### 成功结果
+### 同步执行结果（`/task/execute`）
 
+同步执行不返回 task_id，直接返回执行结果：
+
+**成功结果：**
 ```json
 {
-  "task_id": "task_20260317_120000_abc123",
   "status": "success",
   "platform": "web",
   "duration_ms": 1500,
@@ -245,11 +254,9 @@ platforms:
 }
 ```
 
-### 失败结果（含截图）
-
+**失败结果（含截图）：**
 ```json
 {
-  "task_id": "task_20260317_120000_abc123",
   "status": "failed",
   "platform": "web",
   "duration_ms": 500,
@@ -258,6 +265,61 @@ platforms:
   ],
   "error": "Text not found: 登录",
   "error_screenshot": "base64_encoded_screenshot_data"
+}
+```
+
+### 异步执行结果（`/task/execute_async`）
+
+**立即返回：**
+```json
+{
+  "task_id": "task_20260317_120000_abc123",
+  "status": "running"
+}
+```
+
+**冲突返回（409）：**
+```json
+{
+  "detail": "Device/Platform is busy"
+}
+```
+
+### 任务查询结果（`/task/{task_id}` GET）
+
+**执行中：**
+```json
+{
+  "task_id": "task_20260317_120000_abc123",
+  "status": "running"
+}
+```
+
+**执行完成（查询后销毁）：**
+```json
+{
+  "task_id": "task_20260317_120000_abc123",
+  "status": "success",
+  "platform": "web",
+  "duration_ms": 1500,
+  "actions": [...]
+}
+```
+
+**任务不存在（404）：**
+```json
+{
+  "detail": "Task not found"
+}
+```
+
+### 任务取消结果（`/task/{task_id}` DELETE）
+
+**取消成功：**
+```json
+{
+  "success": true,
+  "message": "Task cancelled"
 }
 ```
 

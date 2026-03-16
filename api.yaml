@@ -5,7 +5,7 @@ openapi: "3.0.0"
 info:
   title: "Test Worker API"
   description: "多端自动化测试执行基建 API"
-  version: "2.0.0"
+  version: "3.0.0"
 
 servers:
   - url: "http://{host}:{port}"
@@ -16,19 +16,6 @@ servers:
         default: "8080"
 
 paths:
-  /health:
-    get:
-      summary: "健康检查"
-      description: "检查 Worker 服务是否正常运行"
-      responses:
-        "200":
-          description: "服务正常"
-          content:
-            application/json:
-              example:
-                status: "ok"
-                timestamp: "2026-03-14T10:30:00.000000"
-
   /status:
     get:
       summary: "获取 Worker 状态"
@@ -43,38 +30,32 @@ paths:
                 status: "running"
                 started_at: "2026-03-14T10:00:00.000000"
                 supported_platforms: ["web", "windows", "android", "ios"]
-                active_sessions: 2
                 devices_count: 3
         "503":
           description: "Worker 未初始化"
 
-  /info:
+  /devices:
     get:
-      summary: "获取 Worker 详细信息"
-      description: "获取支持的平台、设备列表等完整信息"
+      summary: "获取设备列表"
+      description: "获取当前连接的所有设备信息"
       responses:
         "200":
           description: "成功"
           content:
             application/json:
               example:
-                worker_id: "worker_abc123"
-                hostname: "DESKTOP-ABC"
-                ip_addresses: ["192.168.1.100", "10.0.0.1"]
-                os_type: "Windows"
-                os_version: "10.0.19045"
-                supported_platforms: ["web", "windows", "android", "ios"]
-                status: "running"
+                ip: "192.168.1.100"
                 port: 8080
                 devices:
-                  - id: "emulator-5554"
-                    platform: "android"
-                    name: "Pixel_4_API_30"
+                  web: []
+                  windows: []
+                  android: ["emulator-5554"]
+                  ios: ["00008030-001234567890ABCD"]
 
   /task/execute:
     post:
-      summary: "执行任务（同步）"
-      description: "同步执行自动化测试任务，阻塞等待结果返回"
+      summary: "同步执行任务"
+      description: "同步执行自动化测试任务，阻塞等待结果返回，不生成 task_id"
       requestBody:
         required: true
         content:
@@ -88,27 +69,12 @@ paths:
                   value: "https://example.com"
                 - action_type: "ocr_click"
                   value: "登录"
-                - action_type: "ocr_input"
-                  value: "用户名"
-                  offset:
-                    x: 100
-                    y: 0
                 - action_type: "screenshot"
                   value: "result"
               device_id: null
-              user_id: "user_001"
-              session_id: null
-              config:
-                timeout: 300000
-                action_timeout: 30000
-                screenshot_on_error: true
-                slow_motion: 0
-                retry_count: 0
-              callback_url: null
-              priority: 0
       responses:
         "200":
-          description: "任务执行完成"
+          description: "任务执行完成（不包含 task_id）"
           content:
             application/json:
               schema:
@@ -116,138 +82,103 @@ paths:
         "503":
           description: "Worker 未初始化"
 
-  /task:
+  /task/execute_async:
     post:
-      summary: "提交任务（异步）"
-      description: "提交任务到队列，异步执行"
-      responses:
-        "501":
-          description: "功能未实现"
-
-  /task/{task_id}:
-    get:
-      summary: "查询任务结果"
-      description: "根据任务 ID 查询执行结果"
-      parameters:
-        - name: task_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "501":
-          description: "功能未实现"
-
-  /task/{task_id}:
-    delete:
-      summary: "取消任务"
-      description: "取消正在执行的任务"
-      parameters:
-        - name: task_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "501":
-          description: "功能未实现"
-
-  /session:
-    post:
-      summary: "创建会话"
-      description: "创建一个新的自动化会话，可用于复用浏览器/应用实例"
+      summary: "异步执行任务"
+      description: "异步执行自动化测试任务，立即返回 task_id，任务在后台执行"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SessionRequest"
+              $ref: "#/components/schemas/TaskRequest"
             example:
               platform: "web"
-              device_id: null
-              options:
-                headless: false
-                browser_type: "chromium"
+              actions:
+                - action_type: "navigate"
+                  value: "https://example.com"
+                - action_type: "ocr_click"
+                  value: "登录"
       responses:
         "200":
-          description: "会话创建成功"
+          description: "任务已提交"
           content:
             application/json:
               example:
-                session_id: "sess_xyz789"
-                platform: "web"
-                device_id: null
-                created_at: "2026-03-14T10:30:00.000000"
-        "500":
-          description: "创建失败"
+                task_id: "task_20260317_120000_abc123"
+                status: "running"
+        "409":
+          description: "设备/平台冲突"
+          content:
+            application/json:
+              example:
+                detail: "Device/Platform is busy"
+        "503":
+          description: "Worker 未初始化"
 
-  /session/{session_id}:
+  /task/{task_id}:
     get:
-      summary: "获取会话状态"
-      description: "查询指定会话的状态信息"
+      summary: "查询任务结果"
+      description: "根据任务 ID 查询执行结果。一次性查询：查询后任务从内存中销毁，再次查询返回 404"
       parameters:
-        - name: session_id
+        - name: task_id
           in: path
           required: true
           schema:
             type: string
-        - name: platform
-          in: query
-          required: true
-          schema:
-            type: string
       responses:
         "200":
-          description: "成功"
+          description: "任务状态或结果"
+          content:
+            application/json:
+              examples:
+                running:
+                  summary: "执行中"
+                  value:
+                    task_id: "task_20260317_120000_abc123"
+                    status: "running"
+                completed:
+                  summary: "执行完成"
+                  value:
+                    task_id: "task_20260317_120000_abc123"
+                    status: "success"
+                    platform: "web"
+                    duration_ms: 1500
+                    actions: []
+        "404":
+          description: "任务不存在"
           content:
             application/json:
               example:
-                session_id: "sess_xyz789"
-                platform: "web"
-                device_id: null
-                created_at: "2026-03-14T10:30:00.000000"
-                last_active: "2026-03-14T10:35:00.000000"
-        "404":
-          description: "会话不存在"
+                detail: "Task not found"
+        "503":
+          description: "Worker 未初始化"
 
     delete:
-      summary: "关闭会话"
-      description: "关闭并销毁指定会话"
+      summary: "取消任务"
+      description: "取消正在执行的任务。取消逻辑：如果只有一个 action，执行完再取消；有多个 action，当前 action 执行完后停止。"
       parameters:
-        - name: session_id
+        - name: task_id
           in: path
           required: true
           schema:
             type: string
-        - name: platform
-          in: query
-          required: true
-          schema:
-            type: string
       responses:
         "200":
-          description: "成功"
+          description: "取消成功"
           content:
             application/json:
               example:
-                closed: true
-
-  /devices:
-    get:
-      summary: "获取设备列表"
-      description: "获取当前连接的所有设备信息"
-      responses:
-        "200":
-          description: "成功"
+                success: true
+                message: "Task cancelled"
+        "404":
+          description: "任务不存在"
           content:
             application/json:
               example:
-                - id: "emulator-5554"
-                  platform: "android"
-                  name: "Pixel_4_API_30"
-                - id: "00008030-001234567890ABCD"
-                  platform: "ios"
-                  name: "iPhone 14"
+                detail: "Task not found"
+        "503":
+          description: "Worker 未初始化"
 
   /devices/refresh:
     post:
@@ -259,36 +190,11 @@ paths:
           content:
             application/json:
               example:
+                ip: "192.168.1.100"
+                port: 8080
                 devices:
-                  - id: "emulator-5554"
-                    platform: "android"
-                    name: "Pixel_4_API_30"
-                added: ["new_device_id"]
-                removed: ["old_device_id"]
-
-  /screenshot:
-    post:
-      summary: "获取实时截图"
-      description: "获取指定会话的当前屏幕截图"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ScreenshotRequest"
-            example:
-              platform: "web"
-              session_id: "sess_xyz789"
-      responses:
-        "200":
-          description: "成功"
-          content:
-            application/json:
-              example:
-                image: "iVBORw0KGgoAAAANSUhEUgAA..."
-                format: "png"
-        "500":
-          description: "获取失败"
+                  web: []
+                  android: ["emulator-5554"]
 
 components:
   schemas:
@@ -313,18 +219,8 @@ components:
         user_id:
           type: string
           description: "用户标识"
-        session_id:
-          type: string
-          description: "会话 ID（复用会话）"
         config:
           $ref: "#/components/schemas/TaskConfig"
-        callback_url:
-          type: string
-          description: "回调地址"
-        priority:
-          type: integer
-          default: 0
-          description: "优先级"
 
     TaskConfig:
       type: object
@@ -403,13 +299,6 @@ components:
           enum: [exact, fuzzy, contains, regex]
           default: exact
           description: "OCR 匹配模式"
-        screenshot:
-          type: boolean
-          default: false
-          description: "是否截图"
-        wait:
-          type: integer
-          description: "等待时间(ms)"
         x:
           type: integer
           description: "X 坐标"
@@ -438,10 +327,11 @@ components:
 
     TaskResult:
       type: object
+      description: "任务执行结果。同步执行时不包含 task_id 字段"
       properties:
         task_id:
           type: string
-          description: "任务 ID"
+          description: "任务 ID（仅异步执行返回）"
         status:
           type: string
           enum: [pending, running, success, failed, timeout, cancelled]
@@ -464,16 +354,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionResult"
-        screenshots:
-          type: array
-          items:
-            $ref: "#/components/schemas/ScreenshotInfo"
         error:
           type: string
           description: "错误信息"
-        metadata:
-          type: object
-          description: "元数据"
+        error_screenshot:
+          type: string
+          description: "失败截图（base64 编码）"
 
     ActionResult:
       type: object
@@ -500,48 +386,3 @@ components:
         screenshot:
           type: string
           description: "截图（base64 或路径）"
-
-    ScreenshotInfo:
-      type: object
-      properties:
-        name:
-          type: string
-          description: "截图名称"
-        action_index:
-          type: integer
-          description: "对应动作索引"
-        data:
-          type: string
-          description: "base64 数据"
-        path:
-          type: string
-          description: "文件路径"
-
-    SessionRequest:
-      type: object
-      required:
-        - platform
-      properties:
-        platform:
-          type: string
-          enum: [web, android, ios, windows, mac]
-          description: "平台"
-        device_id:
-          type: string
-          description: "设备 ID（移动端必填）"
-        options:
-          type: object
-          description: "会话选项"
-
-    ScreenshotRequest:
-      type: object
-      required:
-        - platform
-        - session_id
-      properties:
-        platform:
-          type: string
-          description: "平台"
-        session_id:
-          type: string
-          description: "会话 ID"
