@@ -1,8 +1,9 @@
-# Windows 打包脚本 (PowerShell)
+# Windows Build Script (PowerShell)
 
 param(
     [string]$Version = "2.0.0",
-    [string]$OutputDir = "dist\windows"
+    [string]$OutputDir = "dist\windows",
+    [switch]$Clean  # Use -Clean to force rebuild venv
 )
 
 Write-Host "=========================================="
@@ -11,31 +12,57 @@ Write-Host "Version: $Version"
 Write-Host "Output: $OutputDir"
 Write-Host "=========================================="
 
-# 检查 Python
+# Check Python
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Error "Python not found!"
     exit 1
 }
 
-# 创建虚拟环境
-Write-Host "[1/6] Creating virtual environment..."
-python -m venv build_env
-.\build_env\Scripts\Activate.ps1
+# Virtual environment path
+$VenvPath = "build_env"
 
-# 安装依赖
-Write-Host "[2/6] Installing dependencies..."
-pip install --upgrade pip
-pip install -e ".[all]"
-pip install pyinstaller
-
-# 安装 Playwright 浏览器
-Write-Host "[3/6] Installing Playwright browsers..."
-playwright install chromium
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Playwright browser installation may have issues"
+# Check if we need to recreate virtual environment
+if ($Clean -or -not (Test-Path $VenvPath)) {
+    if (Test-Path $VenvPath) {
+        Write-Host "[1/6] Removing old virtual environment..."
+        Remove-Item -Recurse -Force $VenvPath
+    }
+    Write-Host "[1/6] Creating virtual environment..."
+    python -m venv $VenvPath
+} else {
+    Write-Host "[1/6] Using existing virtual environment..."
 }
 
-# 打包
+# Activate virtual environment
+& ".\$VenvPath\Scripts\Activate.ps1"
+
+# Check if pyinstaller exists in venv
+$PyinstallerExists = Test-Path ".\$VenvPath\Scripts\pyinstaller.exe"
+
+if (-not $PyinstallerExists) {
+    Write-Host "[2/6] Installing dependencies (pyinstaller not found in venv)..."
+    pip install --upgrade pip
+    pip install -e ".[all]"
+    pip install pyinstaller
+} else {
+    Write-Host "[2/6] Dependencies already installed, skipping..."
+}
+
+# Check if Playwright chromium is already installed
+$ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
+$ChromiumInstalled = Test-Path $ChromiumPath
+
+if ($ChromiumInstalled) {
+    Write-Host "[3/6] Playwright chromium already installed, skipping..."
+} else {
+    Write-Host "[3/6] Installing Playwright browsers..."
+    playwright install chromium
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Playwright browser installation may have issues"
+    }
+}
+
+# Build
 Write-Host "[4/6] Building executable..."
 pyinstaller scripts/pyinstaller.spec --clean --noconfirm
 if ($LASTEXITCODE -ne 0) {
@@ -44,7 +71,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 检查生成的文件
+# Check generated file
 $ExePath = "dist\test-worker.exe"
 if (-not (Test-Path $ExePath)) {
     Write-Error "Executable not found: $ExePath"
@@ -52,29 +79,30 @@ if (-not (Test-Path $ExePath)) {
     exit 1
 }
 
-# 创建发布包
+# Create release package
 Write-Host "[5/6] Creating release package..."
 $PackageDir = "$OutputDir\test-worker-$Version"
 
-# 清理旧的发布目录
+# Clean old release directory
 if (Test-Path $PackageDir) {
     Remove-Item -Recurse -Force $PackageDir
 }
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
-# 移动文件到发布目录（而不是复制）
+# Move files to release directory
 Move-Item $ExePath $PackageDir
 Copy-Item -Path "config" -Destination $PackageDir -Recurse
 
-# 创建启动脚本
+# Create start script
 @"
 @echo off
+chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 test-worker.exe
 pause
 "@ | Out-File "$PackageDir\start.bat" -Encoding ASCII
 
-# 创建 README
+# Create README
 @"
 Test Worker v$Version - Windows
 
@@ -95,13 +123,14 @@ Requirements:
   - For OCR: OCR service must be running
 "@ | Out-File "$PackageDir\README.txt" -Encoding UTF8
 
-# 清理
-Write-Host "[6/6] Cleaning up..."
+# Deactivate virtual environment
 deactivate
-Remove-Item -Recurse -Force build_env -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
 
+Write-Host "[6/6] Build complete!"
 Write-Host "=========================================="
-Write-Host "Build complete!"
+Write-Host "Build successful!"
 Write-Host "Package: $PackageDir"
+Write-Host ""
+Write-Host "Note: Virtual environment preserved at: $VenvPath"
+Write-Host "Use -Clean flag to rebuild from scratch: .\build_windows.bat -Clean"
 Write-Host "=========================================="
