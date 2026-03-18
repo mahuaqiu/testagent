@@ -123,8 +123,23 @@ autotest/
 | 类型 | 支持平台 | 说明 |
 |------|----------|------|
 | `navigate` | Web | 跳转 URL |
-| `launch_app` | Android, iOS, Windows, Mac | 启动应用 |
-| `close_app` | Android, iOS | 关闭应用 |
+| `start_app` | Web, Android, iOS, Windows, Mac | 启动应用/浏览器 |
+| `stop_app` | Web, Android, iOS, Windows, Mac | 关闭应用/浏览器 |
+
+**start_app / stop_app 使用示例：**
+```json
+// Web 浏览器
+{"action_type": "start_app", "value": "chromium"}
+{"action_type": "stop_app"}
+
+// Android/iOS 应用
+{"action_type": "start_app", "value": "com.example.app"}
+{"action_type": "stop_app", "value": "com.example.app"}
+
+// Windows/Mac 应用程序（使用完整路径或进程名）
+{"action_type": "start_app", "value": "C:\\path\\to\\app.exe"}
+{"action_type": "stop_app", "value": "app.exe"}
+```
 
 ## 任务并发策略
 

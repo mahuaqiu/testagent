@@ -31,7 +31,7 @@ class WindowsPlatformManager(PlatformManager):
     """
 
     # Windows 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"launch_app"}
+    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -111,8 +111,10 @@ class WindowsPlatformManager(PlatformManager):
                 result = self._action_image_assert(action)
             elif action.action_type == "ocr_get_text":
                 result = self._action_ocr_get_text(action)
-            elif action.action_type == "launch_app":
-                result = self._action_launch_app(action)
+            elif action.action_type == "start_app":
+                result = self._action_start_app(action)
+            elif action.action_type == "stop_app":
+                result = self._action_stop_app(action)
             else:
                 result = ActionResult(
                     index=0,
@@ -146,13 +148,13 @@ class WindowsPlatformManager(PlatformManager):
 
     # ========== 动作实现 ==========
 
-    def _action_launch_app(self, action: Action) -> ActionResult:
+    def _action_start_app(self, action: Action) -> ActionResult:
         """启动应用。"""
         app_path = action.app_path or action.value
         if not app_path:
             return ActionResult(
                 index=0,
-                action_type="launch_app",
+                action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="app_path is required",
             )
@@ -164,10 +166,38 @@ class WindowsPlatformManager(PlatformManager):
 
         return ActionResult(
             index=0,
-            action_type="launch_app",
+            action_type="start_app",
             status=ActionStatus.SUCCESS,
-            output=f"Launched: {app_path}",
+            output=f"Started: {app_path}",
         )
+
+    def _action_stop_app(self, action: Action) -> ActionResult:
+        """关闭应用。"""
+        app_name = action.value
+        if not app_name:
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.FAILED,
+                error="app_name is required",
+            )
+
+        # 使用 taskkill 关闭应用
+        try:
+            subprocess.run(["taskkill", "/IM", app_name, "/F"], check=True)
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.SUCCESS,
+                output=f"Stopped: {app_name}",
+            )
+        except subprocess.CalledProcessError as e:
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.FAILED,
+                error=f"Failed to stop app: {e}",
+            )
 
     def _action_ocr_click(self, action: Action) -> ActionResult:
         """OCR 文字点击。"""

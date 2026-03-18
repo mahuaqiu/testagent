@@ -2,19 +2,57 @@
 Web 平台执行引擎。
 
 基于 Playwright 实现，支持 OCR/图像识别定位。
+使用 async_api 以支持在 asyncio 环境中正确运行。
 """
 
+import asyncio
+import concurrent.futures
 import logging
+import sys
+import threading
 import time
 from typing import Any, Dict, Optional, Set
 
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 
 logger = logging.getLogger(__name__)
+
+# 使用全局工作线程和事件循环
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop_lock = threading.Lock()
+_event_loop_started = threading.Event()
+
+
+def _run_async_worker():
+    """工作线程函数，运行持久的事件循环。"""
+    global _event_loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    _event_loop = loop
+    _event_loop_started.set()
+    loop.run_forever()
+
+
+# 启动工作线程
+_worker_thread = threading.Thread(target=_run_async_worker, daemon=True)
+_worker_thread.start()
+_event_loop_started.wait()
+
+
+def _run_async(coro):
+    """在工作线程的事件循环中运行协程。"""
+    global _event_loop
+    if _event_loop is None or _event_loop.is_closed():
+        raise RuntimeError("Event loop is not available")
+    
+    # 使用 run_coroutine_threadsafe 在工作线程的事件循环中运行
+    future = asyncio.run_coroutine_threadsafe(coro, _event_loop)
+    return future.result()
 
 
 class WebPlatformManager(PlatformManager):
@@ -25,7 +63,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"navigate"}
+    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -46,27 +84,31 @@ class WebPlatformManager(PlatformManager):
             return
 
         try:
-            self._playwright = sync_playwright().start()
-
-            # 选择浏览器类型
-            if self.browser_type == "firefox":
-                browser_launcher = self._playwright.firefox
-            elif self.browser_type == "webkit":
-                browser_launcher = self._playwright.webkit
-            else:
-                browser_launcher = self._playwright.chromium
-
-            self._browser = browser_launcher.launch(
-                headless=self.headless,
-                timeout=self.timeout,
-            )
-
+            # 使用 _run_async 在同步环境中启动 async playwright
+            _run_async(self._async_start())
             self._started = True
             logger.info(f"Web platform started (browser={self.browser_type}, headless={self.headless})")
 
         except Exception as e:
             logger.error(f"Failed to start Web platform: {e}")
             raise
+
+    async def _async_start(self) -> None:
+        """异步启动 Playwright 和浏览器。"""
+        self._playwright = await async_playwright().start()
+
+        # 选择浏览器类型
+        if self.browser_type == "firefox":
+            browser_launcher = self._playwright.firefox
+        elif self.browser_type == "webkit":
+            browser_launcher = self._playwright.webkit
+        else:
+            browser_launcher = self._playwright.chromium
+
+        self._browser = await browser_launcher.launch(
+            headless=self.headless,
+            timeout=self.timeout,
+        )
 
     def stop(self) -> None:
         """停止浏览器和 Playwright。"""
@@ -78,24 +120,27 @@ class WebPlatformManager(PlatformManager):
                 logger.warning(f"Failed to close context: {e}")
         self._contexts.clear()
 
+        # 关闭浏览器和 Playwright
+        if self._browser or self._playwright:
+            try:
+                _run_async(self._async_stop())
+            except Exception as e:
+                logger.warning(f"Failed to stop Web platform: {e}")
+
+        self._started = False
+        logger.info("Web platform stopped")
+
+    async def _async_stop(self) -> None:
+        """异步停止浏览器和 Playwright。"""
         # 关闭浏览器
         if self._browser:
-            try:
-                self._browser.close()
-            except Exception as e:
-                logger.warning(f"Failed to close browser: {e}")
+            await self._browser.close()
             self._browser = None
 
         # 停止 Playwright
         if self._playwright:
-            try:
-                self._playwright.stop()
-            except Exception as e:
-                logger.warning(f"Failed to stop Playwright: {e}")
+            await self._playwright.stop()
             self._playwright = None
-
-        self._started = False
-        logger.info("Web platform stopped")
 
     def is_available(self) -> bool:
         """检查平台是否可用。"""
@@ -115,29 +160,36 @@ class WebPlatformManager(PlatformManager):
         if not self.is_available():
             raise RuntimeError("Web platform not started")
 
-        # 创建新的浏览器上下文
-        context_options = options or {}
-        context = self._browser.new_context(**context_options)
-
-        # 创建页面
-        page = context.new_page()
-        page.set_default_timeout(self.timeout)
-
+        # 使用 _run_async 同步调用
+        page = _run_async(self._async_create_context(options or {}))
         logger.info(f"Web context created")
+        return page
 
+    async def _async_create_context(self, context_options: Dict) -> Page:
+        """异步创建浏览器上下文。"""
+        context = await self._browser.new_context(**context_options)
+        page = await context.new_page()
+        page.set_default_timeout(self.timeout)
         return page
 
     def close_context(self, context: Any) -> None:
         """关闭浏览器上下文。"""
         if context and isinstance(context, Page):
             try:
-                browser_context = context.context
-                context.close()
-                if browser_context:
-                    browser_context.close()
-                logger.info("Web context closed")
+                _run_async(self._async_close_context(context))
             except Exception as e:
                 logger.error(f"Failed to close context: {e}")
+
+    async def _async_close_context(self, page: Page) -> None:
+        """异步关闭浏览器上下文。"""
+        try:
+            browser_context = page.context
+            await page.close()
+            if browser_context:
+                await browser_context.close()
+            logger.info("Web context closed")
+        except Exception as e:
+            logger.error(f"Failed to close context: {e}")
 
     def execute_action(self, context: Any, action: Action) -> ActionResult:
         """执行动作。"""
@@ -153,8 +205,12 @@ class WebPlatformManager(PlatformManager):
             )
 
         try:
-            # 根据动作类型执行
-            if action.action_type == "navigate":
+            # start_app 和 stop_app 需要特殊处理（控制浏览器生命周期）
+            if action.action_type == "start_app":
+                result = self._action_start_app(page, action)
+            elif action.action_type == "stop_app":
+                result = self._action_stop_app(page, action)
+            elif action.action_type == "navigate":
                 result = self._action_navigate(page, action)
             elif action.action_type == "ocr_click":
                 result = self._action_ocr_click(page, action)
@@ -198,23 +254,97 @@ class WebPlatformManager(PlatformManager):
             return result
 
         except Exception as e:
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            line_no = exc_tb.tb_lineno if exc_tb else "unknown"
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
                 index=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
-                error=str(e),
+                error=f"Line {line_no}: {e}",
             )
 
     def get_screenshot(self, context: Any) -> bytes:
         """获取当前页面截图。"""
         page: Page = context
         if page:
-            return page.screenshot(type="png")
+            # 同步获取截图
+            try:
+                return _run_async(page.screenshot(type="png"))
+            except Exception:
+                return b""
         return b""
 
     # ========== 动作实现 ==========
+
+    def _action_start_app(self, page: Page, action: Action) -> ActionResult:
+        """启动/新建浏览器页面（实际上是通过新建 Page 来实现）。"""
+        browser_name = action.value or self.browser_type
+        # 重用已有的 browser，创建新页面
+        if self._browser:
+            try:
+                # 创建新的上下文和页面
+                context = _run_async(self._browser.new_context())
+                new_page = _run_async(context.new_page())
+                # 将新页面返回给后续动作使用
+                # 注意：这里需要修改 context 对象，但由于 page 是传入的，
+                # 我们用新 page 替换原 page
+                page_context = page.context
+                page_context_list = list(self._contexts.values())
+
+                # 更新 contexts 存储新的 page
+                for cid, p in list(self._contexts.items()):
+                    if p == page:
+                        self._contexts[cid] = new_page
+                        break
+
+                return ActionResult(
+                    index=0,
+                    action_type="start_app",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Started new page for browser: {browser_name}",
+                )
+            except Exception as e:
+                return ActionResult(
+                    index=0,
+                    action_type="start_app",
+                    status=ActionStatus.FAILED,
+                    error=f"Failed to start app: {e}",
+                )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error="Browser not started, please call start() first",
+            )
+
+    def _action_stop_app(self, page: Page, action: Action) -> ActionResult:
+        """关闭当前浏览器页面。"""
+        if page:
+            try:
+                _run_async(self._async_close_context(page))
+                return ActionResult(
+                    index=0,
+                    action_type="stop_app",
+                    status=ActionStatus.SUCCESS,
+                    output="Closed current page",
+                )
+            except Exception as e:
+                return ActionResult(
+                    index=0,
+                    action_type="stop_app",
+                    status=ActionStatus.FAILED,
+                    error=f"Failed to stop app: {e}",
+                )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.FAILED,
+                error="No page to close",
+            )
 
     def _action_navigate(self, page: Page, action: Action) -> ActionResult:
         """导航到 URL。"""
@@ -227,18 +357,27 @@ class WebPlatformManager(PlatformManager):
                 error="URL is required",
             )
 
-        page.goto(url, timeout=action.timeout)
-        return ActionResult(
-            index=0,
-            action_type="navigate",
-            status=ActionStatus.SUCCESS,
-            output=page.url,
-        )
+        try:
+            # 同步调用 async 方法
+            _run_async(page.goto(url, timeout=action.timeout))
+            return ActionResult(
+                index=0,
+                action_type="navigate",
+                status=ActionStatus.SUCCESS,
+                output=page.url,
+            )
+        except Exception as e:
+            return ActionResult(
+                index=0,
+                action_type="navigate",
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
 
     def _action_ocr_click(self, page: Page, action: Action) -> ActionResult:
         """OCR 文字点击。"""
         # 获取截图
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
 
         # 查找文字位置
         position = self._find_text_position(screenshot, action.value, action.match_mode)
@@ -257,7 +396,7 @@ class WebPlatformManager(PlatformManager):
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
         # 点击
-        page.mouse.click(x, y)
+        _run_async(page.mouse.click(x, y))
 
         return ActionResult(
             index=0,
@@ -277,7 +416,7 @@ class WebPlatformManager(PlatformManager):
             )
 
         # 获取截图
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
 
         # 查找图像位置
         position = self._find_image_position(screenshot, action.image_path, action.threshold)
@@ -296,7 +435,7 @@ class WebPlatformManager(PlatformManager):
         logger.debug(f"Image matched: position=({x}, {y}), threshold={action.threshold or 0.8}")
 
         # 点击
-        page.mouse.click(x, y)
+        _run_async(page.mouse.click(x, y))
 
         return ActionResult(
             index=0,
@@ -315,7 +454,7 @@ class WebPlatformManager(PlatformManager):
                 error="x and y coordinates are required",
             )
 
-        page.mouse.click(action.x, action.y)
+        _run_async(page.mouse.click(action.x, action.y))
 
         return ActionResult(
             index=0,
@@ -327,7 +466,7 @@ class WebPlatformManager(PlatformManager):
     def _action_ocr_input(self, page: Page, action: Action) -> ActionResult:
         """OCR 文字附近输入。"""
         # 获取截图
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
 
         # 查找文字位置
         position = self._find_text_position(screenshot, action.value, action.match_mode)
@@ -346,11 +485,11 @@ class WebPlatformManager(PlatformManager):
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
         # 点击输入框
-        page.mouse.click(x, y)
+        _run_async(page.mouse.click(x, y))
 
         # 输入文本
         if action.value:
-            page.keyboard.type(action.value)
+            _run_async(page.keyboard.type(action.value))
 
         return ActionResult(
             index=0,
@@ -370,11 +509,11 @@ class WebPlatformManager(PlatformManager):
             )
 
         # 点击
-        page.mouse.click(action.x, action.y)
+        _run_async(page.mouse.click(action.x, action.y))
 
         # 输入
         if action.value:
-            page.keyboard.type(action.value)
+            _run_async(page.keyboard.type(action.value))
 
         return ActionResult(
             index=0,
@@ -393,7 +532,7 @@ class WebPlatformManager(PlatformManager):
                 error="Key is required",
             )
 
-        page.keyboard.press(action.value)
+        _run_async(page.keyboard.press(action.value))
 
         return ActionResult(
             index=0,
@@ -415,10 +554,10 @@ class WebPlatformManager(PlatformManager):
         end_x = action.end_x if action.end_x is not None else action.x
         end_y = action.end_y if action.end_y is not None else action.y
 
-        page.mouse.move(action.x, action.y)
-        page.mouse.down()
-        page.mouse.move(end_x, end_y)
-        page.mouse.up()
+        _run_async(page.mouse.move(action.x, action.y))
+        _run_async(page.mouse.down())
+        _run_async(page.mouse.move(end_x, end_y))
+        _run_async(page.mouse.up())
 
         return ActionResult(
             index=0,
@@ -429,7 +568,7 @@ class WebPlatformManager(PlatformManager):
 
     def _action_screenshot(self, page: Page, action: Action) -> ActionResult:
         """截图。"""
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
         screenshot_base64 = self._bytes_to_base64(screenshot)
 
         name = action.value or "screenshot"
@@ -460,7 +599,7 @@ class WebPlatformManager(PlatformManager):
         timeout = action.timeout / 1000
 
         while time.time() - start_time < timeout:
-            screenshot = page.screenshot(type="png")
+            screenshot = _run_async(page.screenshot(type="png"))
             position = self._find_text_position(screenshot, action.value, action.match_mode)
 
             if position:
@@ -494,7 +633,7 @@ class WebPlatformManager(PlatformManager):
         timeout = action.timeout / 1000
 
         while time.time() - start_time < timeout:
-            screenshot = page.screenshot(type="png")
+            screenshot = _run_async(page.screenshot(type="png"))
             position = self._find_image_position(screenshot, action.image_path, action.threshold)
 
             if position:
@@ -516,7 +655,7 @@ class WebPlatformManager(PlatformManager):
 
     def _action_ocr_assert(self, page: Page, action: Action) -> ActionResult:
         """OCR 文字断言。"""
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
         position = self._find_text_position(screenshot, action.value, action.match_mode)
 
         if position:
@@ -544,7 +683,7 @@ class WebPlatformManager(PlatformManager):
                 error="image_path is required",
             )
 
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
         position = self._find_image_position(screenshot, action.image_path, action.threshold)
 
         if position:
@@ -572,7 +711,7 @@ class WebPlatformManager(PlatformManager):
                 error="OCR client not available",
             )
 
-        screenshot = page.screenshot(type="png")
+        screenshot = _run_async(page.screenshot(type="png"))
         texts = self.ocr_client.recognize(screenshot)
 
         all_text = " ".join([t.text for t in texts])

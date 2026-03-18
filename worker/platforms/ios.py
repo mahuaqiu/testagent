@@ -27,7 +27,7 @@ class iOSPlatformManager(PlatformManager):
     """
 
     # iOS 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"launch_app", "close_app"}
+    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -141,10 +141,10 @@ class iOSPlatformManager(PlatformManager):
 
         try:
             # 根据动作类型执行
-            if action.action_type == "launch_app":
-                result = self._action_launch_app(driver, action)
-            elif action.action_type == "close_app":
-                result = self._action_close_app(driver, action)
+            if action.action_type == "start_app":
+                result = self._action_start_app(driver, action)
+            elif action.action_type == "stop_app":
+                result = self._action_stop_app(driver, action)
             elif action.action_type == "ocr_click":
                 result = self._action_ocr_click(driver, action)
             elif action.action_type == "image_click":
@@ -205,13 +205,13 @@ class iOSPlatformManager(PlatformManager):
 
     # ========== 动作实现 ==========
 
-    def _action_launch_app(self, driver, action: Action) -> ActionResult:
+    def _action_start_app(self, driver, action: Action) -> ActionResult:
         """启动应用。"""
         bundle_id = action.bundle_id or action.value
         if not bundle_id:
             return ActionResult(
                 index=0,
-                action_type="launch_app",
+                action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="bundle_id is required",
             )
@@ -220,12 +220,12 @@ class iOSPlatformManager(PlatformManager):
 
         return ActionResult(
             index=0,
-            action_type="launch_app",
+            action_type="start_app",
             status=ActionStatus.SUCCESS,
-            output=f"Launched: {bundle_id}",
+            output=f"Started: {bundle_id}",
         )
 
-    def _action_close_app(self, driver, action: Action) -> ActionResult:
+    def _action_stop_app(self, driver, action: Action) -> ActionResult:
         """关闭应用。"""
         bundle_id = action.bundle_id or action.value
         if bundle_id:
@@ -235,9 +235,9 @@ class iOSPlatformManager(PlatformManager):
 
         return ActionResult(
             index=0,
-            action_type="close_app",
+            action_type="stop_app",
             status=ActionStatus.SUCCESS,
-            output=f"Closed: {bundle_id}",
+            output=f"Stopped: {bundle_id}",
         )
 
     def _action_ocr_click(self, driver, action: Action) -> ActionResult:

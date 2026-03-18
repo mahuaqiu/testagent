@@ -6,6 +6,7 @@ Worker 主服务。
 
 import base64
 import logging
+import sys
 import threading
 import time
 import traceback
@@ -77,7 +78,11 @@ class TaskScheduler:
             bool: 是否成功获取
         """
         lock = self._get_lock(platform, device_id)
-        return lock.acquire(blocking=blocking, timeout=timeout if timeout > 0 else None)
+        # blocking=False 时忽略 timeout 参数，直接非阻塞获取
+        if not blocking:
+            return lock.acquire(blocking=False)
+        # blocking=True 时，timeout > 0 用实际值，否则 None 表示无限等待
+        return lock.acquire(blocking=True, timeout=timeout if timeout > 0 else None)
 
     def release(self, platform: str, device_id: Optional[str] = None) -> None:
         """释放执行锁。"""
@@ -577,11 +582,13 @@ class Worker:
             try:
                 manager.start()
             except Exception as e:
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                line_no = exc_tb.tb_lineno if exc_tb else "unknown"
                 return TaskResult(
                     task_id=task.task_id,
                     status=TaskStatus.FAILED,
                     platform=platform,
-                    error=f"Failed to start platform: {e}",
+                    error=f"Line {line_no}: Failed to start platform: {e}",
                 )
 
         # 获取执行锁
@@ -599,12 +606,32 @@ class Worker:
             self._status = "busy"
 
             # 创建执行上下文
-            context = manager.create_context(device_id=task.device_id, options=task.metadata)
+            try:
+                context = manager.create_context(device_id=task.device_id, options=task.metadata)
+            except Exception as e:
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+                return TaskResult(
+                    task_id=task.task_id,
+                    status=TaskStatus.FAILED,
+                    platform=platform,
+                    error=f"Line {line_no}: Failed to create context: {e}",
+                )
 
             # 执行动作列表
             result = self._execute_actions(manager, context, task)
 
             return result
+
+        except Exception as e:
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+            return TaskResult(
+                task_id=task.task_id,
+                status=TaskStatus.FAILED,
+                platform=platform,
+                error=f"Line {line_no}: {e}",
+            )
 
         finally:
             self._status = "online"
@@ -738,7 +765,11 @@ class Worker:
         )
 
         # 执行任务
-        result = self.execute_task(task)
+        try:
+            result = self.execute_task(task)
+        except Exception as e:
+            logger.error(f"execute_task failed: {e}\n{traceback.format_exc()}")
+            raise
 
         # 返回结果（不含 task_id）
         return result.to_dict(include_task_id=False)

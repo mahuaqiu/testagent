@@ -163,11 +163,15 @@ async def execute_task(request: TaskRequest):
     )
 
     # 同步执行（不生成 task_id）
-    result = worker.execute_sync(
-        platform=request.platform,
-        actions=request.actions,
-        device_id=request.device_id,
-    )
+    try:
+        result = worker.execute_sync(
+            platform=request.platform,
+            actions=request.actions,
+            device_id=request.device_id,
+        )
+    except Exception as e:
+        logger.error(f"execute_sync failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
     # 记录任务结果（基本信息和 action 执行摘要）
     logger.info(

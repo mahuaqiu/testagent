@@ -36,8 +36,8 @@ class ActionType(Enum):
     NAVIGATE = "navigate"             # 跳转 URL
 
     # 应用操作
-    LAUNCH_APP = "launch_app"         # 启动应用
-    CLOSE_APP = "close_app"           # 关闭应用
+    START_APP = "start_app"          # 启动应用
+    STOP_APP = "stop_app"            # 关闭应用
 
 
 class MatchMode(Enum):
