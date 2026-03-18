@@ -16,6 +16,83 @@ from worker.task import Task
 
 logger = logging.getLogger(__name__)
 
+
+def _format_actions_summary(actions: List[Dict[str, Any]], max_actions: int = 10) -> str:
+    """
+    格式化请求的 actions 列表为摘要字符串。
+
+    - 每个 action 显示所有关键字段
+    - 超长字符串截断
+    - 超过 max_actions 时显示剩余数量
+    """
+    if not actions:
+        return "[]"
+
+    formatted = []
+    for i, action in enumerate(actions[:max_actions]):
+        # 提取所有关键字段
+        fields = {"index": i}
+        for key in ["action_type", "value", "offset", "x", "y", "image_path", "package_name", "bundle_id"]:
+            if key in action:
+                fields[key] = action[key]
+
+        # 截断过长的 value
+        value = fields.get("value")
+        if isinstance(value, str) and len(value) > 100:
+            fields["value"] = value[:97] + "..."
+
+        formatted.append(str(fields))
+
+    remaining = len(actions) - max_actions
+    if remaining > 0:
+        formatted.append(f"... and {remaining} more action(s)")
+
+    return "[" + ", ".join(formatted) + "]"
+
+
+def _format_action_results(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    格式化响应中每个 action 的执行结果，排除 base64 数据。
+    """
+    if not actions:
+        return []
+
+    formatted = []
+    for action in actions:
+        result = action.copy()
+        # 替换截图字段
+        if result.get("screenshot"):
+            result["screenshot"] = "<base64_data>"
+        formatted.append(result)
+
+    return formatted
+
+
+def _format_result_for_log(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    格式化结果用于日志输出，排除大数据字段。
+    """
+    if not result:
+        return result
+
+    log_result = result.copy()
+
+    # 处理 error_screenshot
+    if log_result.get("error_screenshot"):
+        log_result["error_screenshot"] = "<base64_data>"
+
+    # 处理 screenshots 列表
+    if log_result.get("screenshots"):
+        screenshot_count = len(log_result["screenshots"])
+        log_result["screenshots"] = f"<{screenshot_count} screenshot(s)>"
+
+    # 处理 actions 中的截图字段
+    if log_result.get("actions"):
+        log_result["actions"] = _format_action_results(log_result["actions"])
+
+    return log_result
+
+
 # Pydantic 模型定义
 
 
@@ -81,7 +158,8 @@ async def execute_task(request: TaskRequest):
     # 记录任务请求
     logger.info(
         f"Sync task request: platform={request.platform}, "
-        f"device_id={request.device_id}, actions={len(request.actions)}"
+        f"device_id={request.device_id}, actions_count={len(request.actions)}, "
+        f"actions={_format_actions_summary(request.actions)}"
     )
 
     # 同步执行（不生成 task_id）
@@ -91,11 +169,25 @@ async def execute_task(request: TaskRequest):
         device_id=request.device_id,
     )
 
-    # 记录任务结果
+    # 记录任务结果（基本信息和 action 执行摘要）
     logger.info(
         f"Sync task result: status={result.get('status')}, "
-        f"duration={result.get('duration_ms')}ms"
+        f"platform={result.get('platform')}, duration_ms={result.get('duration_ms')}"
     )
+
+    # 记录每个 action 的执行结果（DEBUG 级别）
+    if result.get("actions"):
+        for action in result["actions"]:
+            action_idx = action.get("index")
+            action_type = action.get("action_type")
+            status = action.get("status")
+            duration = action.get("duration_ms")
+            output = action.get("output", "")
+            error = action.get("error", "")
+            logger.debug(
+                f"Action[{action_idx}] {action_type}: {status}, duration_ms={duration}, "
+                f"output={output[:50] if output else ''}, error={error[:50] if error else ''}"
+            )
 
     return result
 
@@ -119,7 +211,8 @@ async def execute_task_async(request: TaskRequest):
     # 记录任务请求
     logger.info(
         f"Async task request: platform={request.platform}, "
-        f"device_id={request.device_id}, actions={len(request.actions)}"
+        f"device_id={request.device_id}, actions_count={len(request.actions)}, "
+        f"actions={_format_actions_summary(request.actions)}"
     )
 
     try:
@@ -128,6 +221,9 @@ async def execute_task_async(request: TaskRequest):
             actions=request.actions,
             device_id=request.device_id,
         )
+
+        # 记录任务提交结果
+        logger.info(f"Async task submitted: task_id={task_id}, status={status}")
 
         return {"task_id": task_id, "status": status}
 
@@ -159,7 +255,14 @@ async def get_task_result(task_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    logger.info(f"Task result queried: task_id={task_id}, status={result.get('status')}")
+    logger.info(
+        f"Task result queried: task_id={task_id}, status={result.get('status')}, "
+        f"platform={result.get('platform')}, duration_ms={result.get('duration_ms')}, "
+        f"actions_count={len(result.get('actions', []))}"
+    )
+
+    # 打印完整结果（不含 base64 数据）
+    logger.debug(f"Task result details: {_format_result_for_log(result)}")
 
     return result
 
