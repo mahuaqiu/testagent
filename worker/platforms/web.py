@@ -70,6 +70,8 @@ class WebPlatformManager(PlatformManager):
 
         self._playwright = None
         self._browser: Optional[Browser] = None
+        # 会话管理：key="default", value={"browser", "context", "page"}
+        self._sessions: Dict[str, Dict[str, Any]] = {}
         self.headless = config.headless
         self.browser_type = config.browser_type
         self.timeout = config.timeout
@@ -146,9 +148,78 @@ class WebPlatformManager(PlatformManager):
         """检查平台是否可用。"""
         return self._started and self._browser is not None
 
+    # ========== 会话管理方法 ==========
+
+    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+        """检查是否有活跃的会话（page 存在且未关闭）。"""
+        if "default" not in self._sessions:
+            return False
+        page = self._sessions["default"].get("page")
+        if page is None:
+            return False
+        # 检查页面是否已关闭
+        try:
+            return not page.is_closed()
+        except Exception:
+            return False
+
+    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+        """获取当前会话的上下文。"""
+        session = self._sessions.get("default")
+        if not session:
+            return None
+        page = session.get("page")
+        if page is None:
+            return None
+        # 检查页面是否已关闭
+        try:
+            if page.is_closed():
+                return None
+        except Exception:
+            return None
+        return page
+
+    def close_session(self, device_id: Optional[str] = None) -> None:
+        """关闭会话（由 stop_app 调用）。"""
+        session = self._sessions.get("default")
+        if session:
+            try:
+                # 关闭 page 和 context
+                page = session.get("page")
+                if page:
+                    _run_async(self._async_close_page(page))
+
+                # 关闭 browser（完全关闭）
+                if self._browser:
+                    _run_async(self._browser.close())
+                    self._browser = None
+
+                # 清理 playwright
+                if self._playwright:
+                    _run_async(self._playwright.stop())
+                    self._playwright = None
+
+                self._sessions.clear()
+                self._started = False
+                logger.info("Web session closed")
+            except Exception as e:
+                logger.warning(f"Failed to close session: {e}")
+
+    async def _async_close_page(self, page: Page) -> None:
+        """异步关闭页面（不关闭 browser）。"""
+        try:
+            browser_context = page.context
+            await page.close()
+            if browser_context:
+                await browser_context.close()
+        except Exception as e:
+            logger.warning(f"Failed to close page: {e}")
+
     def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
         创建浏览器上下文（BrowserContext + Page）。
+
+        如果已有活跃会话，复用已有的 page。
 
         Args:
             device_id: 不使用
@@ -160,8 +231,24 @@ class WebPlatformManager(PlatformManager):
         if not self.is_available():
             raise RuntimeError("Web platform not started")
 
-        # 使用 _run_async 同步调用
+        # 检查是否有活跃会话，有则复用
+        if self.has_active_session():
+            existing_page = self.get_session_context()
+            if existing_page:
+                logger.info("Reusing existing Web context")
+                return existing_page
+
+        # 创建新会话
         page = _run_async(self._async_create_context(options or {}))
+
+        # 存储到会话中
+        context = page.context if page else None
+        self._sessions["default"] = {
+            "browser": self._browser,
+            "context": context,
+            "page": page,
+        }
+
         logger.info(f"Web context created")
         return page
 
@@ -172,11 +259,23 @@ class WebPlatformManager(PlatformManager):
         page.set_default_timeout(self.timeout)
         return page
 
-    def close_context(self, context: Any) -> None:
-        """关闭浏览器上下文。"""
+    def close_context(self, context: Any, close_session: bool = False) -> None:
+        """
+        关闭浏览器上下文。
+
+        Args:
+            context: 执行上下文
+            close_session: 是否关闭整个会话（True=关闭 browser，False=保持 page 打开）
+        """
         if context and isinstance(context, Page):
             try:
-                _run_async(self._async_close_context(context))
+                if close_session:
+                    # 关闭整个会话（调用 close_session）
+                    self.close_session()
+                else:
+                    # 不关闭 page，只打印日志
+                    # page 保持打开状态，下次请求可以复用
+                    logger.info("Web context detached (keeping page open for session)")
             except Exception as e:
                 logger.error(f"Failed to close context: {e}")
 
@@ -195,6 +294,13 @@ class WebPlatformManager(PlatformManager):
         """执行动作。"""
         start_time = time.time()
 
+        # stop_app 不需要 context，可以直接处理
+        if action.action_type == "stop_app":
+            result = self._action_stop_app(None, action)
+            duration_ms = int((time.time() - start_time) * 1000)
+            result.duration_ms = duration_ms
+            return result
+
         page: Page = context
         if not page:
             return ActionResult(
@@ -205,11 +311,9 @@ class WebPlatformManager(PlatformManager):
             )
 
         try:
-            # start_app 和 stop_app 需要特殊处理（控制浏览器生命周期）
+            # 其他动作需要 page context
             if action.action_type == "start_app":
                 result = self._action_start_app(page, action)
-            elif action.action_type == "stop_app":
-                result = self._action_stop_app(page, action)
             elif action.action_type == "navigate":
                 result = self._action_navigate(page, action)
             elif action.action_type == "ocr_click":
@@ -281,19 +385,34 @@ class WebPlatformManager(PlatformManager):
     def _action_start_app(self, page: Page, action: Action) -> ActionResult:
         """启动/新建浏览器页面（实际上是通过新建 Page 来实现）。"""
         browser_name = action.value or self.browser_type
-        # 重用已有的 browser，创建新页面
+
+        # 如果已有会话，先关闭旧页面再创建新页面（不关闭浏览器）
+        if self.has_active_session():
+            logger.info("Closing existing page before starting new one")
+            old_session = self._sessions.get("default")
+            if old_session:
+                old_page = old_session.get("page")
+                if old_page:
+                    try:
+                        _run_async(self._async_close_page(old_page))
+                    except Exception as e:
+                        logger.warning(f"Failed to close old page: {e}")
+
         if self._browser:
             try:
                 # 创建新的上下文和页面
                 context = _run_async(self._browser.new_context())
                 new_page = _run_async(context.new_page())
-                # 将新页面返回给后续动作使用
-                # 注意：这里需要修改 context 对象，但由于 page 是传入的，
-                # 我们用新 page 替换原 page
-                page_context = page.context
-                page_context_list = list(self._contexts.values())
+                new_page.set_default_timeout(self.timeout)
 
-                # 更新 contexts 存储新的 page
+                # 更新会话存储
+                self._sessions["default"] = {
+                    "browser": self._browser,
+                    "context": context,
+                    "page": new_page,
+                }
+
+                # 更新 contexts 存储新的 page（兼容旧逻辑）
                 for cid, p in list(self._contexts.items()):
                     if p == page:
                         self._contexts[cid] = new_page
@@ -321,15 +440,16 @@ class WebPlatformManager(PlatformManager):
             )
 
     def _action_stop_app(self, page: Page, action: Action) -> ActionResult:
-        """关闭当前浏览器页面。"""
-        if page:
+        """关闭浏览器（结束会话）。"""
+        if page or self.has_active_session():
             try:
-                _run_async(self._async_close_context(page))
+                # 调用 close_session 完全关闭浏览器
+                self.close_session()
                 return ActionResult(
                     index=0,
                     action_type="stop_app",
                     status=ActionStatus.SUCCESS,
-                    output="Closed current page",
+                    output="Closed browser session",
                 )
             except Exception as e:
                 return ActionResult(
@@ -343,7 +463,7 @@ class WebPlatformManager(PlatformManager):
                 index=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
-                error="No page to close",
+                error="No session to close",
             )
 
     def _action_navigate(self, page: Page, action: Action) -> ActionResult:

@@ -34,6 +34,8 @@ class AndroidPlatformManager(PlatformManager):
 
         self.appium_server = config.appium_server  # 必须从配置文件读取
         self.timeout = config.timeout
+        # 会话管理：key=device_id, value={"driver": driver, "package": package_name}
+        self._sessions: Dict[str, Dict[str, Any]] = {}
 
     @property
     def platform(self) -> str:
@@ -73,9 +75,61 @@ class AndroidPlatformManager(PlatformManager):
         """检查平台是否可用。"""
         return self._started
 
+    # ========== 会话管理方法 ==========
+
+    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+        """检查是否有活跃的会话。"""
+        if device_id:
+            return device_id in self._sessions and self._sessions[device_id].get("driver") is not None
+        # 检查任一会话
+        return any(s.get("driver") is not None for s in self._sessions.values())
+
+    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+        """获取当前会话的上下文。"""
+        if device_id:
+            session = self._sessions.get(device_id)
+            return session.get("driver") if session else None
+        # 返回第一个活跃会话
+        for session in self._sessions.values():
+            if session.get("driver"):
+                return session.get("driver")
+        return None
+
+    def close_session(self, device_id: Optional[str] = None) -> None:
+        """关闭会话（由 stop_app 调用）。"""
+        if device_id:
+            # 关闭指定设备的会话
+            session = self._sessions.get(device_id)
+            if session:
+                driver = session.get("driver")
+                if driver:
+                    try:
+                        driver.quit()
+                    except Exception as e:
+                        logger.warning(f"Failed to close driver: {e}")
+                del self._sessions[device_id]
+                if device_id in self._contexts:
+                    del self._contexts[device_id]
+            logger.info(f"Android session closed (device={device_id})")
+        else:
+            # 关闭所有会话
+            for sid in list(self._sessions.keys()):
+                session = self._sessions[sid]
+                driver = session.get("driver")
+                if driver:
+                    try:
+                        driver.quit()
+                    except Exception as e:
+                        logger.warning(f"Failed to close driver: {e}")
+            self._sessions.clear()
+            self._contexts.clear()
+            logger.info("All Android sessions closed")
+
     def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
         """
         创建 Appium Driver。
+
+        如果已有活跃会话，复用已有的 driver。
 
         Args:
             device_id: Android 设备 UDID（必填）
@@ -89,6 +143,13 @@ class AndroidPlatformManager(PlatformManager):
 
         if not device_id:
             raise ValueError("device_id is required for Android platform")
+
+        # 检查是否有活跃会话，有则复用
+        if device_id in self._sessions:
+            existing_driver = self._sessions[device_id].get("driver")
+            if existing_driver:
+                logger.info(f"Reusing existing Android driver (device={device_id})")
+                return existing_driver
 
         # 配置 Appium 选项
         appium_options = options or {}
@@ -110,21 +171,43 @@ class AndroidPlatformManager(PlatformManager):
         )
         driver.implicitly_wait(10)
 
-        # 缓存 driver
+        # 缓存 driver 到会话
+        self._sessions[device_id] = {"driver": driver, "package": None}
         self._contexts[device_id] = driver
 
         logger.info(f"Android driver created (device={device_id})")
 
         return driver
 
-    def close_context(self, context: Any) -> None:
-        """关闭 Appium Driver。"""
+    def close_context(self, context: Any, close_session: bool = False) -> None:
+        """
+        关闭 Appium Driver。
+
+        Args:
+            context: Driver 上下文
+            close_session: 是否关闭整个会话（True=关闭 driver，False=只断开连接但保持 driver）
+        """
+        # 找到对应的 device_id
+        device_id = None
+        for did, drv in self._contexts.items():
+            if drv == context:
+                device_id = did
+                break
+
         if context:
             try:
-                context.quit()
-                logger.info("Android driver closed")
+                if close_session:
+                    # 关闭整个会话
+                    self.close_session(device_id)
+                else:
+                    # 只从上下文中移除，不关闭 driver
+                    if device_id and device_id in self._contexts:
+                        del self._contexts[device_id]
+                    if device_id and device_id in self._sessions:
+                        self._sessions[device_id]["driver"] = None
+                    logger.info("Android driver detached (session kept)")
             except Exception as e:
-                logger.error(f"Failed to close driver: {e}")
+                logger.error(f"Failed to close context: {e}")
 
     def execute_action(self, context: Any, action: Action) -> ActionResult:
         """执行动作。"""
@@ -218,6 +301,16 @@ class AndroidPlatformManager(PlatformManager):
 
         driver.activate_app(package)
 
+        # 记录当前应用包名到会话
+        # 找到对应的 device_id
+        device_id = None
+        for did, drv in self._contexts.items():
+            if drv == driver:
+                device_id = did
+                break
+        if device_id and device_id in self._sessions:
+            self._sessions[device_id]["package"] = package
+
         return ActionResult(
             index=0,
             action_type="start_app",
@@ -226,19 +319,30 @@ class AndroidPlatformManager(PlatformManager):
         )
 
     def _action_stop_app(self, driver, action: Action) -> ActionResult:
-        """关闭应用。"""
-        package = action.package_name or action.value
-        if package:
-            driver.terminate_app(package)
-        else:
-            driver.close_app()
+        """关闭应用（结束会话）。"""
+        # 找到对应的 device_id
+        device_id = None
+        for did, drv in self._contexts.items():
+            if drv == driver:
+                device_id = did
+                break
 
-        return ActionResult(
-            index=0,
-            action_type="stop_app",
-            status=ActionStatus.SUCCESS,
-            output=f"Stopped: {package}",
-        )
+        # 调用 close_session 完全关闭 Driver
+        if device_id:
+            self.close_session(device_id)
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.SUCCESS,
+                output=f"Closed driver session (device={device_id})",
+            )
+        else:
+            return ActionResult(
+                index=0,
+                action_type="stop_app",
+                status=ActionStatus.FAILED,
+                error="No driver session to close",
+            )
 
     def _action_ocr_click(self, driver, action: Action) -> ActionResult:
         """OCR 文字点击。"""

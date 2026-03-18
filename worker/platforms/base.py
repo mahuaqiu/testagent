@@ -100,12 +100,13 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def close_context(self, context: Any) -> None:
+    def close_context(self, context: Any, close_session: bool = False) -> None:
         """
         关闭执行上下文。
 
         Args:
             context: 执行上下文
+            close_session: 是否关闭整个会话（True=关闭 browser/driver，False=只关闭 page/context）
         """
         pass
 
@@ -258,3 +259,38 @@ class PlatformManager(ABC):
     def _wait(self, ms: int) -> None:
         """等待指定毫秒。"""
         time.sleep(ms / 1000.0)
+
+    # ========== 会话管理方法（可由子类覆盖） ==========
+
+    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+        """
+        检查是否有活跃的会话。
+
+        Args:
+            device_id: 设备 ID（可选）
+
+        Returns:
+            bool: 是否有活跃会话
+        """
+        return False
+
+    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+        """
+        获取当前会话的上下文。
+
+        Args:
+            device_id: 设备 ID（可选）
+
+        Returns:
+            Any: 会话上下文（如 Page、Driver），如果没有则返回 None
+        """
+        return None
+
+    def close_session(self, device_id: Optional[str] = None) -> None:
+        """
+        关闭会话（由 stop_app 调用）。
+
+        Args:
+            device_id: 设备 ID（可选）
+        """
+        pass

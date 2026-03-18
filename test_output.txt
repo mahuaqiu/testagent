@@ -1,3 +1,0 @@
-Starting...
-Started!
-Context created: <Page url='about:blank'>

@@ -546,6 +546,18 @@ class Worker:
 
         return None
 
+    def _needs_context(self, task: Task) -> bool:
+        """
+        检查任务是否需要创建 context。
+
+        stop_app 动作不需要 context。
+        """
+        if not task.actions:
+            return True
+        # 如果所有动作都是不需要 context 的，则跳过
+        no_context_actions = {"stop_app"}
+        return not all(a.action_type in no_context_actions for a in task.actions)
+
     def execute_task(self, task: Task) -> TaskResult:
         """
         执行任务。
@@ -605,18 +617,22 @@ class Worker:
         try:
             self._status = "busy"
 
+            # 检查是否只需要关闭会话（stop_app 动作不需要 context）
+            needs_context = self._needs_context(task)
+
             # 创建执行上下文
-            try:
-                context = manager.create_context(device_id=task.device_id, options=task.metadata)
-            except Exception as e:
-                exc_type, exc_value, exc_tb = sys.exc_info()
-                line_no = exc_tb.tb_lineno if exc_tb else "unknown"
-                return TaskResult(
-                    task_id=task.task_id,
-                    status=TaskStatus.FAILED,
-                    platform=platform,
-                    error=f"Line {line_no}: Failed to create context: {e}",
-                )
+            if needs_context:
+                try:
+                    context = manager.create_context(device_id=task.device_id, options=task.metadata)
+                except Exception as e:
+                    exc_type, exc_value, exc_tb = sys.exc_info()
+                    line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+                    return TaskResult(
+                        task_id=task.task_id,
+                        status=TaskStatus.FAILED,
+                        platform=platform,
+                        error=f"Line {line_no}: Failed to create context: {e}",
+                    )
 
             # 执行动作列表
             result = self._execute_actions(manager, context, task)
@@ -636,10 +652,10 @@ class Worker:
         finally:
             self._status = "online"
 
-            # 清理执行上下文
+            # 清理执行上下文（不关闭会话，保持资源复用）
             if context is not None:
                 try:
-                    manager.close_context(context)
+                    manager.close_context(context, close_session=False)
                 except Exception as e:
                     logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
 
@@ -903,10 +919,10 @@ class Worker:
                 entry.status = result.status
 
             finally:
-                # 清理执行上下文
+                # 清理执行上下文（不关闭会话，保持资源复用）
                 if context is not None:
                     try:
-                        manager.close_context(context)
+                        manager.close_context(context, close_session=False)
                     except Exception as e:
                         logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
 
