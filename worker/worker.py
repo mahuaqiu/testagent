@@ -8,6 +8,7 @@ import base64
 import logging
 import threading
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -200,14 +201,14 @@ class Worker:
             try:
                 manager.stop()
             except Exception as e:
-                logger.error(f"Failed to stop {platform} platform: {e}")
+                logger.error(f"Failed to stop {platform} platform: {e}\n{traceback.format_exc()}")
 
         # 注销上报
         if self.reporter:
             try:
                 self.reporter.unregister()
             except Exception as e:
-                logger.warning(f"Failed to unregister: {e}")
+                logger.warning(f"Failed to unregister: {e}\n{traceback.format_exc()}")
             self.reporter.close()
 
         # 关闭 OCR 客户端
@@ -258,7 +259,7 @@ class Worker:
             )
             logger.info(f"OCR client initialized: {self.config.ocr_service}")
         except Exception as e:
-            logger.warning(f"Failed to initialize OCR client: {e}")
+            logger.warning(f"Failed to initialize OCR client: {e}\n{traceback.format_exc()}")
 
     def _init_platform_managers(self) -> None:
         """初始化平台管理器。"""
@@ -285,7 +286,7 @@ class Worker:
                 logger.info(f"Platform manager initialized: {platform}")
 
             except Exception as e:
-                logger.error(f"Failed to initialize {platform} platform: {e}")
+                logger.error(f"Failed to initialize {platform} platform: {e}\n{traceback.format_exc()}")
 
     def _init_reporter(self) -> None:
         """初始化上报客户端。"""
@@ -385,7 +386,7 @@ class Worker:
             try:
                 self._check_device_changes()
             except Exception as e:
-                logger.error(f"Device monitor error: {e}")
+                logger.error(f"Device monitor error: {e}\n{traceback.format_exc()}")
 
     def _check_device_changes(self) -> None:
         """检查设备变化。"""
@@ -613,7 +614,7 @@ class Worker:
                 try:
                     manager.close_context(context)
                 except Exception as e:
-                    logger.warning(f"Failed to close context: {e}")
+                    logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
 
             self.scheduler.release(platform, task.device_id)
 
@@ -679,7 +680,7 @@ class Worker:
                     screenshot_bytes = manager.get_screenshot(context)
                     error_screenshot = base64.b64encode(screenshot_bytes).decode("utf-8")
                 except Exception as e:
-                    logger.warning(f"Failed to get error screenshot: {e}")
+                    logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
 
                 return TaskResult(
                     task_id=task.task_id,
@@ -716,8 +717,6 @@ class Worker:
         platform: str,
         actions: List[Dict[str, Any]],
         device_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         同步执行任务（不生成 task_id）。
@@ -726,8 +725,6 @@ class Worker:
             platform: 目标平台
             actions: 动作列表
             device_id: 设备 ID
-            user_id: 用户 ID
-            config: 任务配置
 
         Returns:
             Dict: 执行结果（不含 task_id）
@@ -737,8 +734,6 @@ class Worker:
             platform=platform,
             actions=actions,
             device_id=device_id,
-            user_id=user_id,
-            config=config,
             generate_id=False,  # 不生成 task_id
         )
 
@@ -753,8 +748,6 @@ class Worker:
         platform: str,
         actions: List[Dict[str, Any]],
         device_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
     ) -> tuple:
         """
         异步执行任务（生成 task_id）。
@@ -763,8 +756,6 @@ class Worker:
             platform: 目标平台
             actions: 动作列表
             device_id: 设备 ID
-            user_id: 用户 ID
-            config: 任务配置
 
         Returns:
             Tuple[str, str]: (task_id, status)
@@ -785,8 +776,6 @@ class Worker:
             platform=platform,
             actions=actions,
             device_id=device_id,
-            user_id=user_id,
-            config=config,
             generate_id=True,
         )
 
@@ -888,12 +877,12 @@ class Worker:
                     try:
                         manager.close_context(context)
                     except Exception as e:
-                        logger.warning(f"Failed to close context: {e}")
+                        logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
 
                 self.scheduler.release(platform, task.device_id)
 
         except Exception as e:
-            logger.error(f"Async task error: task_id={task.task_id}, error={e}")
+            logger.error(f"Async task error: task_id={task.task_id}, error={e}\n{traceback.format_exc()}")
             entry.status = TaskStatus.FAILED
             entry.result = TaskResult(
                 task_id=task.task_id,
@@ -903,6 +892,8 @@ class Worker:
             )
 
         finally:
+            # 更新任务状态到 TaskStore
+            self.task_store.update_status(task.task_id, entry.status, entry.result)
             # 清理忙碌状态（任务已完成）
             self.task_store.clear_busy(platform, task.device_id)
             logger.info(

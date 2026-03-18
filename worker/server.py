@@ -25,10 +25,6 @@ class TaskRequest(BaseModel):
     platform: str = Field(..., description="目标平台: web/android/ios/windows/mac")
     actions: List[Dict[str, Any]] = Field(..., description="动作列表")
     device_id: Optional[str] = Field(None, description="设备 ID（移动端必填）")
-    user_id: Optional[str] = Field(None, description="用户标识")
-    config: Optional[Dict[str, Any]] = Field(None, description="任务配置")
-    callback_url: Optional[str] = Field(None, description="回调地址")
-    priority: int = Field(0, description="优先级")
 
 
 # FastAPI 应用
@@ -93,8 +89,6 @@ async def execute_task(request: TaskRequest):
         platform=request.platform,
         actions=request.actions,
         device_id=request.device_id,
-        user_id=request.user_id,
-        config=request.config,
     )
 
     # 记录任务结果
@@ -133,8 +127,6 @@ async def execute_task_async(request: TaskRequest):
             platform=request.platform,
             actions=request.actions,
             device_id=request.device_id,
-            user_id=request.user_id,
-            config=request.config,
         )
 
         return {"task_id": task_id, "status": status}

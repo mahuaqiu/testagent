@@ -16,7 +16,7 @@ external_services:
 platforms:
   web:
     enabled: null                   # 根据系统自动判断
-    headless: true                  # 无头模式
+    headless: false                  # 无头模式
     browser_type: chromium          # chromium / firefox / webkit
     timeout: 30000                  # 超时时间(ms)
     session_timeout: 300            # 会话超时(秒)
