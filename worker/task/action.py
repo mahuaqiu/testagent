@@ -18,6 +18,7 @@ class ActionType(Enum):
     OCR_WAIT = "ocr_wait"             # 等待文字出现
     OCR_INPUT = "ocr_input"           # 在文字附近输入
     OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
+    OCR_PASTE = "ocr_paste"           # OCR定位后粘贴
 
     # 图像匹配操作
     IMAGE_CLICK = "image_click"       # 点击匹配的图像
@@ -74,6 +75,11 @@ class Action:
     screenshot: bool = False                 # 是否截图
     wait: Optional[int] = None               # 等待时间(ms)
 
+    # 扩展参数
+    index: Optional[int] = None              # 选择第几个匹配结果（默认0）
+    time: Optional[int] = None               # 等待时间（秒），用于 ocr_wait/wait
+    text: Optional[str] = None               # 粘贴内容，用于 ocr_paste
+
     # 坐标操作
     x: Optional[int] = None                  # X 坐标
     y: Optional[int] = None                  # Y 坐标
@@ -109,6 +115,9 @@ class Action:
             bundle_id=data.get("bundle_id"),
             package_name=data.get("package_name"),
             permissions=data.get("permissions"),
+            index=data.get("index"),
+            time=data.get("time"),
+            text=data.get("text"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -147,5 +156,11 @@ class Action:
             result["bundle_id"] = self.bundle_id
         if self.package_name is not None:
             result["package_name"] = self.package_name
+        if self.index is not None:
+            result["index"] = self.index
+        if self.time is not None:
+            result["time"] = self.time
+        if self.text is not None:
+            result["text"] = self.text
 
         return result

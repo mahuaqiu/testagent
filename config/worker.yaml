@@ -6,6 +6,7 @@ worker:
   id: null                          # 自动生成，也可指定
   port: 8080                        # HTTP 服务端口
   device_check_interval: 60         # 设备检测间隔(秒)
+  action_step_delay: 0.5            # 动作间隔延迟(秒)，两个action之间没有wait时自动等待
 
 # 外部服务地址（必须配置）
 external_services:

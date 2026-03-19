@@ -29,7 +29,7 @@ class PlatformManager(ABC):
 
     # 通用动作列表（所有平台支持）
     BASE_SUPPORTED_ACTIONS: Set[str] = {
-        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
         "image_click", "image_wait", "image_assert",
         "click", "swipe", "input", "press", "screenshot", "wait"
     }
@@ -160,14 +160,15 @@ class PlatformManager(ABC):
 
     # ========== OCR/图像识别辅助方法 ==========
 
-    def _find_text_position(self, image_bytes: bytes, text: str, match_mode: str = "exact") -> Optional[tuple[int, int]]:
+    def _find_text_position(self, image_bytes: bytes, text: str, match_mode: str = "exact", index: int = 0) -> Optional[tuple[int, int]]:
         """
-        在图像中查找文字位置。
+        在图像中查找文字位置，支持 index 参数选择第几个匹配结果。
 
         Args:
             image_bytes: 图像数据
             text: 目标文字
             match_mode: 匹配模式
+            index: 选择第几个匹配结果（0=第一个，1=第二个，以此类推）
 
         Returns:
             tuple[int, int] | None: 文字中心坐标 (x, y)
@@ -176,9 +177,16 @@ class PlatformManager(ABC):
             logger.error("OCR client not available")
             return None
 
-        text_block = self.ocr_client.find_text(image_bytes, text, match_mode=match_mode)
-        if text_block:
-            return text_block.center
+        if index == 0:
+            # 使用原有的 find_text，只返回第一个结果
+            text_block = self.ocr_client.find_text(image_bytes, text, match_mode=match_mode)
+            if text_block:
+                return text_block.center
+        else:
+            # index > 0 时，获取所有匹配结果
+            all_texts = self.ocr_client.find_all_texts(image_bytes, text)
+            if all_texts and len(all_texts) > index:
+                return all_texts[index].center
         return None
 
     def _find_image_position(self, source_bytes: bytes, template_path: str, threshold: float = 0.8) -> Optional[tuple[int, int]]:

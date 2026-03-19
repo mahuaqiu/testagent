@@ -111,6 +111,8 @@ class WindowsPlatformManager(PlatformManager):
                 result = self._action_image_assert(action)
             elif action.action_type == "ocr_get_text":
                 result = self._action_ocr_get_text(action)
+            elif action.action_type == "ocr_paste":
+                result = self._action_ocr_paste(action)
             elif action.action_type == "start_app":
                 result = self._action_start_app(action)
             elif action.action_type == "stop_app":
@@ -208,14 +210,15 @@ class WindowsPlatformManager(PlatformManager):
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
 
-        # 查找文字位置
-        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        # 查找文字位置（支持 index 参数）
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode, index)
         if not position:
             return ActionResult(
                 index=0,
                 action_type="ocr_click",
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}",
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
 
         # 应用偏移
@@ -315,14 +318,15 @@ class WindowsPlatformManager(PlatformManager):
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
 
-        # 查找文字位置
-        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        # 查找文字位置（支持 index 参数）
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode, index)
         if not position:
             return ActionResult(
                 index=0,
                 action_type="ocr_input",
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}",
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
 
         # 应用偏移
@@ -439,18 +443,29 @@ class WindowsPlatformManager(PlatformManager):
 
     def _action_wait(self, action: Action) -> ActionResult:
         """固定等待。"""
-        wait_time = action.wait or int(action.value or 1000)
-        self._wait(wait_time)
+        # time 参数（秒）优先，其次是 wait（毫秒），最后是 value
+        if action.time is not None:
+            wait_time_sec = action.time
+            time.sleep(wait_time_sec)
+            wait_time_ms = wait_time_sec * 1000
+        else:
+            wait_time_ms = action.wait or int(action.value or 1000)
+            self._wait(wait_time_ms)
+            wait_time_sec = wait_time_ms / 1000
 
         return ActionResult(
             index=0,
             action_type="wait",
             status=ActionStatus.SUCCESS,
-            output=f"Waited {wait_time}ms",
+            output=f"Waited {wait_time_sec}s",
         )
 
     def _action_ocr_wait(self, action: Action) -> ActionResult:
         """等待文字出现。"""
+        # 如果有 time 参数，先等待指定秒数
+        if action.time:
+            time.sleep(action.time)
+
         start_time = time.time()
         timeout = action.timeout / 1000
 
@@ -523,7 +538,14 @@ class WindowsPlatformManager(PlatformManager):
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
 
-        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        # 处理正则匹配：以 "reg_" 开头时使用正则模式
+        match_mode = action.match_mode
+        target_value = action.value
+        if action.value and action.value.startswith("reg_"):
+            match_mode = "regex"
+            target_value = action.value[4:]  # 去掉 "reg_" 前缀
+
+        position = self._find_text_position(screenshot_bytes, target_value, match_mode)
 
         if position:
             return ActionResult(
@@ -594,4 +616,57 @@ class WindowsPlatformManager(PlatformManager):
             action_type="ocr_get_text",
             status=ActionStatus.SUCCESS,
             output=all_text,
+        )
+
+    def _action_ocr_paste(self, action: Action) -> ActionResult:
+        """OCR 定位后粘贴文本（Windows）。"""
+        if not action.text:
+            return ActionResult(
+                index=0,
+                action_type="ocr_paste",
+                status=ActionStatus.FAILED,
+                error="text is required for ocr_paste",
+            )
+
+        # 获取截图
+        screenshot = pyautogui.screenshot()
+
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        screenshot_bytes = buffer.getvalue()
+
+        # 查找文字位置（支持 index 参数）
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode, index)
+        if not position:
+            return ActionResult(
+                index=0,
+                action_type="ocr_paste",
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 记录 OCR 定位结果
+        logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
+
+        # 点击坐标
+        pyautogui.click(x, y)
+
+        # 使用剪贴板粘贴
+        import pyperclip
+        original_clipboard = pyperclip.paste()
+        try:
+            pyperclip.copy(action.text)
+            pyautogui.hotkey("ctrl", "v")
+        finally:
+            pyperclip.copy(original_clipboard)
+
+        return ActionResult(
+            index=0,
+            action_type="ocr_paste",
+            status=ActionStatus.SUCCESS,
+            output=f"Pasted at ({x}, {y})",
         )

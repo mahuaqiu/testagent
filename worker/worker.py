@@ -710,6 +710,14 @@ class Worker:
                 f"status={result.status}, duration={result.duration_ms}ms"
             )
 
+            # 全局动作间隔延迟：如果不是最后一个 action，且当前和下一个 action 都不是 wait，则等待
+            if i < len(task.actions) - 1:
+                current_is_wait = action.action_type == "wait"
+                next_action = task.actions[i + 1]
+                next_is_wait = next_action.action_type == "wait"
+                if not current_is_wait and not next_is_wait:
+                    time.sleep(self.config.action_step_delay)
+
             # 如果动作失败且未配置继续，停止执行
             if result.status != ActionStatus.SUCCESS and not task.metadata.get("continue_on_error"):
                 logger.warning(

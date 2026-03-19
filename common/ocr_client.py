@@ -121,7 +121,7 @@ class OCRClient:
         """
         image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        response = self._post("/ocr/recognize", {
+        response = self._post("/ocr/get_ocr_infos", {
             "image": image_base64,
             "lang": lang or self.lang,
             "filter_text": filter_text,
@@ -155,21 +155,41 @@ class OCRClient:
         Args:
             image_bytes: 图像字节数据。
             target_text: 目标文字。
-            match_mode: 匹配模式（exact/fuzzy/regex），服务端暂只支持 exact。
+            match_mode: 匹配模式（exact/fuzzy/regex），正则表达式以 "reg_" 开头。
             confidence_threshold: 置信度阈值。
 
         Returns:
             TextBlock | None: 找到的文字块，未找到返回 None。
         """
-        texts = self.recognize(
-            image_bytes,
-            filter_text=target_text if match_mode == "exact" else None,
-            confidence_threshold=confidence_threshold,
-        )
+        # 使用新的 /ocr/get_coord_by_text API 直接查找
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        if texts:
-            return texts[0]
-        return None
+        # 处理正则表达式模式
+        filter_text = target_text
+        if match_mode == "regex":
+            filter_text = f"reg_{target_text}"
+
+        response = self._post("/ocr/get_coord_by_text", {
+            "image": image_base64,
+            "filter_text": filter_text,
+            "confidence_threshold": confidence_threshold,
+        })
+
+        if response.get("status") != "success":
+            return None
+
+        texts = response.get("texts", [])
+        if not texts:
+            return None
+
+        t = texts[0]
+        return TextBlock(
+            text=t["text"],
+            confidence=t["confidence"],
+            bbox=t["bbox"],
+            center_x=t["center"]["x"],
+            center_y=t["center"]["y"],
+        )
 
     def find_all_texts(
         self,
@@ -193,6 +213,39 @@ class OCRClient:
             filter_text=target_text,
             confidence_threshold=confidence_threshold,
         )
+
+    def get_texts(
+        self,
+        image_bytes: bytes,
+        lang: Optional[str] = None,
+        separator: str = "\n",
+        confidence_threshold: float = 0.0,
+    ) -> str:
+        """
+        获取图片中的所有文本（拼接后的纯文本）。
+
+        Args:
+            image_bytes: 图像字节数据。
+            lang: 语言代码，默认使用客户端配置。
+            separator: 文本分隔符，默认换行。
+            confidence_threshold: 置信度阈值。
+
+        Returns:
+            str: 拼接后的文本字符串。
+        """
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = self._post("/ocr/get_ocr_texts", {
+            "image": image_base64,
+            "lang": lang or self.lang,
+            "separator": separator,
+            "confidence_threshold": confidence_threshold,
+        })
+
+        if response.get("status") != "success":
+            return ""
+
+        return response.get("text", "")
 
     def match_image(
         self,
@@ -265,6 +318,60 @@ class OCRClient:
         """
         matches = self.match_image(source_bytes, template_bytes, threshold, method)
         return matches[0] if matches else None
+
+    def match_near_text(
+        self,
+        image_bytes: bytes,
+        target_image_bytes: bytes,
+        filter_text: str,
+        max_distance: int = 500,
+        threshold: float = 0.8,
+        method: str = "template",
+    ) -> Optional[MatchResult]:
+        """
+        查找文本附近最近的图片。
+
+        在源图像中查找目标文字位置，然后查找距离文字最近的模板图像位置。
+
+        Args:
+            image_bytes: 源图像字节数据。
+            target_image_bytes: 模板图像字节数据。
+            filter_text: 目标文字（以 reg_ 开头表示正则表达式）。
+            max_distance: 最大搜索距离（像素）。
+            threshold: 匹配阈值。
+            method: 匹配方法（template/feature）。
+
+        Returns:
+            MatchResult | None: 匹配结果，未找到返回 None。
+        """
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        target_image_base64 = base64.b64encode(target_image_bytes).decode("utf-8")
+
+        response = self._post("/image/match_near_text", {
+            "image": image_base64,
+            "target_image": target_image_base64,
+            "filter_text": filter_text,
+            "max_distance": max_distance,
+            "confidence_threshold": threshold,
+            "method": method,
+        })
+
+        if response.get("status") != "success":
+            return None
+
+        match = response.get("match")
+        if not match:
+            return None
+
+        return MatchResult(
+            confidence=match["confidence"],
+            x=match["bbox"]["x"],
+            y=match["bbox"]["y"],
+            width=match["bbox"]["width"],
+            height=match["bbox"]["height"],
+            center_x=match["center"]["x"],
+            center_y=match["center"]["y"],
+        )
 
     def health_check(self) -> bool:
         """

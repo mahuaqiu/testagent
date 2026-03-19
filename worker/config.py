@@ -18,6 +18,7 @@ class WorkerConfig:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     port: int = 8080
     device_check_interval: int = 60
+    action_step_delay: float = 0.5  # 动作间隔延迟(秒)
 
     # 外部服务地址
     platform_api: str = ""
@@ -51,6 +52,7 @@ class WorkerConfig:
             id=worker_data.get("id") or str(uuid.uuid4())[:8],
             port=worker_data.get("port", 8080),
             device_check_interval=worker_data.get("device_check_interval", 60),
+            action_step_delay=worker_data.get("action_step_delay", 0.5),
             platform_api=external.get("platform_api", ""),
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,

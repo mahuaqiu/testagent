@@ -111,6 +111,8 @@ class MacPlatformManager(PlatformManager):
                 result = self._action_image_assert(action)
             elif action.action_type == "ocr_get_text":
                 result = self._action_ocr_get_text(action)
+            elif action.action_type == "ocr_paste":
+                result = self._action_ocr_paste(action)
             elif action.action_type == "start_app":
                 result = self._action_start_app(action)
             elif action.action_type == "stop_app":
@@ -212,14 +214,15 @@ class MacPlatformManager(PlatformManager):
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
 
-        # 查找文字位置
-        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        # 查找文字位置（支持 index 参数）
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode, index)
         if not position:
             return ActionResult(
                 index=0,
                 action_type="ocr_click",
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}",
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
 
         # 应用偏移
@@ -301,14 +304,15 @@ class MacPlatformManager(PlatformManager):
         screenshot.save(buffer, format="PNG")
         screenshot_bytes = buffer.getvalue()
 
-        # 查找文字位置
-        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode)
+        # 查找文字位置（支持 index 参数）
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(screenshot_bytes, action.value, action.match_mode, index)
         if not position:
             return ActionResult(
                 index=0,
                 action_type="ocr_input",
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}",
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
 
         # 应用偏移
