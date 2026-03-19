@@ -85,6 +85,7 @@ class Action:
     app_path: Optional[str] = None           # 应用路径
     bundle_id: Optional[str] = None          # iOS Bundle ID
     package_name: Optional[str] = None       # Android 包名
+    permissions: Optional[Any] = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Action":
@@ -107,6 +108,7 @@ class Action:
             app_path=data.get("app_path"),
             bundle_id=data.get("bundle_id"),
             package_name=data.get("package_name"),
+            permissions=data.get("permissions"),
         )
 
     def to_dict(self) -> Dict[str, Any]:

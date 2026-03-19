@@ -75,6 +75,8 @@ class WebPlatformManager(PlatformManager):
         self.headless = config.headless
         self.browser_type = config.browser_type
         self.timeout = config.timeout
+        self.ignore_https_errors = config.ignore_https_errors
+        self.permissions = config.permissions
 
     @property
     def platform(self) -> str:
@@ -107,9 +109,18 @@ class WebPlatformManager(PlatformManager):
         else:
             browser_launcher = self._playwright.chromium
 
+        # 构建浏览器启动参数
+        launch_args = []
+        if self.ignore_https_errors:
+            launch_args.extend([
+                "--ignore-certificate-errors",
+                "--allow-running-insecure-content",
+            ])
+
         self._browser = await browser_launcher.launch(
             headless=self.headless,
             timeout=self.timeout,
+            args=launch_args if launch_args else None,
         )
 
     def stop(self) -> None:
@@ -400,8 +411,25 @@ class WebPlatformManager(PlatformManager):
 
         if self._browser:
             try:
+                # 构建 context 选项
+                context_options = {}
+                if self.ignore_https_errors:
+                    context_options["ignore_https_errors"] = True
+
+                # 处理权限配置
+                action_permissions = action.permissions
+                if action_permissions == "false" or action_permissions is False:
+                    # 不添加任何权限
+                    pass
+                elif action_permissions is not None:
+                    # 使用动作参数指定的权限
+                    context_options["permissions"] = action_permissions
+                elif self.permissions:
+                    # 使用全局配置的权限
+                    context_options["permissions"] = self.permissions
+
                 # 创建新的上下文和页面
-                context = _run_async(self._browser.new_context())
+                context = _run_async(self._browser.new_context(**context_options))
                 new_page = _run_async(context.new_page())
                 new_page.set_default_timeout(self.timeout)
 

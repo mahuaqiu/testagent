@@ -5,7 +5,7 @@ Worker 配置管理模块。
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import yaml
 
@@ -78,6 +78,8 @@ class PlatformConfig:
     headless: bool = True
     browser_type: str = "chromium"
     timeout: int = 30000
+    ignore_https_errors: bool = True
+    permissions: List[str] = field(default_factory=lambda: ["camera", "microphone"])
 
     # 移动端专用
     appium_server: str = ""
@@ -92,6 +94,8 @@ class PlatformConfig:
             headless=data.get("headless", True),
             browser_type=data.get("browser_type", "chromium"),
             timeout=data.get("timeout", 30000),
+            ignore_https_errors=data.get("ignore_https_errors", True),
+            permissions=data.get("permissions", ["camera", "microphone"]),
             appium_server=data.get("appium_server", ""),
         )
 

@@ -21,6 +21,10 @@ platforms:
     timeout: 30000                  # 超时时间(ms)
     session_timeout: 300            # 会话超时(秒)
     screenshot_dir: data/screenshots
+    ignore_https_errors: true       # 忽略 HTTPS 证书错误
+    permissions:                    # 网页权限（摄像头、麦克风等）
+      - camera
+      - microphone
 
   android:
     enabled: null                   # 仅 Windows
