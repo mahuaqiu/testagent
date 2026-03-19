@@ -1,0 +1,612 @@
+openapi: 3.0.3
+info:
+  title: OCR Service API
+  description: 基于 PaddleOCR 的文字识别和 OpenCV 图像匹配 REST API 服务
+  version: 1.0.0
+  contact:
+    name: OCR Service
+
+servers:
+  - url: http://localhost:8081
+    description: 本地开发服务器
+
+tags:
+  - name: Health
+    description: 健康检查接口
+  - name: OCR
+    description: 文字识别接口
+  - name: Image
+    description: 图像匹配接口
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: 健康检查
+      description: 检查服务是否正常运行
+      operationId: health_check
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                version: "1.0.0"
+
+  /ocr/get_ocr_infos:
+    post:
+      tags:
+        - OCR
+      summary: 文字识别
+      description: 识别图片中的所有文字，返回文字内容和坐标
+      operationId: get_ocr_infos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OCRRequest'
+            example:
+              image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              lang: ch
+              confidence_threshold: 0.0
+              filter_text: null
+              preprocess_mode: auto
+              ocr_preset: default
+      responses:
+        '200':
+          description: 识别成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OCRResponse'
+              example:
+                status: success
+                texts:
+                  - text: "示例文本"
+                    confidence: 0.95
+                    bbox: [[10, 10], [100, 10], [100, 30], [10, 30]]
+                    center:
+                      x: 55
+                      y: 20
+                coords:
+                  - x: 55
+                    y: 20
+                duration_ms: 150
+
+  /ocr/get_coord_by_text:
+    post:
+      tags:
+        - OCR
+      summary: 查找指定文字
+      description: |
+        在图片中查找指定的文字，返回匹配的文字和坐标。
+        filter_text 支持格式：
+        - 普通文本：直接进行包含匹配
+        - 正则表达式：以 "reg_" 开头，如 "reg_雨[大中小]" 表示匹配 "雨大"、"雨中"、"雨小"
+      operationId: ocr_get_coord_by_text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OCRRequest'
+            example:
+              image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              filter_text: "目标文字"
+      responses:
+        '200':
+          description: 查找成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OCRResponse'
+              example:
+                status: success
+                texts:
+                  - text: "目标文字"
+                    confidence: 0.95
+                    bbox: [[10, 10], [100, 10], [100, 30], [10, 30]]
+                    center:
+                      x: 55
+                      y: 20
+                coords:
+                  - x: 55
+                    y: 20
+                duration_ms: 0
+
+  /ocr/get_ocr_texts:
+    post:
+      tags:
+        - OCR
+      summary: 获取图片中的所有文本
+      description: 识别图片中的所有文字，返回拼接后的纯文本字符串
+      operationId: ocr_text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OCRTextRequest'
+            example:
+              image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              lang: ch
+              separator: "\n"
+              confidence_threshold: 0.0
+              preprocess_mode: auto
+              ocr_preset: default
+      responses:
+        '200':
+          description: 识别成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OCRTextResponse'
+              example:
+                status: success
+                text: "第一行文字\n第二行文字"
+                duration_ms: 150
+
+  /image/match:
+    post:
+      tags:
+        - Image
+      summary: 图像匹配
+      description: 在源图像中查找模板图像的位置
+      operationId: image_match
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageMatchRequest'
+            example:
+              source_image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              template_image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              confidence_threshold: 0.8
+              method: template
+              multi_target: true
+      responses:
+        '200':
+          description: 匹配成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageMatchResponse'
+              example:
+                status: success
+                matches:
+                  - confidence: 0.95
+                    bbox:
+                      x: 100
+                      y: 100
+                      width: 50
+                      height: 50
+                    center:
+                      x: 125
+                      y: 125
+                coords:
+                  - x: 125
+                    y: 125
+                duration_ms: 50
+
+  /image/match_near_text:
+    post:
+      tags:
+        - Image
+      summary: 查找文本附近最近的图片
+      description: 在源图像中查找目标文字位置，然后查找距离文字最近的模板图像位置
+      operationId: image_match_near_text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextNearImageRequest'
+            example:
+              image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              target_image: "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              filter_text: "目标文字"
+              max_distance: 500
+              confidence_threshold: 0.8
+              method: template
+      responses:
+        '200':
+          description: 查找成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextNearImageResponse'
+              example:
+                status: success
+                text_position:
+                  x: 50
+                  y: 50
+                match:
+                  confidence: 0.95
+                  bbox:
+                    x: 100
+                    y: 100
+                    width: 50
+                    height: 50
+                  center:
+                    x: 125
+                    y: 125
+                coords:
+                  - x: 125
+                    y: 125
+                distance: 106
+                duration_ms: 200
+
+components:
+  schemas:
+    # 枚举类型
+    PreprocessMode:
+      type: string
+      enum:
+        - none
+        - auto
+        - screenshot
+        - mobile
+        - document
+        - low_quality
+      description: 预处理模式
+
+    OCRPreset:
+      type: string
+      enum:
+        - default
+        - screenshot
+        - mobile
+        - low_quality
+      description: OCR预设配置
+
+    # 通用模型
+    PointModel:
+      type: object
+      properties:
+        x:
+          type: integer
+          description: X坐标
+        y:
+          type: integer
+          description: Y坐标
+      required:
+        - x
+        - y
+
+    TextBlockModel:
+      type: object
+      properties:
+        text:
+          type: string
+          description: 识别到的文字
+        confidence:
+          type: number
+          format: float
+          description: 置信度
+        bbox:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+          description: 边界框坐标 [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+        center:
+          $ref: '#/components/schemas/PointModel'
+      required:
+        - text
+        - confidence
+        - bbox
+        - center
+
+    BoundingBoxModel:
+      type: object
+      properties:
+        x:
+          type: integer
+          description: 左上角X坐标
+        y:
+          type: integer
+          description: 左上角Y坐标
+        width:
+          type: integer
+          description: 宽度
+        height:
+          type: integer
+          description: 高度
+      required:
+        - x
+        - y
+        - width
+        - height
+
+    MatchItemModel:
+      type: object
+      properties:
+        confidence:
+          type: number
+          format: float
+          description: 匹配置信度
+        bbox:
+          $ref: '#/components/schemas/BoundingBoxModel'
+        center:
+          $ref: '#/components/schemas/PointModel'
+      required:
+        - confidence
+        - bbox
+        - center
+
+    # 请求模型
+    OCRRequest:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: string
+          description: Base64 编码的图像数据（可带 data:image 前缀）
+        lang:
+          type: string
+          default: ch
+          description: 语言代码，默认中文
+        filter_text:
+          type: string
+          nullable: true
+          description: 过滤关键词，只返回包含此文字的结果
+        confidence_threshold:
+          type: number
+          format: float
+          default: 0.0
+          minimum: 0.0
+          maximum: 1.0
+          description: 置信度阈值
+        preprocess_mode:
+          $ref: '#/components/schemas/PreprocessMode'
+        ocr_preset:
+          $ref: '#/components/schemas/OCRPreset'
+        text_det_thresh:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0.0
+          maximum: 1.0
+          description: 文本检测阈值
+        text_det_box_thresh:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0.0
+          maximum: 1.0
+          description: 文本框置信度阈值
+        text_det_unclip_ratio:
+          type: number
+          format: float
+          nullable: true
+          minimum: 1.0
+          maximum: 3.0
+          description: 文本框扩展比例
+        text_rec_score_thresh:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0.0
+          maximum: 1.0
+          description: 低置信度过滤阈值
+
+    OCRTextRequest:
+      type: object
+      required:
+        - image
+      properties:
+        image:
+          type: string
+          description: Base64 编码的图像数据
+        lang:
+          type: string
+          default: ch
+          description: 语言代码，默认中文
+        separator:
+          type: string
+          default: "\n"
+          description: 文本分隔符
+        confidence_threshold:
+          type: number
+          format: float
+          default: 0.0
+          minimum: 0.0
+          maximum: 1.0
+          description: 置信度阈值
+        preprocess_mode:
+          $ref: '#/components/schemas/PreprocessMode'
+        ocr_preset:
+          $ref: '#/components/schemas/OCRPreset'
+
+    ImageMatchRequest:
+      type: object
+      required:
+        - source_image
+        - template_image
+      properties:
+        source_image:
+          type: string
+          description: 源图像（大图）Base64 编码
+        template_image:
+          type: string
+          description: 模板图像（小图）Base64 编码
+        confidence_threshold:
+          type: number
+          format: float
+          default: 0.8
+          minimum: 0.0
+          maximum: 1.0
+          description: 匹配阈值
+        method:
+          type: string
+          default: template
+          enum:
+            - template
+            - feature
+          description: 匹配方法：template(精确) / feature(特征)
+        multi_target:
+          type: boolean
+          default: true
+          description: 是否多目标匹配
+
+    TextNearImageRequest:
+      type: object
+      required:
+        - image
+        - target_image
+        - filter_text
+      properties:
+        image:
+          type: string
+          description: 源图像（大图）Base64 编码
+        target_image:
+          type: string
+          description: 模板图像（小图）Base64 编码
+        filter_text:
+          type: string
+          description: 目标文字（以 reg_ 开头表示正则表达式）
+        max_distance:
+          type: integer
+          default: 500
+          minimum: 0
+          description: 最大搜索距离（像素）
+        confidence_threshold:
+          type: number
+          format: float
+          default: 0.8
+          minimum: 0.0
+          maximum: 1.0
+          description: 匹配阈值
+        method:
+          type: string
+          default: template
+          enum:
+            - template
+            - feature
+          description: 匹配方法：template(精确) / feature(特征)
+
+    # 响应模型
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: 服务状态
+        version:
+          type: string
+          description: 服务版本
+      required:
+        - status
+        - version
+
+    OCRResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: 状态
+        texts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextBlockModel'
+          description: 识别到的文字块列表
+        coords:
+          type: array
+          items:
+            $ref: '#/components/schemas/PointModel'
+          description: 简洁的坐标数组
+        duration_ms:
+          type: integer
+          description: 处理耗时（毫秒）
+        error:
+          type: string
+          nullable: true
+          description: 错误信息
+      required:
+        - status
+
+    OCRTextResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: 状态
+        text:
+          type: string
+          description: 拼接后的文本字符串
+        duration_ms:
+          type: integer
+          description: 处理耗时（毫秒）
+        error:
+          type: string
+          nullable: true
+          description: 错误信息
+      required:
+        - status
+
+    ImageMatchResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: 状态
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchItemModel'
+          description: 匹配结果列表
+        coords:
+          type: array
+          items:
+            $ref: '#/components/schemas/PointModel'
+          description: 简洁的坐标数组
+        duration_ms:
+          type: integer
+          description: 处理耗时（毫秒）
+        error:
+          type: string
+          nullable: true
+          description: 错误信息
+      required:
+        - status
+
+    TextNearImageResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: 状态
+        text_position:
+          $ref: '#/components/schemas/PointModel'
+          nullable: true
+          description: 文字位置
+        match:
+          $ref: '#/components/schemas/MatchItemModel'
+          nullable: true
+          description: 最近的匹配图片
+        coords:
+          type: array
+          items:
+            $ref: '#/components/schemas/PointModel'
+          description: 简洁的坐标数组
+        distance:
+          type: integer
+          nullable: true
+          description: 距离（像素）
+        duration_ms:
+          type: integer
+          description: 处理耗时（毫秒）
+        error:
+          type: string
+          nullable: true
+          description: 错误信息
+      required:
+        - status
