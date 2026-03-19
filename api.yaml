@@ -16,10 +16,10 @@ servers:
         default: "8080"
 
 paths:
-  /status:
+  /worker_devices:
     get:
-      summary: "获取 Worker 状态"
-      description: "获取 Worker 详细状态信息"
+      summary: "获取 Worker 状态和设备信息"
+      description: "获取 Worker 状态及所有连接设备信息"
       responses:
         "200":
           description: "成功"
@@ -30,27 +30,17 @@ paths:
                 status: "running"
                 started_at: "2026-03-14T10:00:00.000000"
                 supported_platforms: ["web", "windows", "android", "ios"]
-                devices_count: 3
-        "503":
-          description: "Worker 未初始化"
-
-  /devices:
-    get:
-      summary: "获取设备列表"
-      description: "获取当前连接的所有设备信息"
-      responses:
-        "200":
-          description: "成功"
-          content:
-            application/json:
-              example:
-                ip: "192.168.1.100"
-                port: 8080
                 devices:
                   web: []
                   windows: []
-                  android: ["emulator-5554"]
-                  ios: ["00008030-001234567890ABCD"]
+                  android:
+                    - id: "emulator-5554"
+                      status: "idle"
+                  ios:
+                    - id: "00008030-001234567890ABCD"
+                      status: "idle"
+        "503":
+          description: "Worker 未初始化"
 
   /task/execute:
     post:
@@ -190,11 +180,19 @@ paths:
           content:
             application/json:
               example:
-                ip: "192.168.1.100"
-                port: 8080
+                worker_id: "worker_abc123"
+                status: "running"
                 devices:
                   web: []
-                  android: ["emulator-5554"]
+                  windows: []
+                  android:
+                    - id: "emulator-5554"
+                      status: "idle"
+                  ios:
+                    - id: "00008030-001234567890ABCD"
+                      status: "idle"
+        "503":
+          description: "Worker 未初始化"
 
 components:
   schemas:
@@ -254,6 +252,7 @@ components:
         action_type:
           type: string
           enum:
+            # 通用动作（所有平台支持）
             - ocr_click
             - ocr_input
             - ocr_wait
@@ -268,16 +267,17 @@ components:
             - press
             - screenshot
             - wait
+            - start_app
+            - stop_app
+            # Web 特有
             - navigate
-            - launch_app
-            - close_app
           description: "动作类型"
         value:
           type: string
-          description: "文字/URL/按键值"
-        image_path:
+          description: "动作核心值（文字、图像路径、URL、坐标、等待毫秒数等）"
+        text:
           type: string
-          description: "图像模板路径"
+          description: "输入的文本内容（ocr_input、input 必填）"
         offset:
           type: object
           properties:
@@ -285,45 +285,43 @@ components:
               type: integer
             y:
               type: integer
-          description: "点击偏移"
+          description: "相对于识别结果的偏移量"
         threshold:
           type: number
           default: 0.8
           description: "图像匹配阈值"
         timeout:
           type: integer
-          default: 30000
+          default: 5000
           description: "超时时间(ms)"
-        match_mode:
-          type: string
-          enum: [exact, fuzzy, contains, regex]
-          default: exact
-          description: "OCR 匹配模式"
         x:
           type: integer
-          description: "X 坐标"
+          description: "X 坐标（click、input 必填）"
         y:
           type: integer
-          description: "Y 坐标"
-        end_x:
+          description: "Y 坐标（click、input 必填）"
+        from:
+          type: object
+          properties:
+            x:
+              type: integer
+            y:
+              type: integer
+          description: "滑动起始坐标（swipe 必填）"
+        to:
+          type: object
+          properties:
+            x:
+              type: integer
+            y:
+              type: integer
+          description: "滑动结束坐标（swipe 必填）"
+        duration:
           type: integer
-          description: "终点 X 坐标（滑动）"
-        end_y:
-          type: integer
-          description: "终点 Y 坐标（滑动）"
-        direction:
+          description: "滑动持续时间(ms)"
+        key:
           type: string
-          enum: [up, down, left, right]
-          description: "滑动方向"
-        app_path:
-          type: string
-          description: "应用路径"
-        bundle_id:
-          type: string
-          description: "iOS Bundle ID"
-        package_name:
-          type: string
-          description: "Android 包名"
+          description: "按键名称（press 必填），如 Enter、Escape、ArrowDown 等"
 
     TaskResult:
       type: object
