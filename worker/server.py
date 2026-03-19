@@ -124,22 +124,13 @@ def set_worker(w: Worker) -> None:
 # ========== API 端点 ==========
 
 
-@app.get("/status")
-async def get_status():
-    """获取 Worker 状态。"""
+@app.get("/worker_devices")
+async def get_worker_devices():
+    """获取 Worker 状态和设备信息（合并接口）。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    return worker.get_status()
-
-
-@app.get("/devices")
-async def get_devices():
-    """获取设备信息。"""
-    if not worker:
-        raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    return worker.get_devices()
+    return worker.get_worker_devices()
 
 
 @app.post("/task/execute")

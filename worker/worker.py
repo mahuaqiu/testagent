@@ -37,11 +37,9 @@ logger = logging.getLogger(__name__)
 class WorkerStatus:
     """Worker 状态。"""
 
-    worker_id: str
     status: str  # online / busy / offline
     started_at: datetime
     supported_platforms: List[str]
-    devices_count: int
 
 
 class TaskScheduler:
@@ -437,19 +435,54 @@ class Worker:
 
     def get_status(self) -> WorkerStatus:
         """获取 Worker 状态。"""
-        devices_count = len(self.android_devices) + len(self.ios_devices)
-
         return WorkerStatus(
-            worker_id=self.worker_id,
             status=self._status,
             started_at=self._started_at or datetime.now(),
             supported_platforms=self.supported_platforms,
-            devices_count=devices_count,
         )
+
+    def get_worker_devices(self) -> Dict[str, Any]:
+        """
+        获取 Worker 状态和设备信息（合并接口）。
+
+        Returns:
+            Dict: 包含 status, started_at, supported_platforms, ip, port, devices 的字典
+        """
+        devices: Dict[str, List[str]] = {}
+
+        # 1. 根据操作系统添加桌面平台
+        if self.host_info:
+            if self.host_info.os_type == "windows":
+                devices["windows"] = []
+                devices["web"] = []
+            elif self.host_info.os_type == "macos":
+                devices["mac"] = []
+
+        # 2. Android 设备（返回设备标识列表）
+        if self.android_devices:
+            devices["android"] = [d.udid for d in self.android_devices]
+
+        # 3. iOS 设备（返回 UDID 列表）
+        if self.ios_devices:
+            devices["ios"] = [d.udid for d in self.ios_devices]
+
+        # 4. 获取本机 IP
+        ip = "unknown"
+        if self.host_info and self.host_info.ip_addresses:
+            ip = self.host_info.ip_addresses[0]
+
+        return {
+            "status": self._status,
+            "started_at": self._started_at or datetime.now(),
+            "supported_platforms": self.supported_platforms,
+            "ip": ip,
+            "port": self.port,
+            "devices": devices,
+        }
 
     def get_devices(self) -> Dict[str, Any]:
         """
-        获取设备信息（新格式）。
+        获取设备信息（已废弃，请使用 get_worker_devices）。
 
         Returns:
             Dict: 包含 ip, port, devices 的字典

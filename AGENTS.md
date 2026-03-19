@@ -81,8 +81,7 @@ autotest/
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/status` | GET | Worker 完整状态信息（含设备列表、支持平台等） |
-| `/devices` | GET | 获取设备信息 |
+| `/worker_devices` | GET | Worker 状态和设备信息 |
 | `/task/execute` | POST | 同步执行任务（不返回 task_id） |
 | `/task/execute_async` | POST | 异步执行任务（返回 task_id） |
 | `/task/{task_id}` | GET | 查询任务结果（一次性，查询后销毁） |
@@ -101,45 +100,41 @@ autotest/
 
 ### 通用动作（所有平台支持）
 
-| 类型 | 说明 |
-|------|------|
-| `ocr_click` | 点击识别到的文字 |
-| `ocr_input` | 在文字附近输入 |
-| `ocr_wait` | 等待文字出现 |
-| `ocr_assert` | 断言文字存在 |
-| `ocr_get_text` | 获取屏幕文字 |
-| `image_click` | 点击匹配的图像 |
-| `image_wait` | 等待图像出现 |
-| `image_assert` | 断言图像存在 |
-| `click` | 坐标点击 |
-| `swipe` | 滑动 |
-| `input` | 坐标输入 |
-| `press` | 按键 |
-| `screenshot` | 截图 |
-| `wait` | 固定等待 |
+| 类型 | 说明 | 传参示例 |
+|------|------|----------|
+| `ocr_click` | 点击识别到的文字 | `{"action_type": "ocr_click", "value": "登录", "offset": {"x": 0, "y": 0}, "timeout": 5000}` |
+| `ocr_input` | 在文字附近输入 | `{"action_type": "ocr_input", "value": "用户名", "text": "admin", "offset": {"x": 100, "y": 0}}` |
+| `ocr_wait` | 等待文字出现 | `{"action_type": "ocr_wait", "value": "确认", "timeout": 10000}` |
+| `ocr_assert` | 断言文字存在 | `{"action_type": "ocr_assert", "value": "成功", "timeout": 5000}` |
+| `ocr_get_text` | 获取屏幕文字 | `{"action_type": "ocr_get_text", "value": ""}` |
+| `image_click` | 点击匹配的图像 | `{"action_type": "image_click", "value": "button.png", "threshold": 0.8}` |
+| `image_wait` | 等待图像出现 | `{"action_type": "image_wait", "value": "icon.png", "timeout": 10000}` |
+| `image_assert` | 断言图像存在 | `{"action_type": "image_assert", "value": "logo.png", "threshold": 0.8}` |
+| `click` | 坐标点击 | `{"action_type": "click", "x": 500, "y": 300}` |
+| `swipe` | 滑动 | `{"action_type": "swipe", "from": {"x": 500, "y": 1000}, "to": {"x": 500, "y": 500}, "duration": 500}` |
+| `input` | 坐标输入 | `{"action_type": "input", "x": 500, "y": 300, "text": "hello"}` |
+| `press` | 按键 | `{"action_type": "press", "key": "Enter"}` |
+| `screenshot` | 截图 | `{"action_type": "screenshot", "value": "result"}` |
+| `wait` | 固定等待 | `{"action_type": "wait", "value": 1000}` |
+| `start_app` | 启动应用/浏览器 | `{"action_type": "start_app", "value": "chromium"}` (Web) 或 `{"action_type": "start_app", "value": "com.example.app"}` (Android/iOS) |
+| `stop_app` | 关闭应用/浏览器 | `{"action_type": "stop_app"}` 或 `{"action_type": "stop_app", "value": "com.example.app"}` |
 
-### 平台特有动作
+**参数说明：**
+- `value`: 动作核心值（文字、图像路径、等待毫秒数、坐标等），**必填**
+- `offset`: 相对于识别结果的偏移量 `{"x": 横向偏移, "y": 纵向偏移}`，**可选**
+- `timeout`: 超时时间（毫秒），默认 5000，**可选**
+- `threshold`: 图像匹配阈值，默认 0.8，**可选**
+- `text`: 输入的文本内容，**必填**（用于 ocr_input、input）
+- `x`, `y`: 坐标位置，**必填**（用于 click、input）
+- `from`, `to`: 滑动起始和结束坐标，**必填**（用于 swipe）
+- `duration`: 滑动持续时间（毫秒），**可选**
+- `key`: 按键名称（如 Enter, Escape、ArrowDown 等），**必填**（用于 press）
 
-| 类型 | 支持平台 | 说明 |
-|------|----------|------|
-| `navigate` | Web | 跳转 URL |
-| `start_app` | Web, Android, iOS, Windows, Mac | 启动应用/浏览器 |
-| `stop_app` | Web, Android, iOS, Windows, Mac | 关闭应用/浏览器 |
+### Web 特有动作
 
-**start_app / stop_app 使用示例：**
-```json
-// Web 浏览器
-{"action_type": "start_app", "value": "chromium"}
-{"action_type": "stop_app"}
-
-// Android/iOS 应用
-{"action_type": "start_app", "value": "com.example.app"}
-{"action_type": "stop_app", "value": "com.example.app"}
-
-// Windows/Mac 应用程序（使用完整路径或进程名）
-{"action_type": "start_app", "value": "C:\\path\\to\\app.exe"}
-{"action_type": "stop_app", "value": "app.exe"}
-```
+| 类型 | 说明 | 传参示例 |
+|------|------|----------|
+| `navigate` | 跳转 URL | `{"action_type": "navigate", "value": "https://example.com"}` |
 
 ## 任务并发策略
 
@@ -230,21 +225,6 @@ platforms:
   "actions": [
     {"action_type": "navigate", "value": "https://example.com"},
     {"action_type": "ocr_click", "value": "登录"},
-    {"action_type": "ocr_input", "value": "用户名", "offset": {"x": 100, "y": 0}},
-    {"action_type": "screenshot", "value": "result"}
-  ]
-}
-```
-
-### Android 设备请求示例
-
-```json
-{
-  "platform": "android",
-  "device_id": "device_udid_here",
-  "actions": [
-    {"action_type": "launch_app", "package_name": "com.example.app"},
-    {"action_type": "ocr_click", "value": "登录"},
     {"action_type": "screenshot", "value": "result"}
   ]
 }
@@ -252,11 +232,8 @@ platforms:
 
 ## 任务结果示例
 
-### 同步执行结果（`/task/execute`）
+### 成功结果
 
-同步执行不返回 task_id，直接返回执行结果：
-
-**成功结果：**
 ```json
 {
   "status": "success",
@@ -269,7 +246,8 @@ platforms:
 }
 ```
 
-**失败结果（含截图）：**
+### 失败结果（含截图）
+
 ```json
 {
   "status": "failed",
@@ -283,9 +261,8 @@ platforms:
 }
 ```
 
-### 异步执行结果（`/task/execute_async`）
+### 异步任务立即返回
 
-**立即返回：**
 ```json
 {
   "task_id": "task_20260317_120000_abc123",
@@ -293,24 +270,8 @@ platforms:
 }
 ```
 
-**冲突返回（409）：**
-```json
-{
-  "detail": "Device/Platform is busy"
-}
-```
+### 异步任务查询
 
-### 任务查询结果（`/task/{task_id}` GET）
-
-**执行中：**
-```json
-{
-  "task_id": "task_20260317_120000_abc123",
-  "status": "running"
-}
-```
-
-**执行完成（查询后销毁）：**
 ```json
 {
   "task_id": "task_20260317_120000_abc123",
@@ -318,23 +279,6 @@ platforms:
   "platform": "web",
   "duration_ms": 1500,
   "actions": [...]
-}
-```
-
-**任务不存在（404）：**
-```json
-{
-  "detail": "Task not found"
-}
-```
-
-### 任务取消结果（`/task/{task_id}` DELETE）
-
-**取消成功：**
-```json
-{
-  "success": true,
-  "message": "Task cancelled"
 }
 ```
 
