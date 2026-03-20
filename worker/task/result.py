@@ -40,6 +40,7 @@ class ActionResult:
     output: Optional[str] = None
     error: Optional[str] = None
     screenshot: Optional[str] = None  # base64 或文件路径
+    context: Any = None  # 执行后更新的 context（如 start_app 后返回新 page）
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
@@ -52,6 +53,7 @@ class ActionResult:
             output=data.get("output"),
             error=data.get("error"),
             screenshot=data.get("screenshot"),
+            context=data.get("context"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -68,6 +70,7 @@ class ActionResult:
             result["error"] = self.error
         if self.screenshot is not None:
             result["screenshot"] = self.screenshot
+        # context 不需要序列化到结果中
         return result
 
 

@@ -584,12 +584,33 @@ class Worker:
         检查任务是否需要创建 context。
 
         stop_app 动作不需要 context。
+        start_app 动作会自己创建 context，不需要预先创建。
         """
         if not task.actions:
             return True
-        # 如果所有动作都是不需要 context 的，则跳过
-        no_context_actions = {"stop_app"}
-        return not all(a.action_type in no_context_actions for a in task.actions)
+        # 如果任务只有 stop_app，则不需要 context
+        stop_app_only = all(a.action_type == "stop_app" for a in task.actions)
+        if stop_app_only:
+            return False
+        # 如果任务包含 start_app，不预先创建 context（由 start_app 自己创建）
+        has_start_app = any(a.action_type == "start_app" for a in task.actions)
+        if has_start_app:
+            return False
+        return True
+
+    def _needs_auto_start(self, task: Task) -> bool:
+        """
+        检查是否需要在执行任务前自动启动平台。
+
+        如果任务包含 start_app 动作，则不需要自动启动，让用户自己控制。
+        """
+        if not task.actions:
+            return True
+        # 如果任务包含 start_app，则不需要自动启动
+        for action in task.actions:
+            if action.action_type == "start_app":
+                return False
+        return True
 
     def execute_task(self, task: Task) -> TaskResult:
         """
@@ -623,7 +644,9 @@ class Worker:
             return validation_result
 
         # 启动平台（如果未启动）
-        if not manager.is_available():
+        # 如果任务包含 start_app，则不自动启动，由 start_app 自己控制
+        needs_auto_start = self._needs_auto_start(task)
+        if needs_auto_start and not manager.is_available():
             try:
                 manager.start()
             except Exception as e:
@@ -736,6 +759,11 @@ class Worker:
             result = manager.execute_action(context, action)
             result.index = i
             actions_results.append(result)
+
+            # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
+            if result.context is not None:
+                context = result.context
+                logger.debug(f"Context updated after action {i}: {action.action_type}")
 
             # 记录动作执行结果
             logger.debug(

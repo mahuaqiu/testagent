@@ -314,6 +314,14 @@ class WebPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
+        # start_app 不需要预先存在的 context（会自己创建新的 page）
+        # 放在检查 context 之前处理
+        if action.action_type == "start_app":
+            result = self._action_start_app(context, action)
+            duration_ms = int((time.time() - start_time) * 1000)
+            result.duration_ms = duration_ms
+            return result
+
         page: Page = context
         if not page:
             return ActionResult(
@@ -325,9 +333,7 @@ class WebPlatformManager(PlatformManager):
 
         try:
             # 其他动作需要 page context
-            if action.action_type == "start_app":
-                result = self._action_start_app(page, action)
-            elif action.action_type == "navigate":
+            if action.action_type == "navigate":
                 result = self._action_navigate(page, action)
             elif action.action_type == "ocr_click":
                 result = self._action_ocr_click(page, action)
@@ -401,17 +407,32 @@ class WebPlatformManager(PlatformManager):
         """启动/新建浏览器页面（实际上是通过新建 Page 来实现）。"""
         browser_name = action.value or self.browser_type
 
-        # 如果已有会话，先关闭旧页面再创建新页面（不关闭浏览器）
+        # 如果已有活跃会话，直接复用，返回成功
         if self.has_active_session():
-            logger.info("Closing existing page before starting new one")
-            old_session = self._sessions.get("default")
-            if old_session:
-                old_page = old_session.get("page")
-                if old_page:
-                    try:
-                        _run_async(self._async_close_page(old_page))
-                    except Exception as e:
-                        logger.warning(f"Failed to close old page: {e}")
+            existing_page = self.get_session_context()
+            if existing_page:
+                logger.info(f"Reusing existing browser session for start_app")
+                return ActionResult(
+                    index=0,
+                    action_type="start_app",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Reused existing page for browser: {browser_name}",
+                    context=existing_page,
+                )
+
+        # 如果浏览器未启动，先启动浏览器
+        if not self._browser:
+            try:
+                _run_async(self._async_start())
+                self._started = True
+                logger.info(f"Browser started via start_app: {browser_name}")
+            except Exception as e:
+                return ActionResult(
+                    index=0,
+                    action_type="start_app",
+                    status=ActionStatus.FAILED,
+                    error=f"Failed to start browser: {e}",
+                )
 
         if self._browser:
             try:
@@ -444,17 +465,12 @@ class WebPlatformManager(PlatformManager):
                     "page": new_page,
                 }
 
-                # 更新 contexts 存储新的 page（兼容旧逻辑）
-                for cid, p in list(self._contexts.items()):
-                    if p == page:
-                        self._contexts[cid] = new_page
-                        break
-
                 return ActionResult(
                     index=0,
                     action_type="start_app",
                     status=ActionStatus.SUCCESS,
                     output=f"Started new page for browser: {browser_name}",
+                    context=new_page,  # 返回新的 page 作为更新后的 context
                 )
             except Exception as e:
                 return ActionResult(
