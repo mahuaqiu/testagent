@@ -82,7 +82,7 @@ class OCRClient:
         self,
         base_url: str,
         timeout: int = 30000,
-        retry: int = 2,
+        retry: int = 1,
         lang: str = "ch",
     ):
         """
@@ -98,7 +98,7 @@ class OCRClient:
         self.timeout = timeout / 1000  # 转换为秒
         self.retry = retry
         self.lang = lang
-        self._client = httpx.Client(timeout=self.timeout)
+        self._client = httpx.Client(timeout=self.timeout, trust_env=True)
 
     def recognize(
         self,

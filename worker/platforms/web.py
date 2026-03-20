@@ -642,8 +642,8 @@ class WebPlatformManager(PlatformManager):
         _run_async(page.mouse.click(x, y))
 
         # 输入文本
-        if action.value:
-            _run_async(page.keyboard.type(action.value))
+        if action.text:
+            _run_async(page.keyboard.type(action.text))
 
         return ActionResult(
             index=0,
@@ -666,8 +666,8 @@ class WebPlatformManager(PlatformManager):
         _run_async(page.mouse.click(action.x, action.y))
 
         # 输入
-        if action.value:
-            _run_async(page.keyboard.type(action.value))
+        if action.text:
+            _run_async(page.keyboard.type(action.text))
 
         return ActionResult(
             index=0,
