@@ -1,13 +1,14 @@
 """
 iOS 设备发现模块。
 
-通过 libimobiledevice (idevice_id, ideviceinfo) 发现连接到本机的 iOS 设备。
+使用 tidevice3 发现 iOS 设备。
 """
 
-import re
-import subprocess
+import logging
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # iOS 设备型号映射
@@ -24,14 +25,28 @@ IOS_DEVICE_MODELS = {
     "iPhone16,2": "iPhone 15 Pro Max",
     "iPhone16,3": "iPhone 15",
     "iPhone16,4": "iPhone 15 Plus",
-    # 更多型号可根据需要添加
+}
+
+# 设备分辨率映射
+IOS_RESOLUTION_MAP = {
+    "iPhone14,2": "1170x2532",
+    "iPhone14,3": "1284x2778",
+    "iPhone14,4": "1080x2340",
+    "iPhone14,5": "1170x2532",
+    "iPhone15,2": "1179x2556",
+    "iPhone15,3": "1290x2796",
+    "iPhone15,4": "1170x2532",
+    "iPhone15,5": "1284x2778",
+    "iPhone16,1": "1179x2556",
+    "iPhone16,2": "1290x2796",
+    "iPhone16,3": "1170x2532",
+    "iPhone16,4": "1284x2778",
 }
 
 
 @dataclass
 class iOSDeviceInfo:
     """iOS 设备信息。"""
-
     udid: str
     name: str
     model: str
@@ -39,7 +54,7 @@ class iOSDeviceInfo:
     os_version: str
     build_version: str
     resolution: str
-    status: str  # online / offline
+    status: str
 
     def to_dict(self) -> Dict:
         """转换为字典。"""
@@ -60,82 +75,32 @@ class iOSDiscoverer:
     """iOS 设备发现器。"""
 
     @staticmethod
-    def check_libimobiledevice_available() -> bool:
-        """检查 libimobiledevice 是否可用。"""
+    def check_tidevice_available() -> bool:
+        """检查 tidevice 是否可用。"""
         try:
-            result = subprocess.run(
-                ["idevice_id", "-h"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+            import tidevice
             return True
-        except FileNotFoundError:
+        except ImportError:
             return False
-        except Exception:
-            return True  # 可能返回非0但命令存在
 
     @staticmethod
     def list_devices() -> List[str]:
-        """
-        获取已连接的设备 UDID 列表。
-
-        Returns:
-            List[str]: 设备 UDID 列表
-        """
+        """获取设备 UDID 列表。"""
         try:
-            result = subprocess.run(
-                ["idevice_id", "-l"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            devices = []
-            for line in result.stdout.strip().split("\n"):
-                line = line.strip()
-                if line and len(line) == 40:  # UDID 长度为 40
-                    devices.append(line)
-
-            return devices
-        except Exception:
+            import tidevice
+            return tidevice.usb_device_list()
+        except Exception as e:
+            logger.error(f"Failed to list iOS devices: {e}")
             return []
 
     @staticmethod
-    def get_device_property(udid: str, key: str) -> str:
-        """
-        获取设备属性。
-
-        Args:
-            udid: 设备 UDID
-            key: 属性名称
-
-        Returns:
-            str: 属性值
-        """
-        try:
-            result = subprocess.run(
-                ["ideviceinfo", "-u", udid, "-k", key],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
+    def get_resolution_by_model(product_type: str) -> str:
+        """根据设备型号推断分辨率。"""
+        return IOS_RESOLUTION_MAP.get(product_type, "Unknown")
 
     @staticmethod
     def get_device_info(udid: str, status: str = "online") -> Optional[iOSDeviceInfo]:
-        """
-        获取设备详细信息。
-
-        Args:
-            udid: 设备 UDID
-            status: 设备状态
-
-        Returns:
-            iOSDeviceInfo | None: 设备信息
-        """
+        """获取设备详细信息。"""
         if status == "offline":
             return iOSDeviceInfo(
                 udid=udid,
@@ -149,108 +114,47 @@ class iOSDiscoverer:
             )
 
         try:
-            # 获取设备属性
-            name = iOSDiscoverer.get_device_property(udid, "DeviceName")
-            product_type = iOSDiscoverer.get_device_property(udid, "ProductType")
-            os_version = iOSDiscoverer.get_device_property(udid, "ProductVersion")
-            build_version = iOSDiscoverer.get_device_property(udid, "BuildVersion")
-
-            # 解析设备型号
-            model = IOS_DEVICE_MODELS.get(product_type, product_type)
-
-            # 获取分辨率（需要根据设备型号推断）
-            resolution = iOSDiscoverer.get_resolution_by_model(product_type)
+            import tidevice
+            d = tidevice.Device(udid)
+            product_type = d.product_type or "Unknown"
 
             return iOSDeviceInfo(
                 udid=udid,
-                name=name or "Unknown",
-                model=model,
+                name=d.name or "Unknown",
+                model=IOS_DEVICE_MODELS.get(product_type, product_type),
                 product_type=product_type,
-                os_version=os_version or "Unknown",
-                build_version=build_version or "Unknown",
-                resolution=resolution,
+                os_version=d.product_version or "Unknown",
+                build_version=d.build_version or "Unknown",
+                resolution=iOSDiscoverer.get_resolution_by_model(product_type),
                 status="online",
             )
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to get device info for {udid}: {e}")
             return None
-
-    @staticmethod
-    def get_resolution_by_model(product_type: str) -> str:
-        """
-        根据设备型号推断分辨率。
-
-        Args:
-            product_type: 设备型号
-
-        Returns:
-            str: 分辨率字符串
-        """
-        # 常见设备分辨率映射
-        resolution_map = {
-            "iPhone14,2": "1170x2532",  # iPhone 13 Pro
-            "iPhone14,3": "1284x2778",  # iPhone 13 Pro Max
-            "iPhone14,4": "1080x2340",  # iPhone 13 mini
-            "iPhone14,5": "1170x2532",  # iPhone 13
-            "iPhone15,2": "1179x2556",  # iPhone 14 Pro
-            "iPhone15,3": "1290x2796",  # iPhone 14 Pro Max
-            "iPhone15,4": "1170x2532",  # iPhone 14
-            "iPhone15,5": "1284x2778",  # iPhone 14 Plus
-            "iPhone16,1": "1179x2556",  # iPhone 15 Pro
-            "iPhone16,2": "1290x2796",  # iPhone 15 Pro Max
-            "iPhone16,3": "1170x2532",  # iPhone 15
-            "iPhone16,4": "1284x2778",  # iPhone 15 Plus
-        }
-
-        return resolution_map.get(product_type, "Unknown")
 
     @classmethod
     def discover(cls) -> List[iOSDeviceInfo]:
-        """
-        发现所有 iOS 设备。
-
-        Returns:
-            List[iOSDeviceInfo]: 设备信息列表
-        """
-        if not cls.check_libimobiledevice_available():
+        """发现所有 iOS 设备。"""
+        if not cls.check_tidevice_available():
+            logger.warning("tidevice not available, skipping iOS discovery")
             return []
 
         devices = []
-        udid_list = cls.list_devices()
-
-        for udid in udid_list:
+        for udid in cls.list_devices():
             info = cls.get_device_info(udid)
             if info:
                 devices.append(info)
-
         return devices
 
     @classmethod
     def discover_device(cls, udid: str) -> Optional[iOSDeviceInfo]:
-        """
-        发现指定设备。
-
-        Args:
-            udid: 设备 UDID
-
-        Returns:
-            iOSDeviceInfo | None: 设备信息
-        """
+        """发现指定设备。"""
         all_udids = cls.list_devices()
-
         if udid in all_udids:
             return cls.get_device_info(udid)
-
         return None
 
     @classmethod
     def check_device_connected(cls, udid: str) -> bool:
-        """
-        检查指定设备是否连接。
-
-        Args:
-            udid: 设备 UDID
-
-        Returns:
-            bool: 设备是否连接
-        """
+        """检查指定设备是否连接。"""
         return udid in cls.list_devices()
