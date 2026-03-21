@@ -273,3 +273,13 @@ class AndroidDiscoverer:
                 return cls.get_device_info(udid, status)
 
         return None
+
+    @staticmethod
+    def check_u2_service(udid: str) -> bool:
+        """检查 uiautomator2 服务是否可用。"""
+        try:
+            import uiautomator2 as u2
+            device = u2.connect(udid)
+            return device.ping()
+        except Exception:
+            return False
