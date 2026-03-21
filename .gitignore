@@ -9,3 +9,4 @@ package-lock.json
 /venv/Include
 /venv
 worker.log
+*.lock
