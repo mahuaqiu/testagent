@@ -200,6 +200,39 @@ class PlatformManager(ABC):
         """
         pass
 
+    # ========== 设备服务管理（移动端平台实现） ==========
+
+    def ensure_device_service(self, udid: str) -> tuple[str, str]:
+        """
+        确保设备服务可用。
+
+        Args:
+            udid: 设备 UDID
+
+        Returns:
+            tuple[str, str]: (status, message) - status 为 "online" 或 "faulty"
+        """
+        # 默认实现：非移动端平台始终返回 online
+        return ("online", "OK")
+
+    def mark_device_faulty(self, udid: str) -> None:
+        """
+        标记设备为异常。
+
+        Args:
+            udid: 设备 UDID
+        """
+        pass
+
+    def get_online_devices(self) -> list[str]:
+        """
+        获取在线设备 UDID 列表。
+
+        Returns:
+            list[str]: 在线设备 UDID 列表
+        """
+        return []
+
     def get_supported_actions(self) -> Set[str]:
         """
         获取支持的动作列表。
