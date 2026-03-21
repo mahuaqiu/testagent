@@ -17,7 +17,9 @@ class WorkerConfig:
     # Worker 基础配置
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     port: int = 8080
-    device_check_interval: int = 60
+    device_check_interval: int = 300      # 设备检测间隔(秒)，改为5分钟
+    service_retry_count: int = 3          # 服务启动重试次数
+    service_retry_interval: int = 10      # 重试间隔(秒)
     action_step_delay: float = 0.5  # 动作间隔延迟(秒)
 
     # 外部服务地址
@@ -51,7 +53,9 @@ class WorkerConfig:
         return cls(
             id=worker_data.get("id") or str(uuid.uuid4())[:8],
             port=worker_data.get("port", 8080),
-            device_check_interval=worker_data.get("device_check_interval", 60),
+            device_check_interval=worker_data.get("device_check_interval", 300),
+            service_retry_count=worker_data.get("service_retry_count", 3),
+            service_retry_interval=worker_data.get("service_retry_interval", 10),
             action_step_delay=worker_data.get("action_step_delay", 0.5),
             platform_api=external.get("platform_api", ""),
             ocr_service=external.get("ocr_service", ""),
@@ -83,8 +87,12 @@ class PlatformConfig:
     ignore_https_errors: bool = True
     permissions: List[str] = field(default_factory=lambda: ["camera", "microphone"])
 
-    # 移动端专用
-    appium_server: str = ""
+    # iOS 专用
+    wda_base_port: int = 8100
+    wda_ipa_path: str = "wda/WebDriverAgent.ipa"
+
+    # Android 专用
+    u2_port: int = 7912
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PlatformConfig":
@@ -98,7 +106,9 @@ class PlatformConfig:
             timeout=data.get("timeout", 30000),
             ignore_https_errors=data.get("ignore_https_errors", True),
             permissions=data.get("permissions", ["camera", "microphone"]),
-            appium_server=data.get("appium_server", ""),
+            wda_base_port=data.get("wda_base_port", 8100),
+            wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
+            u2_port=data.get("u2_port", 7912),
         )
 
 
