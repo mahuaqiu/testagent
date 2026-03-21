@@ -137,6 +137,69 @@ class PlatformManager(ABC):
         """
         pass
 
+    # ========== 平台基础能力接口 ==========
+
+    @abstractmethod
+    def click(self, x: int, y: int, context: Any = None) -> None:
+        """
+        点击指定坐标。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            context: 执行上下文（可选）
+        """
+        pass
+
+    @abstractmethod
+    def input_text(self, text: str, context: Any = None) -> None:
+        """
+        输入文本。
+
+        Args:
+            text: 要输入的文本
+            context: 执行上下文（可选）
+        """
+        pass
+
+    @abstractmethod
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+        """
+        滑动/拖拽。
+
+        Args:
+            start_x: 起始 X 坐标
+            start_y: 起始 Y 坐标
+            end_x: 结束 X 坐标
+            end_y: 结束 Y 坐标
+            context: 执行上下文（可选）
+        """
+        pass
+
+    @abstractmethod
+    def press(self, key: str, context: Any = None) -> None:
+        """
+        按键。
+
+        Args:
+            key: 按键名称
+            context: 执行上下文（可选）
+        """
+        pass
+
+    @abstractmethod
+    def take_screenshot(self, context: Any = None) -> bytes:
+        """
+        获取截图（基础能力接口）。
+
+        Args:
+            context: 执行上下文（可选）
+
+        Returns:
+            bytes: 截图数据
+        """
+        pass
+
     def get_supported_actions(self) -> Set[str]:
         """
         获取支持的动作列表。

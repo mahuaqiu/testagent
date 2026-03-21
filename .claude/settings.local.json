@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(python -m py_compile worker/actions/__init__.py worker/actions/base.py worker/actions/registry.py worker/actions/ocr.py worker/actions/image.py worker/actions/coordinate.py worker/platforms/base.py worker/platforms/web.py worker/platforms/android.py worker/platforms/ios.py worker/platforms/windows.py worker/platforms/mac.py)"
+    ]
+  }
+}
