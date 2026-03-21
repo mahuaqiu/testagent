@@ -8,7 +8,7 @@
 - **OCR/图像识别定位**：所有平台统一使用 OCR 和图像识别定位，不依赖传统元素选择器
 - **设备自动发现**：启动时自动发现本机设备和环境
 - **平台上报**：支持向配置平台上报 Worker 状态和设备信息
-- **设备热插拔监控**：定时检测移动设备连接变化（60秒）
+- **设备服务管理**：自动启动和维护设备服务（WDA/uiautomator2），支持异常设备自动恢复
 - **并发执行**：支持多设备并行执行任务
 - **失败自动截图**：任务执行失败时自动返回设备截图
 
@@ -24,7 +24,8 @@
 - 语言: Python 3.10+
 - HTTP 服务: FastAPI + Uvicorn
 - Web 自动化: Playwright
-- 移动端自动化: Appium (UiAutomator2 / XCUITest)
+- Android 自动化: uiautomator2 直连
+- iOS 自动化: tidevice3 + WDA 直连
 - 桌面自动化: pyautogui
 - OCR 服务: 外部 HTTP 服务
 
@@ -37,11 +38,12 @@ autotest/
 │   ├── server.py              # HTTP Server (FastAPI)
 │   ├── worker.py              # 主服务（设备发现、任务调度）
 │   ├── config.py              # 配置管理
+│   ├── device_monitor.py      # 设备监控模块（新增）
 │   │
 │   ├── discovery/             # 设备发现模块
 │   │   ├── host.py            # 宿主机发现
-│   │   ├── android.py         # Android 设备发现 (ADB)
-│   │   └── ios.py             # iOS 设备发现 (libimobiledevice)
+│   │   ├── android.py         # Android 设备发现 (ADB + uiautomator2)
+│   │   └── ios.py             # iOS 设备发现 (tidevice3)
 │   │
 │   ├── reporter/              # 平台上报模块
 │   │   ├── client.py          # HTTP 上报客户端
@@ -50,8 +52,9 @@ autotest/
 │   ├── platforms/             # 平台执行引擎
 │   │   ├── base.py            # 平台基类
 │   │   ├── web.py             # Web 平台 (Playwright + OCR)
-│   │   ├── android.py         # Android 平台 (Appium + OCR)
-│   │   ├── ios.py             # iOS 平台 (Appium + OCR)
+│   │   ├── android.py         # Android 平台 (uiautomator2 直连 + OCR)
+│   │   ├── ios.py             # iOS 平台 (tidevice3 + WDA + OCR)
+│   │   ├── wda_client.py      # WDA HTTP 客户端（新增）
 │   │   ├── windows.py         # Windows 桌面 (pyautogui + OCR)
 │   │   └── mac.py             # Mac 桌面 (pyautogui + OCR)
 │   │
@@ -60,6 +63,9 @@ autotest/
 │       ├── action.py          # 动作定义（OCR/图像识别驱动）
 │       ├── result.py          # 结果模型
 │       └── store.py           # 内存任务存储（异步任务管理）
+│
+├── wda/                        # WDA 安装包（新增）
+│   └── WebDriverAgent.ipa     # WDA 应用（需用户提供）
 │
 ├── common/                     # 公共库
 │   ├── config.py              # 配置管理
@@ -199,7 +205,9 @@ python -m worker.main
 worker:
   id: null                          # 自动生成
   port: 8080
-  device_check_interval: 60
+  device_check_interval: 300        # 设备检测间隔（秒），默认 5 分钟
+  service_retry_count: 3            # 服务启动重试次数
+  service_retry_interval: 10        # 重试间隔（秒）
 
 external_services:
   platform_api: ""                  # 配置平台 API
@@ -211,10 +219,11 @@ platforms:
     browser_type: chromium
 
   android:
-    appium_server: "http://127.0.0.1:4723"
+    wda_base_port: 7912             # uiautomator2 端口
 
   ios:
-    appium_server: "http://127.0.0.1:4724"
+    wda_base_port: 8100             # WDA 基础端口
+    wda_ipa_path: wda/WebDriverAgent.ipa  # WDA 安装包路径
 ```
 
 ## 任务请求示例
@@ -286,5 +295,7 @@ platforms:
 
 1. **OCR 服务独立部署**：本工程通过 HTTP 调用外部 OCR 服务，不包含 OCR 实现代码
 2. **测试用例分离**：测试用例写在其他工程，本工程只作为执行基建
-3. **设备监控**：移动设备热插拔检测间隔为 60 秒
-4. **无状态设计**：Worker 不维护会话状态，每次任务独立执行
+3. **设备监控**：移动设备检测间隔为 300 秒（5 分钟），支持设备服务自动启动和异常恢复
+4. **直连模式**：Android 使用 uiautomator2 直连，iOS 使用 tidevice3 + WDA 直连，无需外部 Appium Server
+5. **WDA 安装包**：iOS 自动化需要提供 `wda/WebDriverAgent.ipa` 文件
+6. **无状态设计**：Worker 不维护会话状态，每次任务独立执行

@@ -38,8 +38,9 @@ powershell scripts/build_windows.ps1
 
 1. **Worker** (`worker/worker.py`) - 主服务，管理设备发现、平台管理器初始化、任务调度
 2. **Server** (`worker/server.py`) - FastAPI HTTP 服务，接收任务请求
-3. **PlatformManager** (`worker/platforms/base.py`) - 平台抽象基类，定义统一接口
-4. **OCRClient** (`common/ocr_client.py`) - OCR 服务客户端，被所有平台共享
+3. **DeviceMonitor** (`worker/device_monitor.py`) - 独立设备监控模块，管理设备服务状态
+4. **PlatformManager** (`worker/platforms/base.py`) - 平台抽象基类，定义统一接口
+5. **OCRClient** (`common/ocr_client.py`) - OCR 服务客户端，被所有平台共享
 
 ### 平台管理器模式
 
@@ -51,6 +52,9 @@ PlatformManager (抽象基类)
 ├── create_context() / close_context() - 执行上下文管理
 ├── execute_action() - 执行动作（核心方法）
 ├── get_screenshot() - 获取截图
+├── ensure_device_service() - 确保设备服务可用（移动端）
+├── mark_device_faulty() - 标记设备异常（移动端）
+├── get_online_devices() - 获取在线设备列表（移动端）
 └── BASE_SUPPORTED_ACTIONS - 通用动作集（ocr_click, image_click 等）
 ```
 
@@ -66,7 +70,8 @@ PlatformManager (抽象基类)
 所有配置从 `config/worker.yaml` 加载，包括：
 - OCR 服务地址（必须配置）
 - 平台 API 地址
-- 平台特定参数（browser_type, appium_server 等）
+- 设备监控间隔（默认 300 秒）
+- 平台特定参数（browser_type, wda_base_port, wda_ipa_path 等）
 
 ## 平台支持策略
 
@@ -109,5 +114,6 @@ PlatformManager (抽象基类)
 
 - **OCR 服务独立部署**：本工程通过 HTTP 调用外部 OCR 服务
 - **测试用例分离**：本工程只作为执行基建，不包含测试用例
-- **设备监控**：移动设备热插拔检测间隔 60 秒
+- **设备监控**：移动设备检测间隔 300 秒（5 分钟），支持设备服务自动启动和恢复
+- **直连模式**：Android 使用 uiautomator2 直连，iOS 使用 tidevice3 + WDA 直连，无需 Appium Server
 - **无状态设计**：Worker 不维护会话状态，每次任务独立执行
