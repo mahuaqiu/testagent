@@ -27,6 +27,7 @@ from worker.platforms.windows import WindowsPlatformManager
 from worker.platforms.mac import MacPlatformManager
 from worker.task import Task, TaskResult, TaskStatus, ActionResult, ActionStatus
 from worker.task.store import TaskStore, TaskEntry
+from worker.device_monitor import DeviceMonitor
 
 from common.ocr_client import OCRClient, get_ocr_client
 
@@ -136,6 +137,8 @@ class Worker:
 
         # 平台管理器
         self.platform_managers: Dict[str, PlatformManager] = {}
+        self.android_manager: Optional[AndroidPlatformManager] = None
+        self.ios_manager: Optional[iOSPlatformManager] = None
 
         # 任务调度器
         self.scheduler = TaskScheduler()
@@ -152,6 +155,9 @@ class Worker:
         # 后台线程
         self._device_monitor_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+
+        # 设备监控
+        self.device_monitor: Optional[DeviceMonitor] = None
 
     @property
     def status(self) -> str:
@@ -181,7 +187,8 @@ class Worker:
         self._report_devices()
 
         # 6. 启动设备监控
-        self._start_device_monitor()
+        if self.device_monitor:
+            self.device_monitor.start()
 
         self._status = "online"
         self._started = True
@@ -197,7 +204,8 @@ class Worker:
         logger.info(f"Stopping Worker {self.worker_id}...")
 
         # 停止设备监控
-        self._stop_device_monitor()
+        if self.device_monitor:
+            self.device_monitor.stop()
 
         # 停止平台管理器
         for platform, manager in self.platform_managers.items():
@@ -276,8 +284,10 @@ class Worker:
                     manager = WebPlatformManager(platform_config, self.ocr_client)
                 elif platform == "android":
                     manager = AndroidPlatformManager(platform_config, self.ocr_client)
+                    self.android_manager = manager
                 elif platform == "ios":
                     manager = iOSPlatformManager(platform_config, self.ocr_client)
+                    self.ios_manager = manager
                 elif platform == "windows":
                     manager = WindowsPlatformManager(platform_config, self.ocr_client)
                 elif platform == "mac":
@@ -290,6 +300,15 @@ class Worker:
 
             except Exception as e:
                 logger.error(f"Failed to initialize {platform} platform: {e}\n{traceback.format_exc()}")
+
+        # 初始化设备监控
+        if self.android_manager or self.ios_manager:
+            self.device_monitor = DeviceMonitor(self.config)
+            self.device_monitor.set_platform_managers(
+                android_manager=self.android_manager,
+                ios_manager=self.ios_manager
+            )
+            self.device_monitor.on_device_change = self._on_device_change
 
     def _init_reporter(self) -> None:
         """初始化上报客户端。"""
@@ -357,17 +376,10 @@ class Worker:
         self.reporter.report_devices(data)
 
     def _start_device_monitor(self) -> None:
-        """启动设备监控线程。"""
-        if self.host_info and self.host_info.os_type != "windows":
-            return  # 仅 Windows 需要监控移动设备
-
-        self._stop_event.clear()
-        self._device_monitor_thread = threading.Thread(
-            target=self._device_monitor_loop,
-            daemon=True,
-        )
-        self._device_monitor_thread.start()
-        logger.info("Device monitor started")
+        """启动设备监控（已由 DeviceMonitor 模块接管）。"""
+        # 设备监控已由 DeviceMonitor 模块接管
+        # 此方法保留用于兼容，实际初始化在 _init_platform_managers 中完成
+        pass
 
     def _stop_device_monitor(self) -> None:
         """停止设备监控线程。"""
@@ -377,19 +389,9 @@ class Worker:
         logger.info("Device monitor stopped")
 
     def _device_monitor_loop(self) -> None:
-        """设备监控循环。"""
-        interval = self.config.device_check_interval
-
-        while not self._stop_event.is_set():
-            self._stop_event.wait(interval)
-
-            if self._stop_event.is_set():
-                break
-
-            try:
-                self._check_device_changes()
-            except Exception as e:
-                logger.error(f"Device monitor error: {e}\n{traceback.format_exc()}")
+        """设备监控循环（已由 DeviceMonitor 模块接管）。"""
+        # 设备监控已由 DeviceMonitor 模块接管
+        pass
 
     def _check_device_changes(self) -> None:
         """检查设备变化。"""
@@ -431,6 +433,10 @@ class Worker:
 
         return changes
 
+    def _on_device_change(self, devices: Dict) -> None:
+        """设备状态变更回调。"""
+        logger.info(f"Device status changed: {devices}")
+
     # ========== API 方法 ==========
 
     def get_status(self) -> WorkerStatus:
@@ -442,42 +448,26 @@ class Worker:
         )
 
     def get_worker_devices(self) -> Dict[str, Any]:
-        """
-        获取 Worker 状态和设备信息（合并接口）。
-
-        Returns:
-            Dict: 包含 status, started_at, supported_platforms, ip, port, devices 的字典
-        """
-        devices: Dict[str, List[str]] = {}
-
-        # 1. 根据操作系统添加桌面平台
-        if self.host_info:
-            if self.host_info.os_type == "windows":
-                devices["windows"] = []
-                devices["web"] = []
-            elif self.host_info.os_type == "macos":
-                devices["mac"] = []
-
-        # 2. Android 设备（返回设备标识列表）
-        if self.android_devices:
-            devices["android"] = [d.udid for d in self.android_devices]
-
-        # 3. iOS 设备（返回 UDID 列表）
-        if self.ios_devices:
-            devices["ios"] = [d.udid for d in self.ios_devices]
-
-        # 4. 获取本机 IP
-        ip = "unknown"
-        if self.host_info and self.host_info.ip_addresses:
-            ip = self.host_info.ip_addresses[0]
+        """获取 Worker 状态和设备信息。"""
+        devices = self.device_monitor.get_all_devices() if self.device_monitor else {}
 
         return {
             "status": self._status,
-            "started_at": self._started_at or datetime.now(),
+            "started_at": self._started_at,
             "supported_platforms": self.supported_platforms,
-            "ip": ip,
+            "ip": self.host_info.ip_addresses[0] if self.host_info else "unknown",
             "port": self.port,
-            "devices": devices,
+            "devices": {
+                "windows": [],
+                "web": [],
+                "mac": [],
+                "android": devices.get("android", []),
+                "ios": devices.get("ios", []),
+            },
+            "faulty_devices": {
+                "android": devices.get("faulty_android", []),
+                "ios": devices.get("faulty_ios", []),
+            },
         }
 
     def get_devices(self) -> Dict[str, Any]:
