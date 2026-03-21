@@ -5,7 +5,9 @@
 worker:
   id: null                          # 自动生成，也可指定
   port: 8080                        # HTTP 服务端口
-  device_check_interval: 60         # 设备检测间隔(秒)
+  device_check_interval: 300        # 设备检测间隔(秒)，5分钟
+  service_retry_count: 3            # 服务启动重试次数
+  service_retry_interval: 10        # 重试间隔(秒)
   action_step_delay: 0.5            # 动作间隔延迟(秒)，两个action之间没有wait时自动等待
 
 # 外部服务地址（必须配置）
@@ -29,13 +31,14 @@ platforms:
 
   android:
     enabled: null                   # 仅 Windows
-    appium_server: ""               # Appium Server 地址（如：http://192.168.1.100:4723）
+    u2_port: 7912                   # uiautomator2 端口
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   ios:
     enabled: null                   # 仅 Windows
-    appium_server: ""               # Appium Server 地址（如：http://192.168.1.100:4724）
+    wda_base_port: 8100             # WDA 基础端口
+    wda_ipa_path: wda/WebDriverAgent.ipa
     session_timeout: 300
     screenshot_dir: data/screenshots
 
