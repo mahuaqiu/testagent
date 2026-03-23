@@ -9,8 +9,6 @@ import subprocess
 import time
 from typing import Any, Dict, Optional, Set
 
-import tidevice
-
 from worker.platforms.base import PlatformManager
 from worker.platforms.wda_client import WDAClient
 from worker.task import Action, ActionResult, ActionStatus
@@ -49,10 +47,11 @@ class iOSPlatformManager(PlatformManager):
             return
 
         try:
-            devices = tidevice.usb_device_list()
-            logger.info(f"tidevice available, found {len(devices)} devices")
+            from tidevice3.api import list_devices
+            devices = list_devices()
+            logger.info(f"tidevice3 available, found {len(devices)} devices")
         except Exception as e:
-            logger.warning(f"tidevice check failed: {e}")
+            logger.warning(f"tidevice3 check failed: {e}")
 
         self._started = True
         logger.info("iOS platform started (tidevice3 + WDA mode)")
@@ -116,20 +115,19 @@ class iOSPlatformManager(PlatformManager):
     def _start_wda(self, udid: str) -> tuple[str, str]:
         """启动 WDA 服务。"""
         try:
-            device = tidevice.Device(udid)
-
             if udid in self._device_wda:
                 self._stop_wda(udid)
 
             port = self._allocate_port()
 
+            # t3 runwda 命令格式
             process = subprocess.Popen(
                 [
-                    "tidevice",
+                    "t3",
                     "-u", udid,
-                    "xctest",
-                    "-B", self.WDA_BUNDLE_ID,
-                    "--port", str(port)
+                    "runwda",
+                    "--bundle-id", self.WDA_BUNDLE_ID,
+                    "--dst-port", str(port)
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
@@ -319,12 +317,13 @@ class iOSPlatformManager(PlatformManager):
 
         if client and self._current_device:
             try:
+                # t3 app launch 命令格式
                 subprocess.run(
-                    ["tidevice", "-u", self._current_device, "launch", bundle_id],
+                    ["t3", "-u", self._current_device, "app", "launch", bundle_id],
                     check=True, timeout=30
                 )
             except Exception as e:
-                logger.warning(f"Failed to launch app via tidevice: {e}")
+                logger.warning(f"Failed to launch app via t3: {e}")
 
         return ActionResult(
             index=0,

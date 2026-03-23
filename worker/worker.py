@@ -256,7 +256,7 @@ class Worker:
             logger.warning("ADB not available, skipping Android device discovery")
 
         # iOS 设备
-        if iOSDiscoverer.check_libimobiledevice_available():
+        if iOSDiscoverer.check_tidevice_available():
             self.ios_devices = iOSDiscoverer.discover()
             logger.info(f"Found {len(self.ios_devices)} iOS devices")
         else:
@@ -404,7 +404,7 @@ class Worker:
             self.android_devices = new_devices
 
         # 检查 iOS 设备
-        if iOSDiscoverer.check_libimobiledevice_available():
+        if iOSDiscoverer.check_tidevice_available():
             new_devices = iOSDiscoverer.discover()
             changes.extend(self._compare_devices("ios", self.ios_devices, new_devices))
             self.ios_devices = new_devices

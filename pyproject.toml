@@ -14,7 +14,7 @@ dependencies = [
 
     # 移动端平台
     "uiautomator2>=3.0",
-    "tidevice>=3.0",
+    "tidevice3",
 
     # 桌面平台 (Windows/Mac)
     "pyautogui>=0.9.54",

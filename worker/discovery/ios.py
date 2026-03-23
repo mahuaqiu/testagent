@@ -76,9 +76,9 @@ class iOSDiscoverer:
 
     @staticmethod
     def check_tidevice_available() -> bool:
-        """检查 tidevice 是否可用。"""
+        """检查 tidevice3 是否可用。"""
         try:
-            import tidevice
+            from tidevice3 import api
             return True
         except ImportError:
             return False
@@ -87,8 +87,9 @@ class iOSDiscoverer:
     def list_devices() -> List[str]:
         """获取设备 UDID 列表。"""
         try:
-            import tidevice
-            return tidevice.usb_device_list()
+            from tidevice3.api import list_devices
+            devices = list_devices()
+            return [d.Identifier for d in devices]
         except Exception as e:
             logger.error(f"Failed to list iOS devices: {e}")
             return []
@@ -114,20 +115,22 @@ class iOSDiscoverer:
             )
 
         try:
-            import tidevice
-            d = tidevice.Device(udid)
-            product_type = d.product_type or "Unknown"
-
-            return iOSDeviceInfo(
-                udid=udid,
-                name=d.name or "Unknown",
-                model=IOS_DEVICE_MODELS.get(product_type, product_type),
-                product_type=product_type,
-                os_version=d.product_version or "Unknown",
-                build_version=d.build_version or "Unknown",
-                resolution=iOSDiscoverer.get_resolution_by_model(product_type),
-                status="online",
-            )
+            from tidevice3.api import list_devices
+            devices = list_devices()
+            for d in devices:
+                if d.Identifier == udid:
+                    product_type = d.ProductType or "Unknown"
+                    return iOSDeviceInfo(
+                        udid=udid,
+                        name=d.DeviceName or "Unknown",
+                        model=IOS_DEVICE_MODELS.get(product_type, product_type),
+                        product_type=product_type,
+                        os_version=d.ProductVersion or "Unknown",
+                        build_version=d.BuildVersion or "Unknown",
+                        resolution=iOSDiscoverer.get_resolution_by_model(product_type),
+                        status="online",
+                    )
+            return None
         except Exception as e:
             logger.error(f"Failed to get device info for {udid}: {e}")
             return None
@@ -136,23 +139,33 @@ class iOSDiscoverer:
     def discover(cls) -> List[iOSDeviceInfo]:
         """发现所有 iOS 设备。"""
         if not cls.check_tidevice_available():
-            logger.warning("tidevice not available, skipping iOS discovery")
+            logger.warning("tidevice3 not available, skipping iOS discovery")
             return []
 
-        devices = []
-        for udid in cls.list_devices():
-            info = cls.get_device_info(udid)
-            if info:
-                devices.append(info)
-        return devices
+        try:
+            from tidevice3.api import list_devices
+            devices = []
+            for d in list_devices():
+                product_type = d.ProductType or "Unknown"
+                devices.append(iOSDeviceInfo(
+                    udid=d.Identifier,
+                    name=d.DeviceName or "Unknown",
+                    model=IOS_DEVICE_MODELS.get(product_type, product_type),
+                    product_type=product_type,
+                    os_version=d.ProductVersion or "Unknown",
+                    build_version=d.BuildVersion or "Unknown",
+                    resolution=cls.get_resolution_by_model(product_type),
+                    status="online",
+                ))
+            return devices
+        except Exception as e:
+            logger.error(f"Failed to discover iOS devices: {e}")
+            return []
 
     @classmethod
     def discover_device(cls, udid: str) -> Optional[iOSDeviceInfo]:
         """发现指定设备。"""
-        all_udids = cls.list_devices()
-        if udid in all_udids:
-            return cls.get_device_info(udid)
-        return None
+        return cls.get_device_info(udid)
 
     @classmethod
     def check_device_connected(cls, udid: str) -> bool:
