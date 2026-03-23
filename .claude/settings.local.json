@@ -7,7 +7,24 @@
       "Bash(git commit:*)",
       "Bash(ruff check:*)",
       "Bash(python:*)",
-      "Bash(black:*)"
+      "Bash(black:*)",
+      "WebSearch",
+      "WebFetch(domain:pypi.org)",
+      "Bash(pip show:*)",
+      "Bash(findstr Home)",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"import tidevice3; print\\(dir\\(tidevice3\\)\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3 import usbmux; print\\(dir\\(usbmux\\)\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/t3.exe list:*)",
+      "Bash(D:/code/autotest/venv/Scripts/t3.exe runwda:*)",
+      "Bash(D:/code/autotest/venv/Scripts/t3.exe app:*)",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"import tidevice3; import pkgutil; print\\([m.name for m in pkgutil.iter_modules\\(tidevice3.__path__\\)]\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/t3.exe -u dummy info --help)",
+      "Bash(D:/code/autotest/venv/Scripts/t3.exe info:*)",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3 import api; print\\([x for x in dir\\(api\\) if not x.startswith\\('_'\\)]\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import list_devices, DeviceInfo, connect_service_provider; help\\(list_devices\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import DeviceInfo; help\\(DeviceInfo\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import DeviceShortInfo; help\\(DeviceShortInfo\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import connect_service_provider; help\\(connect_service_provider\\)\")"
     ]
   }
 }
