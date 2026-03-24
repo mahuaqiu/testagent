@@ -25,6 +25,7 @@ Usage:
 """
 
 import base64
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -32,6 +33,8 @@ from typing import Optional
 import httpx
 
 from common.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,9 +132,11 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            logger.warning(f"OCR识别失败: status={response.get('status')}, error={response.get('error')}")
             return []
 
-        return [
+        texts = response.get("texts", [])
+        results = [
             TextBlock(
                 text=t["text"],
                 confidence=t["confidence"],
@@ -139,8 +144,16 @@ class OCRClient:
                 center_x=t["center"]["x"],
                 center_y=t["center"]["y"],
             )
-            for t in response.get("texts", [])
+            for t in texts
         ]
+
+        # 打印识别结果
+        if texts:
+            logger.info(f"OCR识别结果: {texts}")
+        else:
+            logger.info("OCR识别完成，未识别到文字")
+
+        return results
 
     def find_text(
         self,
@@ -176,12 +189,15 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            logger.warning(f"OCR查找文字失败: status={response.get('status')}, error={response.get('error')}")
             return None
 
         texts = response.get("texts", [])
         if not texts:
+            logger.info(f"OCR查找文字未找到: target=\"{target_text}\" mode={match_mode}")
             return None
 
+        logger.info(f"OCR查找文字结果: {texts}")
         t = texts[0]
         return TextBlock(
             text=t["text"],
@@ -243,9 +259,12 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            logger.warning(f"OCR获取文本失败: status={response.get('status')}, error={response.get('error')}")
             return ""
 
-        return response.get("text", "")
+        text = response.get("text", "")
+        logger.info(f"OCR获取文本成功，长度={len(text)} 字符")
+        return text
 
     def match_image(
         self,
@@ -282,9 +301,11 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            logger.warning(f"图像匹配失败: status={response.get('status')}, error={response.get('error')}")
             return []
 
-        return [
+        matches = response.get("matches", [])
+        results = [
             MatchResult(
                 confidence=m["confidence"],
                 x=m["bbox"]["x"],
@@ -294,8 +315,16 @@ class OCRClient:
                 center_x=m["center"]["x"],
                 center_y=m["center"]["y"],
             )
-            for m in response.get("matches", [])
+            for m in matches
         ]
+
+        # 打印匹配结果
+        if matches:
+            logger.info(f"图像匹配结果: {matches}")
+        else:
+            logger.info(f"图像匹配未找到（阈值={threshold}）")
+
+        return results
 
     def find_image(
         self,
@@ -357,12 +386,15 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            logger.warning(f"文本附近图像匹配失败: status={response.get('status')}, error={response.get('error')}")
             return None
 
         match = response.get("match")
         if not match:
+            logger.info(f"文本附近图像匹配未找到: filter_text=\"{filter_text}\"")
             return None
 
+        logger.info(f"文本附近图像匹配结果: {match}")
         return MatchResult(
             confidence=match["confidence"],
             x=match["bbox"]["x"],
@@ -398,20 +430,23 @@ class OCRClient:
             dict: 响应数据。
         """
         last_error = None
+        url = f"{self.base_url}{path}"
 
         for attempt in range(self.retry + 1):
             try:
-                response = self._client.post(
-                    f"{self.base_url}{path}",
-                    json=data,
-                )
+                logger.debug(f"OCR请求: {url}")
+                response = self._client.post(url, json=data)
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                logger.debug(f"OCR响应: status={result.get('status')}")
+                return result
             except Exception as e:
                 last_error = e
+                logger.warning(f"OCR请求失败(尝试 {attempt + 1}/{self.retry + 1}): {url}, 错误: {e}")
                 if attempt < self.retry:
                     time.sleep(0.5 * (attempt + 1))
 
+        logger.error(f"OCR请求最终失败: {url}, 错误: {last_error}")
         return {"status": "error", "error": str(last_error)}
 
     def close(self):
