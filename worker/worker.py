@@ -451,11 +451,14 @@ class Worker:
         """获取 Worker 状态和设备信息。"""
         devices = self.device_monitor.get_all_devices() if self.device_monitor else {}
 
+        # 使用配置的 IP 或自动获取
+        ip = HostDiscoverer.get_preferred_ip(self.config.ip)
+
         return {
             "status": self._status,
             "started_at": self._started_at,
             "supported_platforms": self.supported_platforms,
-            "ip": self.host_info.ip_addresses[0] if self.host_info else "unknown",
+            "ip": ip,
             "port": self.port,
             "devices": {
                 "windows": [],
@@ -495,10 +498,8 @@ class Worker:
         if self.ios_devices:
             devices["ios"] = [d.udid for d in self.ios_devices]
 
-        # 4. 获取本机 IP
-        ip = "unknown"
-        if self.host_info and self.host_info.ip_addresses:
-            ip = self.host_info.ip_addresses[0]
+        # 4. 获取本机 IP（使用配置的 IP 或自动获取）
+        ip = HostDiscoverer.get_preferred_ip(self.config.ip)
 
         return {
             "ip": ip,
