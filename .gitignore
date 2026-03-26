@@ -10,3 +10,4 @@ package-lock.json
 /venv
 worker.log
 *.lock
+/build_env
