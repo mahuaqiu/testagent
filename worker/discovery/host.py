@@ -2,6 +2,7 @@
 宿主机信息发现模块。
 """
 
+import logging
 import platform
 import socket
 import subprocess
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 import psutil
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -123,6 +126,31 @@ class HostDiscoverer:
                 pass
 
         return addresses or ["127.0.0.1"]
+
+    @staticmethod
+    def get_preferred_ip(configured_ip: Optional[str] = None) -> str:
+        """
+        获取优先使用的 IP 地址。
+
+        Args:
+            configured_ip: 配置的 IP 地址
+
+        Returns:
+            str: IP 地址
+        """
+        all_ips = HostDiscoverer.get_ip_addresses()
+
+        if configured_ip:
+            if configured_ip in all_ips:
+                return configured_ip
+            else:
+                logger.warning(
+                    f"Configured IP '{configured_ip}' not found in local interfaces. "
+                    f"Available IPs: {all_ips}. Falling back to auto-detection."
+                )
+
+        # 未配置或配置无效，返回第一个非回环 IP
+        return all_ips[0] if all_ips else "127.0.0.1"
 
     @staticmethod
     def get_cpu_info() -> str:
