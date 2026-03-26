@@ -4,6 +4,7 @@
 # Worker 基础配置
 worker:
   id: null                          # 自动生成，也可指定
+  ip: null                          # 指定 IP 地址，null 表示自动获取
   port: 8088                        # HTTP 服务端口
   device_check_interval: 300        # 设备检测间隔(秒)，5分钟
   service_retry_count: 3            # 服务启动重试次数

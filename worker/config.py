@@ -16,6 +16,7 @@ class WorkerConfig:
 
     # Worker 基础配置
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    ip: Optional[str] = None  # 指定 IP 地址，None 表示自动获取
     port: int = 8080
     device_check_interval: int = 300      # 设备检测间隔(秒)，改为5分钟
     service_retry_count: int = 3          # 服务启动重试次数
@@ -52,6 +53,7 @@ class WorkerConfig:
 
         return cls(
             id=worker_data.get("id") or str(uuid.uuid4())[:8],
+            ip=worker_data.get("ip"),
             port=worker_data.get("port", 8080),
             device_check_interval=worker_data.get("device_check_interval", 300),
             service_retry_count=worker_data.get("service_retry_count", 3),
