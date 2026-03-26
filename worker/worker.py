@@ -439,6 +439,20 @@ class Worker:
 
     # ========== API 方法 ==========
 
+    def _get_version(self) -> Optional[str]:
+        """
+        获取版本号。
+
+        Returns:
+            str | None: 版本号，非 EXE 运行时返回 None
+        """
+        try:
+            from worker._version import VERSION
+
+            return VERSION
+        except ImportError:
+            return None
+
     def get_status(self) -> WorkerStatus:
         """获取 Worker 状态。"""
         return WorkerStatus(
@@ -460,6 +474,7 @@ class Worker:
             "supported_platforms": self.supported_platforms,
             "ip": ip,
             "port": self.port,
+            "version": self._get_version(),
             "devices": {
                 "windows": [],
                 "web": [],
