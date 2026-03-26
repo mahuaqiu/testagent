@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller 打包配置文件。
+
+使用目录模式打包，生成 test-worker.exe 和 _internal 目录。
 """
 
 import os
@@ -90,24 +92,33 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# 目录模式：EXE 不包含依赖，由 COLLECT 收集
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # 不包含二进制文件
     name='test-worker',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# 收集所有依赖到 dist/test-worker 目录
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='test-worker',
 )
