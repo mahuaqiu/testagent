@@ -24,7 +24,12 @@
       "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import list_devices, DeviceInfo, connect_service_provider; help\\(list_devices\\)\")",
       "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import DeviceInfo; help\\(DeviceInfo\\)\")",
       "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import DeviceShortInfo; help\\(DeviceShortInfo\\)\")",
-      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import connect_service_provider; help\\(connect_service_provider\\)\")"
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from tidevice3.api import connect_service_provider; help\\(connect_service_provider\\)\")",
+      "Bash(source .venv/Scripts/activate)",
+      "Bash(. .venv/Scripts/activate)",
+      "Bash(python -c \"exec\\(open\\(''scripts/pyinstaller.spec''\\).read\\(\\)\\)\")",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import PyInstaller; print\\(PyInstaller.__version__\\)\")",
+      "Bash(pytest tests/test_host_discovery.py -v)"
     ]
   }
 }
