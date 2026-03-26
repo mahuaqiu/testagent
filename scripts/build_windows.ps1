@@ -24,13 +24,13 @@ $VenvPath = "build_env"
 # Check if we need to recreate virtual environment
 if ($Clean -or -not (Test-Path $VenvPath)) {
     if (Test-Path $VenvPath) {
-        Write-Host "[1/6] Removing old virtual environment..."
+        Write-Host "[1/7] Removing old virtual environment..."
         Remove-Item -Recurse -Force $VenvPath
     }
-    Write-Host "[1/6] Creating virtual environment..."
+    Write-Host "[1/7] Creating virtual environment..."
     python -m venv $VenvPath
 } else {
-    Write-Host "[1/6] Using existing virtual environment..."
+    Write-Host "[1/7] Using existing virtual environment..."
 }
 
 # Activate virtual environment
@@ -40,12 +40,12 @@ if ($Clean -or -not (Test-Path $VenvPath)) {
 $PyinstallerExists = Test-Path ".\$VenvPath\Scripts\pyinstaller.exe"
 
 if (-not $PyinstallerExists) {
-    Write-Host "[2/6] Installing dependencies (pyinstaller not found in venv)..."
+    Write-Host "[2/7] Installing dependencies (pyinstaller not found in venv)..."
     pip install --upgrade pip
     pip install -e ".[all]"
     pip install pyinstaller
 } else {
-    Write-Host "[2/6] Dependencies already installed, skipping..."
+    Write-Host "[2/7] Dependencies already installed, skipping..."
 }
 
 # Check if Playwright chromium is already installed
@@ -53,34 +53,46 @@ $ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
 $ChromiumInstalled = Test-Path $ChromiumPath
 
 if ($ChromiumInstalled) {
-    Write-Host "[3/6] Playwright chromium already installed, skipping..."
+    Write-Host "[3/7] Playwright chromium already installed, skipping..."
 } else {
-    Write-Host "[3/6] Installing Playwright browsers..."
+    Write-Host "[3/7] Installing Playwright browsers..."
     playwright install chromium
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Playwright browser installation may have issues"
     }
 }
 
+# Generate version file
+Write-Host "[4/7] Generating version file..."
+$BuildVersion = Get-Date -Format "yyyyMMddHHmm"
+$VersionFile = "worker\_version.py"
+$VersionContent = "VERSION = `"$BuildVersion`""
+Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
+Write-Host "Build version: $BuildVersion"
+
 # Build
-Write-Host "[4/6] Building executable..."
+Write-Host "[5/7] Building executable..."
 pyinstaller scripts/pyinstaller.spec --clean --noconfirm
 if ($LASTEXITCODE -ne 0) {
     Write-Error "PyInstaller build failed!"
+    Remove-Item $VersionFile -ErrorAction SilentlyContinue
     deactivate
     exit 1
 }
 
-# Check generated file
-$ExePath = "dist\test-worker.exe"
-if (-not (Test-Path $ExePath)) {
-    Write-Error "Executable not found: $ExePath"
+# Clean up version file
+Remove-Item $VersionFile -ErrorAction SilentlyContinue
+
+# Check generated directory
+$BuildDir = "dist\test-worker"
+if (-not (Test-Path $BuildDir)) {
+    Write-Error "Build directory not found: $BuildDir"
     deactivate
     exit 1
 }
 
 # Create release package
-Write-Host "[5/6] Creating release package..."
+Write-Host "[6/7] Creating release package..."
 $PackageDir = "$OutputDir\test-worker-$Version"
 
 # Clean old release directory
@@ -89,9 +101,21 @@ if (Test-Path $PackageDir) {
 }
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
-# Move files to release directory
-Move-Item $ExePath $PackageDir
-Copy-Item -Path "config" -Destination $PackageDir -Recurse
+# Move build directory to package
+Move-Item "$BuildDir\*" $PackageDir
+
+# Copy Playwright chromium to package
+Write-Host "Copying Playwright chromium..."
+$SourcePlaywright = "$env:LOCALAPPDATA\ms-playwright"
+$DestPlaywright = "$PackageDir\playwright"
+
+$ChromiumDir = Get-ChildItem -Path $SourcePlaywright -Filter "chromium-*" -Directory | Select-Object -First 1
+if ($ChromiumDir) {
+    Copy-Item -Path $ChromiumDir.FullName -Destination "$DestPlaywright\$($ChromiumDir.Name)" -Recurse
+    Write-Host "Copied chromium: $($ChromiumDir.Name)"
+} else {
+    Write-Warning "Playwright chromium not found at $SourcePlaywright"
+}
 
 # Create start script
 @"
@@ -113,7 +137,8 @@ Usage:
 
 Configuration:
   All settings are read from config\worker.yaml, including:
-  - Server port (default: 8080)
+  - Server port (default: 8088)
+  - IP address (optional, auto-detected if not specified)
   - OCR service URL
   - Platform API URL
   - Platform-specific options
@@ -121,16 +146,19 @@ Configuration:
 Requirements:
   - For Android/iOS: ADB and libimobiledevice must be installed
   - For OCR: OCR service must be running
+
+Build Version: $BuildVersion
 "@ | Out-File "$PackageDir\README.txt" -Encoding UTF8
 
 # Deactivate virtual environment
 deactivate
 
-Write-Host "[6/6] Build complete!"
+Write-Host "[7/7] Build complete!"
 Write-Host "=========================================="
 Write-Host "Build successful!"
 Write-Host "Package: $PackageDir"
+Write-Host "Build Version: $BuildVersion"
 Write-Host ""
 Write-Host "Note: Virtual environment preserved at: $VenvPath"
-Write-Host "Use -Clean flag to rebuild from scratch: .\build_windows.bat -Clean"
+Write-Host "Use -Clean flag to rebuild from scratch: .\build_windows.ps1 -Clean"
 Write-Host "=========================================="
