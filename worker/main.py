@@ -21,6 +21,12 @@ from worker.server import app, set_worker
 
 def main():
     """主函数。"""
+    # EXE 运行时设置 Playwright 浏览器路径
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+        playwright_path = os.path.join(app_dir, 'playwright')
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = playwright_path
+
     # 加载配置
     config = load_config()
 
