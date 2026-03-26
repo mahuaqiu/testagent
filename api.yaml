@@ -286,9 +286,11 @@ components:
             - ocr_wait
             - ocr_assert
             - ocr_get_text
+            - ocr_paste
             - image_click
             - image_wait
             - image_assert
+            - image_click_near_text
             - click
             - swipe
             - input
@@ -307,11 +309,13 @@ components:
             - ocr_wait: 等待指定文字出现
             - ocr_assert: 断言指定文字存在
             - ocr_get_text: 获取屏幕上所有文字
+            - ocr_paste: OCR 定位后粘贴剪贴板内容
 
             【图像识别动作】
             - image_click: 点击匹配到的图像位置
             - image_wait: 等待指定图像出现
             - image_assert: 断言指定图像存在
+            - image_click_near_text: 点击文本附近最近的图像
 
             【坐标动作】
             - click: 点击指定坐标
@@ -329,8 +333,8 @@ components:
           type: string
           description: |
             动作核心值，根据 action_type 不同含义不同：
-            - ocr_click/ocr_input/ocr_wait/ocr_assert: 要识别的文字内容
-            - image_click/image_wait/image_assert: 图像文件路径（相对或绝对路径）
+            - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_paste: 要识别的文字内容
+            - image_click_near_text: 要查找的目标文字
             - click/input: 此字段不使用
             - swipe: 此字段不使用
             - screenshot: 截图名称/标识
@@ -343,7 +347,21 @@ components:
             - navigate: 要跳转的 URL
         text:
           type: string
-          description: "输入的文本内容，仅 ocr_input 和 input 动作必填"
+          description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
+        image_path:
+          type: string
+          description: |
+            图像模板路径（相对或绝对路径），仅 image_* 动作必填：
+            - image_click/image_wait/image_assert: 要匹配的图像模板
+            - image_click_near_text: 要查找的图像模板
+        index:
+          type: integer
+          default: 0
+          description: |
+            选择第几个匹配结果（从 0 开始），用于多个相同文字/图像的场景：
+            - ocr_click/ocr_input/ocr_paste: 点击第 N 个匹配的文字
+            - image_click/image_wait/image_assert: 点击第 N 个匹配的图像
+            示例：index=1 表示点击第二个匹配结果
         offset:
           type: object
           description: |
@@ -372,6 +390,17 @@ components:
         y:
           type: integer
           description: "Y 坐标（像素），仅 click 和 input 动作必填"
+        end_x:
+          type: integer
+          description: |
+            终点 X 坐标或扩展参数：
+            - swipe: 滑动终点 X 坐标
+            - image_click_near_text: 最大搜索距离（像素），默认 500
+        end_y:
+          type: integer
+          description: |
+            终点 Y 坐标：
+            - swipe: 滑动终点 Y 坐标
         from:
           type: object
           description: "滑动起始坐标，仅 swipe 动作必填"
@@ -450,9 +479,9 @@ components:
     ActionResult:
       type: object
       properties:
-        index:
+        number:
           type: integer
-          description: "动作索引"
+          description: "动作序号（在任务列表中的位置，从 0 开始）"
         action_type:
           type: string
           description: "动作类型"
@@ -482,12 +511,16 @@ components:
   # {"action_type": "ocr_click", "value": "登录"}
   # 示例 2: 点击"登录"按钮并向右偏移 100 像素（适用于文字右侧有按钮）
   # {"action_type": "ocr_click", "value": "登录", "offset": {"x": 100, "y": 0}}
-  # 示例 3: 点击"登录"按钮并设置超时
+  # 示例 3: 点击第二个"确定"按钮（index 从 0 开始）
+  # {"action_type": "ocr_click", "value": "确定", "index": 1}
+  # 示例 4: 点击"登录"按钮并设置超时
   # {"action_type": "ocr_click", "value": "登录", "timeout": 10000}
 
   # ocr_input - 在文字附近输入文本
-  # 示例: 在"用户名"标签右侧输入账号
+  # 示例 1: 在"用户名"标签右侧输入账号
   # {"action_type": "ocr_input", "value": "用户名", "text": "admin", "offset": {"x": 80, "y": 0}}
+  # 示例 2: 在第二个"输入框"附近输入内容
+  # {"action_type": "ocr_input", "value": "输入框", "text": "hello", "index": 1}
 
   # ocr_wait - 等待文字出现
   # 示例: 等待"加载完成"出现，最多等 10 秒
@@ -501,18 +534,34 @@ components:
   # 示例: 获取当前屏幕文字内容
   # {"action_type": "ocr_get_text", "value": ""}
 
+  # ocr_paste - OCR 定位后粘贴剪贴板内容
+  # 示例 1: 定位"备注"标签并粘贴内容
+  # {"action_type": "ocr_paste", "value": "备注", "text": "这是粘贴的内容", "offset": {"x": 50, "y": 0}}
+  # 示例 2: 定位第二个"输入"标签并粘贴内容
+  # {"action_type": "ocr_paste", "value": "输入", "text": "粘贴文本", "index": 1}
+
   # ---------- 图像识别动作 ----------
   # image_click - 点击匹配的图像
-  # 示例: 点击 images/button.png 图像，匹配阈值 0.9
-  # {"action_type": "image_click", "value": "images/button.png", "threshold": 0.9}
+  # 示例 1: 点击 images/button.png 图像，匹配阈值 0.9
+  # {"action_type": "image_click", "image_path": "images/button.png", "threshold": 0.9}
+  # 示例 2: 点击第二个匹配的图像
+  # {"action_type": "image_click", "image_path": "images/button.png", "index": 1}
 
   # image_wait - 等待图像出现
-  # 示例: 等待 images/icon.png 出现，最多等 8 秒
-  # {"action_type": "image_wait", "value": "images/icon.png", "timeout": 8000, "threshold": 0.85}
+  # 示例 1: 等待 images/icon.png 出现，最多等 8 秒
+  # {"action_type": "image_wait", "image_path": "images/icon.png", "timeout": 8000, "threshold": 0.85}
+  # 示例 2: 等待第二个匹配的图像出现
+  # {"action_type": "image_wait", "image_path": "images/icon.png", "index": 1}
 
   # image_assert - 断言图像存在
-  # 示例: 断言 images/logo.png 存在
-  # {"action_type": "image_assert", "value": "images/logo.png", "threshold": 0.8}
+  # 示例 1: 断言 images/logo.png 存在
+  # {"action_type": "image_assert", "image_path": "images/logo.png", "threshold": 0.8}
+  # 示例 2: 断言第二个匹配的图像存在
+  # {"action_type": "image_assert", "image_path": "images/logo.png", "index": 1}
+
+  # image_click_near_text - 点击文本附近最近的图像
+  # 示例: 点击"密码"文字附近 500 像素范围内的输入框图标
+  # {"action_type": "image_click_near_text", "image_path": "images/input_icon.png", "value": "密码", "end_x": 500}
 
   # ---------- 坐标动作 ----------
   # click - 点击指定坐标

@@ -26,7 +26,7 @@ class ClickAction(BaseActionExecutor):
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         if action.x is None or action.y is None:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="x and y coordinates are required",
@@ -35,7 +35,7 @@ class ClickAction(BaseActionExecutor):
         platform.click(action.x, action.y, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({action.x}, {action.y})",
@@ -50,7 +50,7 @@ class InputAction(BaseActionExecutor):
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         if action.x is None or action.y is None:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="x and y coordinates are required",
@@ -64,7 +64,7 @@ class InputAction(BaseActionExecutor):
             platform.input_text(action.text, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Input at ({action.x}, {action.y})",
@@ -79,7 +79,7 @@ class SwipeAction(BaseActionExecutor):
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         if action.x is None or action.y is None:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Start coordinates are required",
@@ -91,7 +91,7 @@ class SwipeAction(BaseActionExecutor):
         platform.swipe(action.x, action.y, end_x, end_y, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y})",
@@ -106,7 +106,7 @@ class PressAction(BaseActionExecutor):
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         if not action.value:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Key is required",
@@ -115,7 +115,7 @@ class PressAction(BaseActionExecutor):
         platform.press(action.value, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Pressed: {action.value}",
@@ -134,7 +134,7 @@ class ScreenshotAction(BaseActionExecutor):
         name = action.value or "screenshot"
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=name,
@@ -160,7 +160,7 @@ class WaitAction(BaseActionExecutor):
             wait_time_sec = wait_time_ms / 1000
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Waited {wait_time_sec}s",

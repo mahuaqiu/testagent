@@ -127,7 +127,7 @@ class MacPlatformManager(PlatformManager):
                     result = executor.execute(self, action, context)
                 else:
                     result = ActionResult(
-                        index=0,
+                        number=0,
                         action_type=action.action_type,
                         status=ActionStatus.FAILED,
                         error=f"Unknown action type: {action.action_type}",
@@ -140,7 +140,7 @@ class MacPlatformManager(PlatformManager):
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
@@ -154,7 +154,7 @@ class MacPlatformManager(PlatformManager):
         app_name = action.app_path or action.value
         if not app_name:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="app_name is required",
@@ -165,7 +165,7 @@ class MacPlatformManager(PlatformManager):
         time.sleep(2)  # 等待应用启动
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type="start_app",
             status=ActionStatus.SUCCESS,
             output=f"Started: {app_name}",
@@ -176,7 +176,7 @@ class MacPlatformManager(PlatformManager):
         app_name = action.value
         if not app_name:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error="app_name is required",
@@ -188,14 +188,14 @@ class MacPlatformManager(PlatformManager):
                 check=True,
             )
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.SUCCESS,
                 output=f"Stopped: {app_name}",
             )
         except subprocess.CalledProcessError as e:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error=f"Failed to stop app: {e}",

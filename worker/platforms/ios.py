@@ -252,7 +252,7 @@ class iOSPlatformManager(PlatformManager):
         client = context
         if not client and action.action_type not in ("start_app", "stop_app"):
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 error="WDA context is invalid",
@@ -271,7 +271,7 @@ class iOSPlatformManager(PlatformManager):
                 result = self._action_stop_app(client, action)
             elif action.action_type == "ocr_paste":
                 result = ActionResult(
-                    index=0,
+                    number=0,
                     action_type="ocr_paste",
                     status=ActionStatus.FAILED,
                     error="ocr_paste is not supported on iOS",
@@ -282,7 +282,7 @@ class iOSPlatformManager(PlatformManager):
                     result = executor.execute(self, action, client)
                 else:
                     result = ActionResult(
-                        index=0,
+                        number=0,
                         action_type=action.action_type,
                         status=ActionStatus.FAILED,
                         error=f"Unknown action type: {action.action_type}",
@@ -295,7 +295,7 @@ class iOSPlatformManager(PlatformManager):
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
@@ -309,7 +309,7 @@ class iOSPlatformManager(PlatformManager):
         bundle_id = action.bundle_id or action.value
         if not bundle_id:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="bundle_id is required",
@@ -326,7 +326,7 @@ class iOSPlatformManager(PlatformManager):
                 logger.warning(f"Failed to launch app via t3: {e}")
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type="start_app",
             status=ActionStatus.SUCCESS,
             output=f"Started: {bundle_id}",
@@ -336,14 +336,14 @@ class iOSPlatformManager(PlatformManager):
         """关闭应用。"""
         if self._current_device:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.SUCCESS,
                 output=f"Stopped app session",
             )
         else:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error="No device context",

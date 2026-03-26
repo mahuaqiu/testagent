@@ -11,3 +11,4 @@ package-lock.json
 worker.log
 *.lock
 /build_env
+/build

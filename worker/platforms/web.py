@@ -331,7 +331,7 @@ class WebPlatformManager(PlatformManager):
                     result = executor.execute(self, action, context)
                 else:
                     result = ActionResult(
-                        index=0,
+                        number=0,
                         action_type=action.action_type,
                         status=ActionStatus.FAILED,
                         error=f"Unknown action type: {action.action_type}",
@@ -346,7 +346,7 @@ class WebPlatformManager(PlatformManager):
             line_no = exc_tb.tb_lineno if exc_tb else "unknown"
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
@@ -365,7 +365,7 @@ class WebPlatformManager(PlatformManager):
                 self._current_page = existing_page
                 logger.info("Reusing existing browser session for start_app")
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="start_app",
                     status=ActionStatus.SUCCESS,
                     output=f"Reused existing page for browser: {browser_name}",
@@ -379,7 +379,7 @@ class WebPlatformManager(PlatformManager):
                 logger.info(f"Browser started via start_app: {browser_name}")
             except Exception as e:
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="start_app",
                     status=ActionStatus.FAILED,
                     error=f"Failed to start browser: {e}",
@@ -411,7 +411,7 @@ class WebPlatformManager(PlatformManager):
                 self._current_page = new_page
 
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="start_app",
                     status=ActionStatus.SUCCESS,
                     output=f"Started new page for browser: {browser_name}",
@@ -419,14 +419,14 @@ class WebPlatformManager(PlatformManager):
                 )
             except Exception as e:
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="start_app",
                     status=ActionStatus.FAILED,
                     error=f"Failed to start app: {e}",
                 )
         else:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="Browser not started, please call start() first",
@@ -438,21 +438,21 @@ class WebPlatformManager(PlatformManager):
             try:
                 self.close_session()
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="stop_app",
                     status=ActionStatus.SUCCESS,
                     output="Closed browser session",
                 )
             except Exception as e:
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type="stop_app",
                     status=ActionStatus.FAILED,
                     error=f"Failed to stop app: {e}",
                 )
         else:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error="No session to close",
@@ -463,7 +463,7 @@ class WebPlatformManager(PlatformManager):
         url = action.value
         if not url:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="navigate",
                 status=ActionStatus.FAILED,
                 error="URL is required",
@@ -472,7 +472,7 @@ class WebPlatformManager(PlatformManager):
         page = context or self._current_page
         if not page:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="navigate",
                 status=ActionStatus.FAILED,
                 error="No active page",
@@ -481,14 +481,14 @@ class WebPlatformManager(PlatformManager):
         try:
             _run_async(page.goto(url, timeout=action.timeout))
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="navigate",
                 status=ActionStatus.SUCCESS,
                 output=page.url,
             )
         except Exception as e:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="navigate",
                 status=ActionStatus.FAILED,
                 error=str(e),

@@ -24,6 +24,7 @@ class ActionType(Enum):
     IMAGE_CLICK = "image_click"       # 点击匹配的图像
     IMAGE_ASSERT = "image_assert"     # 断言图像存在
     IMAGE_WAIT = "image_wait"         # 等待图像出现
+    IMAGE_CLICK_NEAR_TEXT = "image_click_near_text"  # 点击文本附近最近的图像
 
     # 基础操作（坐标/按键）
     CLICK = "click"                   # 坐标点击 (x, y)

@@ -763,7 +763,7 @@ class Worker:
                     )
 
             result = manager.execute_action(context, action)
-            result.index = i
+            result.number = i
             actions_results.append(result)
 
             # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
@@ -773,7 +773,7 @@ class Worker:
 
             # 记录动作执行结果
             logger.debug(
-                f"Action result: index={i}, type={action.action_type}, "
+                f"Action result: number={i}, type={action.action_type}, "
                 f"status={result.status}, duration={result.duration_ms}ms"
             )
 
@@ -788,7 +788,7 @@ class Worker:
             # 如果动作失败且未配置继续，停止执行
             if result.status != ActionStatus.SUCCESS and not task.metadata.get("continue_on_error"):
                 logger.warning(
-                    f"Action failed: index={i}, type={action.action_type}, "
+                    f"Action failed: number={i}, type={action.action_type}, "
                     f"error={result.error}"
                 )
 

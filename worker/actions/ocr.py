@@ -40,7 +40,7 @@ class OcrClickAction(BaseActionExecutor):
 
         if not position:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
@@ -56,7 +56,7 @@ class OcrClickAction(BaseActionExecutor):
         platform.click(x, y, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y})",
@@ -86,7 +86,7 @@ class OcrInputAction(BaseActionExecutor):
 
         if not position:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
@@ -106,7 +106,7 @@ class OcrInputAction(BaseActionExecutor):
             platform.input_text(action.text, context)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Input at ({x}, {y})",
@@ -140,7 +140,7 @@ class OcrWaitAction(BaseActionExecutor):
 
             if position:
                 return ActionResult(
-                    index=0,
+                    number=0,
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
                     output=f"Text appeared: {action.value}",
@@ -149,7 +149,7 @@ class OcrWaitAction(BaseActionExecutor):
             time.sleep(0.5)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.FAILED,
             error=f"Text not appeared within timeout: {action.value}",
@@ -181,14 +181,14 @@ class OcrAssertAction(BaseActionExecutor):
 
         if position:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.SUCCESS,
                 output=f"Text found: {action.value}",
             )
         else:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}",
@@ -213,7 +213,7 @@ class OcrGetTextAction(BaseActionExecutor):
         all_text = " ".join([t.text for t in texts])
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=all_text,
@@ -234,7 +234,7 @@ class OcrPasteAction(BaseActionExecutor):
 
         if not action.text:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="text is required for ocr_paste",
@@ -251,7 +251,7 @@ class OcrPasteAction(BaseActionExecutor):
 
         if not position:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
@@ -277,7 +277,7 @@ class OcrPasteAction(BaseActionExecutor):
             pyperclip.copy(original_clipboard)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Pasted at ({x}, {y})",

@@ -80,7 +80,7 @@ class BaseActionExecutor(ActionExecutor):
         """
         if not platform.ocr_client:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="OCR client not available",
@@ -115,7 +115,8 @@ class BaseActionExecutor(ActionExecutor):
         platform: "PlatformManager",
         source_bytes: bytes,
         template_path: str,
-        threshold: float = 0.8
+        threshold: float = 0.8,
+        index: int = 0
     ) -> Optional[tuple[int, int]]:
         """
         在源图像中查找模板图像位置。
@@ -125,8 +126,9 @@ class BaseActionExecutor(ActionExecutor):
             source_bytes: 源图像数据
             template_path: 模板图像路径
             threshold: 匹配阈值
+            index: 选择第几个匹配结果
 
         Returns:
             匹配中心坐标 (x, y)，未找到返回 None
         """
-        return platform._find_image_position(source_bytes, template_path, threshold)
+        return platform._find_image_position(source_bytes, template_path, threshold, index)

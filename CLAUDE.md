@@ -94,13 +94,37 @@ PlatformManager (抽象基类)
 ## 动作类型
 
 所有动作基于 OCR/图像识别或坐标定位。核心动作：
-- **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`
-- **图像动作**：`image_click`, `image_wait`, `image_assert`
+- **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`, `ocr_paste`
+- **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`
 - **坐标动作**：`click`, `swipe`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`
 
-动作参数：`value`(必填)、`offset`(可选偏移)、`timeout`(默认5000ms)、`threshold`(图像匹配默认0.8)。
+### 动作参数
+
+| 参数 | 说明 | 适用动作 |
+|------|------|----------|
+| `value` | 文字/URL/按键值 | 所有 OCR 动作、press、navigate |
+| `image_path` | 图像模板路径 | image_* 动作 |
+| `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, image_click, image_wait, image_assert |
+| `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作 |
+| `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
+| `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
+| `match_mode` | OCR 匹配模式（exact/fuzzy/regex） | OCR 动作 |
+| `end_x` | 滑动终点 X 或最大搜索距离 | swipe, image_click_near_text |
+
+### image_click_near_text 说明
+
+点击文本附近最近的图片。用于场景如：点击"密码"文字附近的输入框图标。
+
+```json
+{
+  "action_type": "image_click_near_text",
+  "image_path": "templates/input_icon.png",
+  "value": "密码",
+  "end_x": 500,  // max_distance，最大搜索距离（像素）
+  "threshold": 0.8
+}
 
 ## 任务执行流程
 

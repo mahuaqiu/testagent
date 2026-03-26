@@ -33,7 +33,7 @@ class ActionStatus(str, Enum):
 class ActionResult:
     """单个动作执行结果。"""
 
-    index: int
+    number: int  # 动作在任务列表中的序号（第几个动作）
     action_type: str
     status: ActionStatus
     duration_ms: int = 0
@@ -46,7 +46,7 @@ class ActionResult:
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
         """从字典创建。"""
         return cls(
-            index=data.get("index", 0),
+            number=data.get("number", 0),
             action_type=data.get("action_type", ""),
             status=ActionStatus(data.get("status", "pending")),
             duration_ms=data.get("duration_ms", 0),
@@ -59,7 +59,7 @@ class ActionResult:
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典。"""
         result = {
-            "index": self.index,
+            "number": self.number,
             "action_type": self.action_type,
             "status": self.status.value,
             "duration_ms": self.duration_ms,
@@ -79,7 +79,7 @@ class ScreenshotInfo:
     """截图信息。"""
 
     name: str
-    action_index: int
+    action_number: int  # 对应的动作序号
     data: Optional[str] = None  # base64 数据
     path: Optional[str] = None  # 文件路径
 
@@ -87,7 +87,7 @@ class ScreenshotInfo:
         """转换为字典。"""
         result = {
             "name": self.name,
-            "action_index": self.action_index,
+            "action_number": self.action_number,
         }
         if self.data is not None:
             result["data"] = self.data

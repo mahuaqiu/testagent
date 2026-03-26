@@ -21,6 +21,7 @@ from worker.actions.image import (
     ImageClickAction,
     ImageWaitAction,
     ImageAssertAction,
+    ImageClickNearTextAction,
 )
 from worker.actions.coordinate import (
     ClickAction,
@@ -46,6 +47,7 @@ def _register_all_actions():
     ActionRegistry.register(ImageClickAction())
     ActionRegistry.register(ImageWaitAction())
     ActionRegistry.register(ImageAssertAction())
+    ActionRegistry.register(ImageClickNearTextAction())
 
     # Coordinate Actions
     ActionRegistry.register(ClickAction())
@@ -76,6 +78,7 @@ __all__ = [
     "ImageClickAction",
     "ImageWaitAction",
     "ImageAssertAction",
+    "ImageClickNearTextAction",
     # Coordinate Actions
     "ClickAction",
     "InputAction",

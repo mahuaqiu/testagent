@@ -211,7 +211,7 @@ class AndroidPlatformManager(PlatformManager):
         device = context
         if not device and action.action_type not in ("start_app", "stop_app"):
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 error="Device context is invalid",
@@ -234,7 +234,7 @@ class AndroidPlatformManager(PlatformManager):
                     result = executor.execute(self, action, device)
                 else:
                     result = ActionResult(
-                        index=0,
+                        number=0,
                         action_type=action.action_type,
                         status=ActionStatus.FAILED,
                         error=f"Unknown action type: {action.action_type}",
@@ -247,7 +247,7 @@ class AndroidPlatformManager(PlatformManager):
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
-                index=0,
+                number=0,
                 action_type=action.action_type,
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
@@ -261,7 +261,7 @@ class AndroidPlatformManager(PlatformManager):
         package = action.package_name or action.value
         if not package:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="start_app",
                 status=ActionStatus.FAILED,
                 error="package_name is required",
@@ -271,7 +271,7 @@ class AndroidPlatformManager(PlatformManager):
             device.app_start(package)
 
         return ActionResult(
-            index=0,
+            number=0,
             action_type="start_app",
             status=ActionStatus.SUCCESS,
             output=f"Started: {package}",
@@ -284,14 +284,14 @@ class AndroidPlatformManager(PlatformManager):
             if package:
                 device.app_stop(package)
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.SUCCESS,
                 output=f"Stopped app",
             )
         else:
             return ActionResult(
-                index=0,
+                number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error="No device context",

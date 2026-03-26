@@ -30,7 +30,7 @@ class PlatformManager(ABC):
     # 通用动作列表（所有平台支持）
     BASE_SUPPORTED_ACTIONS: Set[str] = {
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
-        "image_click", "image_wait", "image_assert",
+        "image_click", "image_wait", "image_assert", "image_click_near_text",
         "click", "swipe", "input", "press", "screenshot", "wait"
     }
 
@@ -285,14 +285,15 @@ class PlatformManager(ABC):
                 return all_texts[index].center
         return None
 
-    def _find_image_position(self, source_bytes: bytes, template_path: str, threshold: float = 0.8) -> Optional[tuple[int, int]]:
+    def _find_image_position(self, source_bytes: bytes, template_path: str, threshold: float = 0.8, index: int = 0) -> Optional[tuple[int, int]]:
         """
-        在源图像中查找模板图像位置。
+        在源图像中查找模板图像位置，支持 index 参数选择第几个匹配结果。
 
         Args:
             source_bytes: 源图像数据
             template_path: 模板图像路径
             threshold: 匹配阈值
+            index: 选择第几个匹配结果（0=第一个，1=第二个，以此类推）
 
         Returns:
             tuple[int, int] | None: 匹配中心坐标 (x, y)
@@ -308,9 +309,16 @@ class PlatformManager(ABC):
         with open(template_path, "rb") as f:
             template_bytes = f.read()
 
-        match = self.ocr_client.find_image(source_bytes, template_bytes, threshold=threshold)
-        if match:
-            return match.center
+        if index == 0:
+            # 使用原有的 find_image，只返回第一个结果
+            match = self.ocr_client.find_image(source_bytes, template_bytes, threshold=threshold)
+            if match:
+                return match.center
+        else:
+            # index > 0 时，获取所有匹配结果
+            matches = self.ocr_client.match_image(source_bytes, template_bytes, threshold=threshold, multi_target=True)
+            if matches and len(matches) > index:
+                return matches[index].center
         return None
 
     def _apply_offset(self, x: int, y: int, offset: Optional[Dict[str, int]]) -> tuple[int, int]:

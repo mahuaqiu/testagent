@@ -31,7 +31,7 @@ def _format_actions_summary(actions: List[Dict[str, Any]], max_actions: int = 10
     formatted = []
     for i, action in enumerate(actions[:max_actions]):
         # 提取所有关键字段
-        fields = {"index": i}
+        fields = {"number": i}
         for key in ["action_type", "value", "offset", "x", "y", "image_path", "package_name", "bundle_id"]:
             if key in action:
                 fields[key] = action[key]
