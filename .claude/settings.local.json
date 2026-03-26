@@ -29,7 +29,12 @@
       "Bash(. .venv/Scripts/activate)",
       "Bash(python -c \"exec\\(open\\(''scripts/pyinstaller.spec''\\).read\\(\\)\\)\")",
       "Bash(.venv\\\\Scripts\\\\python.exe -c \"import PyInstaller; print\\(PyInstaller.__version__\\)\")",
-      "Bash(pytest tests/test_host_discovery.py -v)"
+      "Bash(pytest tests/test_host_discovery.py -v)",
+      "Bash(./test-worker.exe)",
+      "Bash(ls -la build_env/*.log)",
+      "Bash(find dist/windows/test-worker-2.0.0/_internal -name *.py -path *worker*)",
+      "Bash(unzip -l dist/windows/test-worker-2.0.0/_internal/base_library.zip)",
+      "Bash(build_env/Scripts/python.exe -m:*)"
     ]
   }
 }
