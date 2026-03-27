@@ -88,6 +88,7 @@ class PlatformConfig:
     timeout: int = 30000
     ignore_https_errors: bool = True
     permissions: List[str] = field(default_factory=lambda: ["camera", "microphone"])
+    user_data_dir: str = "data/chrome_profile"  # 浏览器用户数据目录，用于缓存持久化
 
     # iOS 专用
     wda_base_port: int = 8100
@@ -108,6 +109,7 @@ class PlatformConfig:
             timeout=data.get("timeout", 30000),
             ignore_https_errors=data.get("ignore_https_errors", True),
             permissions=data.get("permissions", ["camera", "microphone"]),
+            user_data_dir=data.get("user_data_dir", "data/chrome_profile"),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             u2_port=data.get("u2_port", 7912),

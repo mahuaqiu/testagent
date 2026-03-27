@@ -55,7 +55,8 @@
       "Bash(timeout 5 ./test-task.exe)",
       "Bash(timeout 10 ./test-web.exe)",
       "Bash(timeout 10 ./test-web-fixed.exe)",
-      "Bash(.venv/Scripts/python.exe -m ruff check worker/actions/image.py worker/platforms/base.py worker/task/action.py worker/server.py)"
+      "Bash(.venv/Scripts/python.exe -m ruff check worker/actions/image.py worker/platforms/base.py worker/task/action.py worker/server.py)",
+      "Bash(source venv/Scripts/activate)"
     ]
   }
 }

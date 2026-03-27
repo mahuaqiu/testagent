@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Any, Dict, Optional, Set
 
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
@@ -68,16 +68,17 @@ class WebPlatformManager(PlatformManager):
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
 
-        self._playwright = None
-        self._browser: Optional[Browser] = None
+        self._playwright: Optional[Playwright] = None
+        self._browser_context: Optional[BrowserContext] = None  # 持久化浏览器上下文
         self._current_page: Optional[Page] = None  # 当前页面，用于基础能力操作
-        # 会话管理：key="default", value={"browser", "context", "page"}
+        # 会话管理：key="default", value={"context", "page"}
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.headless = config.headless
         self.browser_type = config.browser_type
         self.timeout = config.timeout
         self.ignore_https_errors = config.ignore_https_errors
         self.permissions = config.permissions
+        self.user_data_dir = config.user_data_dir
 
     @property
     def platform(self) -> str:
@@ -99,8 +100,13 @@ class WebPlatformManager(PlatformManager):
             raise
 
     async def _async_start(self) -> None:
-        """异步启动 Playwright 和浏览器。"""
+        """异步启动 Playwright 和浏览器（使用持久化用户数据目录）。"""
+        import os
         self._playwright = await async_playwright().start()
+
+        # 确保用户数据目录存在
+        if not os.path.exists(self.user_data_dir):
+            os.makedirs(self.user_data_dir, exist_ok=True)
 
         # 选择浏览器类型
         if self.browser_type == "firefox":
@@ -110,18 +116,18 @@ class WebPlatformManager(PlatformManager):
         else:
             browser_launcher = self._playwright.chromium
 
-        # 构建浏览器启动参数
-        launch_args = []
+        # 使用持久化上下文启动浏览器（保留缓存、Cookie等）
+        context_options = {
+            "headless": self.headless,
+        }
         if self.ignore_https_errors:
-            launch_args.extend([
-                "--ignore-certificate-errors",
-                "--allow-running-insecure-content",
-            ])
+            context_options["ignore_https_errors"] = True
+        if self.permissions:
+            context_options["permissions"] = self.permissions
 
-        self._browser = await browser_launcher.launch(
-            headless=self.headless,
-            timeout=self.timeout,
-            args=launch_args if launch_args else None,
+        self._browser_context = await browser_launcher.launch_persistent_context(
+            user_data_dir=self.user_data_dir,
+            **context_options
         )
 
     def stop(self) -> None:
@@ -144,9 +150,9 @@ class WebPlatformManager(PlatformManager):
 
     async def _async_stop(self) -> None:
         """异步停止浏览器和 Playwright。"""
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
+        if self._browser_context:
+            await self._browser_context.close()
+            self._browser_context = None
 
         if self._playwright:
             await self._playwright.stop()
@@ -154,7 +160,7 @@ class WebPlatformManager(PlatformManager):
 
     def is_available(self) -> bool:
         """检查平台是否可用。"""
-        return self._started and self._browser is not None
+        return self._started and self._browser_context is not None
 
     # ========== 会话管理方法 ==========
 
@@ -194,9 +200,9 @@ class WebPlatformManager(PlatformManager):
                 if page:
                     _run_async(self._async_close_page(page))
 
-                if self._browser:
-                    _run_async(self._browser.close())
-                    self._browser = None
+                if self._browser_context:
+                    _run_async(self._browser_context.close())
+                    self._browser_context = None
 
                 if self._playwright:
                     _run_async(self._playwright.stop())
@@ -221,7 +227,7 @@ class WebPlatformManager(PlatformManager):
     # ========== 上下文管理 ==========
 
     def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
-        """创建浏览器上下文。"""
+        """创建浏览器页面（基于持久化上下文）。"""
         if not self.is_available():
             raise RuntimeError("Web platform not started")
 
@@ -232,12 +238,10 @@ class WebPlatformManager(PlatformManager):
                 self._current_page = existing_page
                 return existing_page
 
-        page = _run_async(self._async_create_context(options or {}))
+        page = _run_async(self._async_create_page())
 
-        context = page.context if page else None
         self._sessions["default"] = {
-            "browser": self._browser,
-            "context": context,
+            "context": self._browser_context,
             "page": page,
         }
         self._current_page = page
@@ -245,10 +249,9 @@ class WebPlatformManager(PlatformManager):
         logger.info("Web context created")
         return page
 
-    async def _async_create_context(self, context_options: Dict) -> Page:
-        """异步创建浏览器上下文。"""
-        context = await self._browser.new_context(**context_options)
-        page = await context.new_page()
+    async def _async_create_page(self) -> Page:
+        """异步创建新页面。"""
+        page = await self._browser_context.new_page()
         page.set_default_timeout(self.timeout)
         return page
 
@@ -372,7 +375,7 @@ class WebPlatformManager(PlatformManager):
                     context=existing_page,
                 )
 
-        if not self._browser:
+        if not self._browser_context:
             try:
                 _run_async(self._async_start())
                 self._started = True
@@ -385,27 +388,13 @@ class WebPlatformManager(PlatformManager):
                     error=f"Failed to start browser: {e}",
                 )
 
-        if self._browser:
+        if self._browser_context:
             try:
-                context_options = {}
-                if self.ignore_https_errors:
-                    context_options["ignore_https_errors"] = True
-
-                action_permissions = action.permissions
-                if action_permissions == "false" or action_permissions is False:
-                    pass
-                elif action_permissions is not None:
-                    context_options["permissions"] = action_permissions
-                elif self.permissions:
-                    context_options["permissions"] = self.permissions
-
-                browser_context = _run_async(self._browser.new_context(**context_options))
-                new_page = _run_async(browser_context.new_page())
+                new_page = _run_async(self._browser_context.new_page())
                 new_page.set_default_timeout(self.timeout)
 
                 self._sessions["default"] = {
-                    "browser": self._browser,
-                    "context": browser_context,
+                    "context": self._browser_context,
                     "page": new_page,
                 }
                 self._current_page = new_page

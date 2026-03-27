@@ -12,3 +12,5 @@ worker.log
 *.lock
 /build_env
 /build
+/data/browser_cache
+/data/chrome_profile

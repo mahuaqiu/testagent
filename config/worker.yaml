@@ -26,6 +26,7 @@ platforms:
     session_timeout: 300            # 会话超时(秒)
     screenshot_dir: data/screenshots
     ignore_https_errors: true       # 忽略 HTTPS 证书错误
+    user_data_dir: data/chrome_profile  # 浏览器用户数据目录，保留缓存/Cookie/登录状态
     permissions:                    # 网页权限（摄像头、麦克风等）
       - camera
       - microphone
