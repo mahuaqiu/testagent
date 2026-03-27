@@ -250,8 +250,12 @@ class WebPlatformManager(PlatformManager):
         return page
 
     async def _async_create_page(self) -> Page:
-        """异步创建新页面。"""
-        page = await self._browser_context.new_page()
+        """异步获取或创建页面。"""
+        pages = self._browser_context.pages
+        if pages:
+            page = pages[0]
+        else:
+            page = await self._browser_context.new_page()
         page.set_default_timeout(self.timeout)
         return page
 
@@ -390,7 +394,12 @@ class WebPlatformManager(PlatformManager):
 
         if self._browser_context:
             try:
-                new_page = _run_async(self._browser_context.new_page())
+                # 使用已有的第一个页面，避免创建多余的空白页面
+                pages = self._browser_context.pages
+                if pages:
+                    new_page = pages[0]
+                else:
+                    new_page = _run_async(self._browser_context.new_page())
                 new_page.set_default_timeout(self.timeout)
 
                 self._sessions["default"] = {
