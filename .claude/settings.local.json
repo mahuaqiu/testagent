@@ -34,7 +34,27 @@
       "Bash(ls -la build_env/*.log)",
       "Bash(find dist/windows/test-worker-2.0.0/_internal -name *.py -path *worker*)",
       "Bash(unzip -l dist/windows/test-worker-2.0.0/_internal/base_library.zip)",
-      "Bash(build_env/Scripts/python.exe -m:*)"
+      "Bash(build_env/Scripts/python.exe -m:*)",
+      "Bash(build_env/Scripts/pyi-archive_viewer dist/windows/test-worker-2.0.0/test-worker.exe)",
+      "Bash(build_env/Scripts/python.exe:*)",
+      "Bash(powershell -Command \":*)",
+      "WebFetch(domain:pyinstaller.org)",
+      "Bash(./test-worker.exe --help)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(timeout 5 ./test-worker-debug.exe)",
+      "Bash(timeout 5 ./test-worker-noupx.exe)",
+      "Bash(timeout 5 ./test-worker-import-debug.exe)",
+      "Bash(timeout 5 ./dist/simple-test.exe)",
+      "Bash(timeout 5 ./test-worker-noarchive.exe)",
+      "Bash(PYTHONUNBUFFERED=1 timeout 5 ./test-worker-noupx.exe)",
+      "Bash(timeout 10 ./test-worker-debug.exe)",
+      "Bash(timeout 5 ./test-early.exe)",
+      "Bash(timeout 10 ./test-imports.exe)",
+      "Bash(timeout 10 ./test-u2.exe)",
+      "Bash(timeout 15 ./test-platforms.exe)",
+      "Bash(timeout 5 ./test-task.exe)",
+      "Bash(timeout 10 ./test-web.exe)",
+      "Bash(timeout 10 ./test-web-fixed.exe)"
     ]
   }
 }
