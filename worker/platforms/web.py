@@ -479,8 +479,7 @@ class WebPlatformManager(PlatformManager):
             )
 
         try:
-            # 使用 domcontentloaded 避免因外部资源加载慢导致超时
-            _run_async(page.goto(url, timeout=action.timeout, wait_until="domcontentloaded"))
+            _run_async(page.goto(url, timeout=action.timeout))
             return ActionResult(
                 number=0,
                 action_type="navigate",
