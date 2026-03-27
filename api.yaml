@@ -348,10 +348,10 @@ components:
         text:
           type: string
           description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
-        image_path:
+        image_base64:
           type: string
           description: |
-            图像模板路径（相对或绝对路径），仅 image_* 动作必填：
+            图像模板 base64 编码，仅 image_* 动作必填：
             - image_click/image_wait/image_assert: 要匹配的图像模板
             - image_click_near_text: 要查找的图像模板
         index:
@@ -542,26 +542,26 @@ components:
 
   # ---------- 图像识别动作 ----------
   # image_click - 点击匹配的图像
-  # 示例 1: 点击 images/button.png 图像，匹配阈值 0.9
-  # {"action_type": "image_click", "image_path": "images/button.png", "threshold": 0.9}
+  # 示例 1: 点击图像，匹配阈值 0.9
+  # {"action_type": "image_click", "image_base64": "<base64_encoded_image>", "threshold": 0.9}
   # 示例 2: 点击第二个匹配的图像
-  # {"action_type": "image_click", "image_path": "images/button.png", "index": 1}
+  # {"action_type": "image_click", "image_base64": "<base64_encoded_image>", "index": 1}
 
   # image_wait - 等待图像出现
-  # 示例 1: 等待 images/icon.png 出现，最多等 8 秒
-  # {"action_type": "image_wait", "image_path": "images/icon.png", "timeout": 8000, "threshold": 0.85}
+  # 示例 1: 等待图像出现，最多等 8 秒
+  # {"action_type": "image_wait", "image_base64": "<base64_encoded_image>", "timeout": 8000, "threshold": 0.85}
   # 示例 2: 等待第二个匹配的图像出现
-  # {"action_type": "image_wait", "image_path": "images/icon.png", "index": 1}
+  # {"action_type": "image_wait", "image_base64": "<base64_encoded_image>", "index": 1}
 
   # image_assert - 断言图像存在
-  # 示例 1: 断言 images/logo.png 存在
-  # {"action_type": "image_assert", "image_path": "images/logo.png", "threshold": 0.8}
+  # 示例 1: 断言图像存在
+  # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "threshold": 0.8}
   # 示例 2: 断言第二个匹配的图像存在
-  # {"action_type": "image_assert", "image_path": "images/logo.png", "index": 1}
+  # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "index": 1}
 
   # image_click_near_text - 点击文本附近最近的图像
   # 示例: 点击"密码"文字附近 500 像素范围内的输入框图标
-  # {"action_type": "image_click_near_text", "image_path": "images/input_icon.png", "value": "密码", "end_x": 500}
+  # {"action_type": "image_click_near_text", "image_base64": "<base64_encoded_image>", "value": "密码", "end_x": 500}
 
   # ---------- 坐标动作 ----------
   # click - 点击指定坐标

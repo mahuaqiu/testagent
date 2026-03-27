@@ -114,7 +114,7 @@ class BaseActionExecutor(ActionExecutor):
         self,
         platform: "PlatformManager",
         source_bytes: bytes,
-        template_path: str,
+        template_base64: str,
         threshold: float = 0.8,
         index: int = 0
     ) -> Optional[tuple[int, int]]:
@@ -124,11 +124,11 @@ class BaseActionExecutor(ActionExecutor):
         Args:
             platform: 平台管理器
             source_bytes: 源图像数据
-            template_path: 模板图像路径
+            template_base64: 模板图像 base64 编码
             threshold: 匹配阈值
             index: 选择第几个匹配结果
 
         Returns:
             匹配中心坐标 (x, y)，未找到返回 None
         """
-        return platform._find_image_position(source_bytes, template_path, threshold, index)
+        return platform._find_image_position(source_bytes, template_base64, threshold, index)

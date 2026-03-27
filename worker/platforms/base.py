@@ -285,13 +285,13 @@ class PlatformManager(ABC):
                 return all_texts[index].center
         return None
 
-    def _find_image_position(self, source_bytes: bytes, template_path: str, threshold: float = 0.8, index: int = 0) -> Optional[tuple[int, int]]:
+    def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.8, index: int = 0) -> Optional[tuple[int, int]]:
         """
         在源图像中查找模板图像位置，支持 index 参数选择第几个匹配结果。
 
         Args:
             source_bytes: 源图像数据
-            template_path: 模板图像路径
+            template_base64: 模板图像 base64 编码
             threshold: 匹配阈值
             index: 选择第几个匹配结果（0=第一个，1=第二个，以此类推）
 
@@ -302,12 +302,12 @@ class PlatformManager(ABC):
             logger.error("OCR client not available")
             return None
 
-        if not os.path.exists(template_path):
-            logger.error(f"Template image not found: {template_path}")
+        if not template_base64:
+            logger.error("Template image base64 is empty")
             return None
 
-        with open(template_path, "rb") as f:
-            template_bytes = f.read()
+        # 解码 base64
+        template_bytes = self._base64_to_bytes(template_base64)
 
         if index == 0:
             # 使用原有的 find_image，只返回第一个结果

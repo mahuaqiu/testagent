@@ -29,12 +29,12 @@ class ImageClickAction(BaseActionExecutor):
         if error:
             return error
 
-        if not action.image_path:
+        if not action.image_base64:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="image_path is required",
+                error="image_base64 is required",
             )
 
         # 获取截图
@@ -44,7 +44,7 @@ class ImageClickAction(BaseActionExecutor):
         threshold = action.threshold if action.threshold is not None else 0.8
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
-            platform, screenshot, action.image_path, threshold, index
+            platform, screenshot, action.image_base64, threshold, index
         )
 
         if not position:
@@ -52,7 +52,7 @@ class ImageClickAction(BaseActionExecutor):
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found: {action.image_path}" + (f" at index {index}" if index > 0 else ""),
+                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
             )
 
         # 应用偏移
@@ -84,12 +84,12 @@ class ImageWaitAction(BaseActionExecutor):
         if error:
             return error
 
-        if not action.image_path:
+        if not action.image_base64:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="image_path is required",
+                error="image_base64 is required",
             )
 
         start_time = time.time()
@@ -100,7 +100,7 @@ class ImageWaitAction(BaseActionExecutor):
         while time.time() - start_time < timeout:
             screenshot = platform.take_screenshot(context)
             position = self._find_image_position(
-                platform, screenshot, action.image_path, threshold, index
+                platform, screenshot, action.image_base64, threshold, index
             )
 
             if position:
@@ -108,7 +108,7 @@ class ImageWaitAction(BaseActionExecutor):
                     number=0,
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
-                    output=f"Image appeared: {action.image_path}",
+                    output="Image appeared",
                 )
 
             time.sleep(0.5)
@@ -117,7 +117,7 @@ class ImageWaitAction(BaseActionExecutor):
             number=0,
             action_type=self.name,
             status=ActionStatus.FAILED,
-            error=f"Image not appeared within timeout: {action.image_path}",
+            error="Image not appeared within timeout",
         )
 
 
@@ -133,19 +133,19 @@ class ImageAssertAction(BaseActionExecutor):
         if error:
             return error
 
-        if not action.image_path:
+        if not action.image_base64:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="image_path is required",
+                error="image_base64 is required",
             )
 
         screenshot = platform.take_screenshot(context)
         threshold = action.threshold if action.threshold is not None else 0.8
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
-            platform, screenshot, action.image_path, threshold, index
+            platform, screenshot, action.image_base64, threshold, index
         )
 
         if position:
@@ -153,14 +153,14 @@ class ImageAssertAction(BaseActionExecutor):
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.SUCCESS,
-                output=f"Image found: {action.image_path}",
+                output="Image found",
             )
         else:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found: {action.image_path}" + (f" at index {index}" if index > 0 else ""),
+                error="Image not found" + (f" at index {index}" if index > 0 else ""),
             )
 
 
@@ -176,12 +176,12 @@ class ImageClickNearTextAction(BaseActionExecutor):
         if error:
             return error
 
-        if not action.image_path:
+        if not action.image_base64:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="image_path is required",
+                error="image_base64 is required",
             )
 
         if not action.value:
@@ -195,18 +195,8 @@ class ImageClickNearTextAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
-        # 读取模板图片
-        import os
-        if not os.path.exists(action.image_path):
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error=f"Template image not found: {action.image_path}",
-            )
-
-        with open(action.image_path, "rb") as f:
-            template_bytes = f.read()
+        # 解码 base64 模板图片
+        template_bytes = platform._base64_to_bytes(action.image_base64)
 
         # 调用 match_near_text
         threshold = action.threshold if action.threshold is not None else 0.8

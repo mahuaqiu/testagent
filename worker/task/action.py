@@ -68,7 +68,7 @@ class Action:
 
     action_type: str                         # 动作类型
     value: Optional[str] = None              # 文字/URL/按键值
-    image_path: Optional[str] = None         # 图像模板路径
+    image_base64: Optional[str] = None       # 图像模板 base64 编码
     offset: Optional[Dict[str, int]] = None  # 点击偏移 {"x": 10, "y": 5}
     threshold: float = 0.8                   # 图像匹配阈值
     timeout: int = 30000                     # 超时时间(ms)
@@ -100,7 +100,7 @@ class Action:
         return cls(
             action_type=data.get("action_type", ""),
             value=data.get("value"),
-            image_path=data.get("image_path"),
+            image_base64=data.get("image_base64"),
             offset=data.get("offset"),
             threshold=data.get("threshold", 0.8),
             timeout=data.get("timeout", 30000),
@@ -127,8 +127,8 @@ class Action:
 
         if self.value is not None:
             result["value"] = self.value
-        if self.image_path is not None:
-            result["image_path"] = self.image_path
+        if self.image_base64 is not None:
+            result["image_base64"] = self.image_base64
         if self.offset is not None:
             result["offset"] = self.offset
         if self.threshold != 0.8:

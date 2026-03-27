@@ -105,7 +105,7 @@ PlatformManager (抽象基类)
 | 参数 | 说明 | 适用动作 |
 |------|------|----------|
 | `value` | 文字/URL/按键值 | 所有 OCR 动作、press、navigate |
-| `image_path` | 图像模板路径 | image_* 动作 |
+| `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, image_click, image_wait, image_assert |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作 |
 | `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
@@ -120,7 +120,7 @@ PlatformManager (抽象基类)
 ```json
 {
   "action_type": "image_click_near_text",
-  "image_path": "templates/input_icon.png",
+  "image_base64": "<base64_encoded_image>",
   "value": "密码",
   "end_x": 500,  // max_distance，最大搜索距离（像素）
   "threshold": 0.8
