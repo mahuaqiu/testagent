@@ -102,29 +102,9 @@ class WebPlatformManager(PlatformManager):
         if not os.path.exists(default_dir):
             return
 
-        # 需要删除的表单/账号相关文件和目录
+        # 需要删除相关文件和目录
         form_items = [
-            "Cookies",                    # Cookie 文件
-            "Cookies-journal",
-            "Login Data",                 # 登录凭据（账号密码）
-            "Login Data-journal",
-            "Login Data For Account",
-            "Login Data For Account-journal",
-            "Web Data",                   # 表单自动填充数据
-            "Web Data-journal",
-            "Account Web Data",
-            "Account Web Data-journal",
-            "Local Storage",              # 本地存储（可能含账号信息）
-            "Session Storage",            # 会话存储
-            "IndexedDB",                  # 数据库存储
-            "History",                    # 浏览历史
-            "History-journal",
-            "Visited Links",              # 访问链接记录
-            "Top Sites",                  # 常访问站点
-            "Top Sites-journal",
-            "Preferences",                # 偏好设置（可能含登录状态）
-            "Secure Preferences",         # 安全偏好设置
-            "Network Action Predictor",   # 网络预测数据
+            "Local Storage"
         ]
 
         for item in form_items:
