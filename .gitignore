@@ -15,3 +15,4 @@ worker.log
 /data/browser_cache
 /data/chrome_profile
 /data
+worker/_version.py

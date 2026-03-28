@@ -91,9 +91,9 @@ if (-not (Test-Path $BuildDir)) {
     exit 1
 }
 
-# Create release package
+# Create release package (no version suffix)
 Write-Host "[6/7] Creating release package..."
-$PackageDir = "$OutputDir\test-worker-$Version"
+$PackageDir = "$OutputDir\test-worker"
 
 # Clean old release directory
 if (Test-Path $PackageDir) {
@@ -103,6 +103,11 @@ New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
 # Move build directory to package
 Move-Item "$BuildDir\*" $PackageDir
+
+# Clean up empty build directory
+if (Test-Path $BuildDir) {
+    Remove-Item -Path $BuildDir -Force -Recurse -ErrorAction SilentlyContinue
+}
 
 # Copy Playwright chromium to package
 Write-Host "Copying Playwright chromium..."
@@ -128,7 +133,7 @@ pause
 
 # Create README
 @"
-Test Worker v$Version - Windows
+Test Worker - Windows
 
 Usage:
   1. Edit config\worker.yaml to configure settings
