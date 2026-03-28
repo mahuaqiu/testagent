@@ -14,3 +14,4 @@ worker.log
 /build
 /data/browser_cache
 /data/chrome_profile
+/data

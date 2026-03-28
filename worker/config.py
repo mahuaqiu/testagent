@@ -88,7 +88,15 @@ class PlatformConfig:
     timeout: int = 30000
     ignore_https_errors: bool = True
     permissions: List[str] = field(default_factory=lambda: ["camera", "microphone"])
-    user_data_dir: str = "data/chrome_profile"  # 浏览器用户数据目录，用于缓存持久化
+    user_data_dir: str = "data/chrome_profile"  # 浏览器用户数据目录
+
+    # 启动前清理 Default 目录数据（保留 Cache 目录），避免账号缓存
+    clear_profile_on_start: bool = True
+
+    # 请求黑名单：拦截特定请求（如某些 JS 文件加载超时）
+    # 格式：[{"pattern": "uba.js", "action": "abort"}, {"pattern": "tinyReporter.min.js", "action": "abort"}]
+    # action 可选：abort（中止）、404（返回404）、empty（返回空响应）
+    request_blacklist: List[Dict[str, str]] = field(default_factory=list)
 
     # iOS 专用
     wda_base_port: int = 8100
@@ -110,6 +118,8 @@ class PlatformConfig:
             ignore_https_errors=data.get("ignore_https_errors", True),
             permissions=data.get("permissions", ["camera", "microphone"]),
             user_data_dir=data.get("user_data_dir", "data/chrome_profile"),
+            clear_profile_on_start=data.get("clear_profile_on_start", True),
+            request_blacklist=data.get("request_blacklist", []),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             u2_port=data.get("u2_port", 7912),

@@ -8,10 +8,12 @@ Web 平台执行引擎。
 import asyncio
 import concurrent.futures
 import logging
+import os
+import shutil
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
@@ -79,6 +81,67 @@ class WebPlatformManager(PlatformManager):
         self.ignore_https_errors = config.ignore_https_errors
         self.permissions = config.permissions
         self.user_data_dir = config.user_data_dir
+        self.clear_profile_on_start = config.clear_profile_on_start  # 启动前清理 Default 目录
+        self.request_blacklist = config.request_blacklist  # 请求黑名单
+
+    def _get_app_dir(self) -> str:
+        """获取应用目录（打包后使用 EXE 目录）。"""
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        # 开发模式使用项目根目录
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _get_user_data_dir(self) -> str:
+        """获取用户数据目录的绝对路径。"""
+        app_dir = self._get_app_dir()
+        return os.path.join(app_dir, self.user_data_dir)
+
+    def _clear_profile_data(self, user_data_dir: str) -> None:
+        """清理表单相关数据（保留 HTTP 缓存和其他非敏感数据）。"""
+        default_dir = os.path.join(user_data_dir, "Default")
+        if not os.path.exists(default_dir):
+            return
+
+        # 需要删除的表单/账号相关文件和目录
+        form_items = [
+            "Cookies",                    # Cookie 文件
+            "Cookies-journal",
+            "Login Data",                 # 登录凭据（账号密码）
+            "Login Data-journal",
+            "Login Data For Account",
+            "Login Data For Account-journal",
+            "Web Data",                   # 表单自动填充数据
+            "Web Data-journal",
+            "Account Web Data",
+            "Account Web Data-journal",
+            "Local Storage",              # 本地存储（可能含账号信息）
+            "Session Storage",            # 会话存储
+            "IndexedDB",                  # 数据库存储
+            "History",                    # 浏览历史
+            "History-journal",
+            "Visited Links",              # 访问链接记录
+            "Top Sites",                  # 常访问站点
+            "Top Sites-journal",
+            "Preferences",                # 偏好设置（可能含登录状态）
+            "Secure Preferences",         # 安全偏好设置
+            "Network Action Predictor",   # 网络预测数据
+        ]
+
+        for item in form_items:
+            item_path = os.path.join(default_dir, item)
+            if os.path.exists(item_path):
+                try:
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                    else:
+                        os.remove(item_path)
+                    logger.debug(f"Removed form data: {item}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove {item}: {e}")
+
+        logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
+
+        logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
 
     @property
     def platform(self) -> str:
@@ -101,12 +164,18 @@ class WebPlatformManager(PlatformManager):
 
     async def _async_start(self) -> None:
         """异步启动 Playwright 和浏览器（使用持久化用户数据目录）。"""
-        import os
         self._playwright = await async_playwright().start()
 
+        # 获取用户数据目录
+        user_data_dir = self._get_user_data_dir()
+
         # 确保用户数据目录存在
-        if not os.path.exists(self.user_data_dir):
-            os.makedirs(self.user_data_dir, exist_ok=True)
+        if not os.path.exists(user_data_dir):
+            os.makedirs(user_data_dir, exist_ok=True)
+
+        # 如果配置了启动前清理，删除 Default 目录数据（保留 Cache）
+        if self.clear_profile_on_start:
+            self._clear_profile_data(user_data_dir)
 
         # 选择浏览器类型
         if self.browser_type == "firefox":
@@ -126,9 +195,55 @@ class WebPlatformManager(PlatformManager):
             context_options["permissions"] = self.permissions
 
         self._browser_context = await browser_launcher.launch_persistent_context(
-            user_data_dir=self.user_data_dir,
+            user_data_dir=user_data_dir,
             **context_options
         )
+
+        # 在 context 级别设置请求黑名单拦截（对所有页面生效）
+        if self.request_blacklist:
+            await self._setup_context_blacklist()
+
+        # 关闭可能已存在的空白页面，避免它们加载任何内容
+        for page in self._browser_context.pages:
+            try:
+                # 如果页面是空白页（about:blank），可以保留
+                if page.url == "about:blank":
+                    continue
+                await page.close()
+                logger.info("Closed existing page before route setup")
+            except Exception as e:
+                logger.warning(f"Failed to close existing page: {e}")
+
+        logger.info(f"Browser started, user_data_dir={user_data_dir}, clear_profile={self.clear_profile_on_start}")
+
+    async def _setup_context_blacklist(self) -> None:
+        """在 context 级别设置请求黑名单拦截。"""
+        # 拦截所有请求，然后在 handler 中判断
+        async def handler(route):
+            url = route.request.url
+            # 检查是否匹配黑名单
+            for item in self.request_blacklist:
+                pattern = item.get("pattern", "")
+                action = item.get("action", "abort")
+                if pattern in url:
+                    if action == "abort":
+                        logger.info(f"[Blacklist] Aborted: {url}")
+                        await route.abort()
+                        return
+                    elif action == "404":
+                        logger.info(f"[Blacklist] 404: {url}")
+                        await route.fulfill(status=404, body="Not Found")
+                        return
+                    elif action == "empty":
+                        logger.info(f"[Blacklist] Empty: {url}")
+                        await route.fulfill(status=200, body="", content_type="application/javascript")
+                        return
+            # 不在黑名单中，继续请求
+            await route.continue_()
+
+        await self._browser_context.route("**", handler)
+        patterns = [item.get("pattern", "") for item in self.request_blacklist]
+        logger.info(f"Set up context blacklist拦截所有请求，黑名单: {patterns}")
 
     def stop(self) -> None:
         """停止浏览器和 Playwright。"""
@@ -362,44 +477,92 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 平台特有动作实现 ==========
 
+    def _browser_context_is_valid(self) -> bool:
+        """检查浏览器上下文是否仍然有效（未被手动关闭）。"""
+        if not self._browser_context:
+            return False
+        try:
+            # 直接尝试创建一个新页面来验证 context 是否有效
+            # 这是最可靠的方式
+            test_page = _run_async(self._browser_context.new_page())
+            # 如果成功，立即关闭测试页面
+            _run_async(test_page.close())
+            return True
+        except Exception as e:
+            logger.info(f"Browser context check failed: {e}")
+            return False
+
+    def _reset_browser_state(self) -> None:
+        """重置浏览器状态，准备重新启动。"""
+        self._started = False
+        self._browser_context = None
+        self._playwright = None
+        self._sessions.clear()
+        self._current_page = None
+
     def _action_start_app(self, action: Action) -> ActionResult:
         """启动/新建浏览器页面。"""
         browser_name = action.value or self.browser_type
 
+        # 尝试复用已有会话
         if self.has_active_session():
             existing_page = self.get_session_context()
             if existing_page:
-                self._current_page = existing_page
-                logger.info("Reusing existing browser session for start_app")
-                return ActionResult(
-                    number=0,
-                    action_type="start_app",
-                    status=ActionStatus.SUCCESS,
-                    output=f"Reused existing page for browser: {browser_name}",
-                    context=existing_page,
-                )
+                try:
+                    if not existing_page.is_closed():
+                        self._current_page = existing_page
+                        logger.info("Reusing existing browser session for start_app")
+                        return ActionResult(
+                            number=0,
+                            action_type="start_app",
+                            status=ActionStatus.SUCCESS,
+                            output=f"Reused existing page for browser: {browser_name}",
+                            context=existing_page,
+                        )
+                except Exception:
+                    logger.info("Existing page check failed, will restart browser")
 
-        if not self._browser_context:
-            try:
-                _run_async(self._async_start())
-                self._started = True
-                logger.info(f"Browser started via start_app: {browser_name}")
-            except Exception as e:
-                return ActionResult(
-                    number=0,
-                    action_type="start_app",
-                    status=ActionStatus.FAILED,
-                    error=f"Failed to start browser: {e}",
-                )
+        # 启动或重试逻辑（最多 2 次）
+        max_retries = 2
+        for retry in range(max_retries):
+            # 检查并重置无效的 context
+            if not self._browser_context_is_valid():
+                logger.info(f"Browser context is invalid, resetting... (retry {retry + 1})")
+                self._reset_browser_state()
 
-        if self._browser_context:
+            # 启动浏览器
+            if not self._browser_context:
+                try:
+                    _run_async(self._async_start())
+                    self._started = True
+                    logger.info(f"Browser started: {browser_name}")
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        logger.warning(f"Browser start failed, retrying: {e}")
+                        continue
+                    return ActionResult(
+                        number=0,
+                        action_type="start_app",
+                        status=ActionStatus.FAILED,
+                        error=f"Failed to start browser: {e}",
+                    )
+
+            # 创建或获取页面
             try:
-                # 使用已有的第一个页面，避免创建多余的空白页面
                 pages = self._browser_context.pages
-                if pages:
-                    new_page = pages[0]
-                else:
+                # 找一个未关闭的页面
+                new_page = None
+                for p in pages:
+                    try:
+                        if not p.is_closed():
+                            new_page = p
+                            break
+                    except Exception:
+                        continue
+
+                if not new_page:
                     new_page = _run_async(self._browser_context.new_page())
+
                 new_page.set_default_timeout(self.timeout)
 
                 self._sessions["default"] = {
@@ -412,23 +575,29 @@ class WebPlatformManager(PlatformManager):
                     number=0,
                     action_type="start_app",
                     status=ActionStatus.SUCCESS,
-                    output=f"Started new page for browser: {browser_name}",
+                    output=f"Started page for browser: {browser_name}",
                     context=new_page,
                 )
             except Exception as e:
+                logger.warning(f"Failed to get/create page: {e}")
+                # 创建失败，重置后重试
+                self._reset_browser_state()
+                if retry < max_retries - 1:
+                    logger.info("Retrying...")
+                    continue
                 return ActionResult(
                     number=0,
                     action_type="start_app",
                     status=ActionStatus.FAILED,
                     error=f"Failed to start app: {e}",
                 )
-        else:
-            return ActionResult(
-                number=0,
-                action_type="start_app",
-                status=ActionStatus.FAILED,
-                error="Browser not started, please call start() first",
-            )
+
+        return ActionResult(
+            number=0,
+            action_type="start_app",
+            status=ActionStatus.FAILED,
+            error="Unexpected state in start_app",
+        )
 
     def _action_stop_app(self, action: Action) -> ActionResult:
         """关闭浏览器。"""

@@ -26,10 +26,19 @@ platforms:
     session_timeout: 300            # 会话超时(秒)
     screenshot_dir: data/screenshots
     ignore_https_errors: true       # 忽略 HTTPS 证书错误
-    user_data_dir: data/chrome_profile  # 浏览器用户数据目录，保留缓存/Cookie/登录状态
+    user_data_dir: data/chrome_profile  # 浏览器用户数据目录
     permissions:                    # 网页权限（摄像头、麦克风等）
       - camera
       - microphone
+    # 启动前清理 Default 目录数据（保留 Cache 目录），避免账号缓存
+    clear_profile_on_start: true
+    # 请求黑名单：拦截特定请求（如某些 JS 文件加载超时）
+    # action 可选值：abort（中止请求）、404（返回404）、empty（返回空内容）
+    request_blacklist:
+      - pattern: "uba.js"
+        action: "404"
+      - pattern: "tinyReporter.min.js"
+        action: "404"
 
   android:
     enabled: null                   # 仅 Windows
@@ -67,3 +76,4 @@ logging:
   file: null                        # 日志文件路径，null 表示使用默认路径（exe同目录/worker.log）
   max_size: 52428800                # 单文件最大字节数，默认 50MB
   backup_count: 5                   # 保留的备份文件数量
+  
