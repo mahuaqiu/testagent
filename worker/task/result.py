@@ -41,6 +41,10 @@ class ActionResult:
     error: Optional[str] = None
     screenshot: Optional[str] = None  # base64 或文件路径
     context: Any = None  # 执行后更新的 context（如 start_app 后返回新 page）
+    # cmd_exec 专用字段
+    exit_code: Optional[int] = None  # 命令退出码
+    stdout: Optional[str] = None     # 标准输出
+    stderr: Optional[str] = None     # 标准错误
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
@@ -54,6 +58,9 @@ class ActionResult:
             error=data.get("error"),
             screenshot=data.get("screenshot"),
             context=data.get("context"),
+            exit_code=data.get("exit_code"),
+            stdout=data.get("stdout"),
+            stderr=data.get("stderr"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -70,6 +77,12 @@ class ActionResult:
             result["error"] = self.error
         if self.screenshot is not None:
             result["screenshot"] = self.screenshot
+        if self.exit_code is not None:
+            result["exit_code"] = self.exit_code
+        if self.stdout is not None:
+            result["stdout"] = self.stdout
+        if self.stderr is not None:
+            result["stderr"] = self.stderr
         # context 不需要序列化到结果中
         return result
 
