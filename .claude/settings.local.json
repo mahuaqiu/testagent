@@ -57,7 +57,9 @@
       "Bash(timeout 10 ./test-web-fixed.exe)",
       "Bash(.venv/Scripts/python.exe -m ruff check worker/actions/image.py worker/platforms/base.py worker/task/action.py worker/server.py)",
       "Bash(source venv/Scripts/activate)",
-      "Bash(grep -l meeting.huaweicloud D:/code/autotest/data/chrome_profile/Default/Cache/Cache_Data/*)"
+      "Bash(grep -l meeting.huaweicloud D:/code/autotest/data/chrome_profile/Default/Cache/Cache_Data/*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pytest tests/ -v)"
     ]
   }
 }

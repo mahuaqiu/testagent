@@ -31,6 +31,7 @@ from worker.actions.coordinate import (
     ScreenshotAction,
     WaitAction,
 )
+from worker.actions.cmd_exec import CmdExecAction
 
 # 注册所有 Actions
 def _register_all_actions():
@@ -56,6 +57,9 @@ def _register_all_actions():
     ActionRegistry.register(PressAction())
     ActionRegistry.register(ScreenshotAction())
     ActionRegistry.register(WaitAction())
+
+    # Cmd Exec Action
+    ActionRegistry.register(CmdExecAction())
 
 
 # 模块加载时自动注册
@@ -86,4 +90,6 @@ __all__ = [
     "PressAction",
     "ScreenshotAction",
     "WaitAction",
+    # Cmd Exec Action
+    "CmdExecAction",
 ]

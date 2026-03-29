@@ -300,6 +300,7 @@ components:
             - start_app
             - stop_app
             - navigate
+            - cmd_exec
           description: |
             动作类型，分为以下几类：
 
@@ -329,6 +330,7 @@ components:
             - start_app: 启动应用/浏览器
             - stop_app: 关闭应用/浏览器
             - navigate: 跳转 URL（Web 专用）
+            - cmd_exec: 在宿主机执行 shell/cmd 命令
         value:
           type: string
           description: |
@@ -345,6 +347,7 @@ components:
               - iOS: Bundle ID，如 "com.example.app"
             - stop_app: 应用包名（可选，不填则关闭当前应用）
             - navigate: 要跳转的 URL
+            - cmd_exec: 要执行的命令字符串，如 "echo hello" 或 "dir C:\\Users"
         text:
           type: string
           description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
@@ -501,6 +504,15 @@ components:
         screenshot:
           type: string
           description: "截图（base64 或路径）"
+        exit_code:
+          type: integer
+          description: "命令退出码（仅 cmd_exec 动作返回），0 表示成功"
+        stdout:
+          type: string
+          description: "命令标准输出（仅 cmd_exec 动作返回）"
+        stderr:
+          type: string
+          description: "命令标准错误输出（仅 cmd_exec 动作返回）"
 
   # ==================== 动作类型详细示例 ====================
   # 以下为各动作类型的完整传参示例，供调用方参考
@@ -616,3 +628,13 @@ components:
   # navigate - 跳转 URL（仅 Web 平台）
   # 示例: 跳转到示例网站
   # {"action_type": "navigate", "value": "https://example.com"}
+
+  # cmd_exec - 在宿主机执行命令
+  # 示例 1: 执行简单命令
+  # {"action_type": "cmd_exec", "value": "echo hello"}
+  # 示例 2: 执行带超时的命令（60 秒）
+  # {"action_type": "cmd_exec", "value": "python script.py", "timeout": 60000}
+  # 示例 3: Windows 列出目录
+  # {"action_type": "cmd_exec", "value": "dir C:\\Users"}
+  # 示例 4: Mac/Linux 查看文件
+  # {"action_type": "cmd_exec", "value": "ls -la /tmp"}

@@ -31,7 +31,8 @@ class PlatformManager(ABC):
     BASE_SUPPORTED_ACTIONS: Set[str] = {
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
         "image_click", "image_wait", "image_assert", "image_click_near_text",
-        "click", "swipe", "input", "press", "screenshot", "wait"
+        "click", "swipe", "input", "press", "screenshot", "wait",
+        "cmd_exec",  # 宿主机命令执行
     }
 
     # 子类可覆盖，定义平台特有动作
