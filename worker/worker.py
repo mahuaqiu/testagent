@@ -368,12 +368,21 @@ class Worker:
         使用新格式上报设备信息。
 
         用于定期上报和设备变化时上报。
+        调用 POST /api/core/env/register 接口。
         """
         if not self.reporter:
             return
 
-        data = self.get_devices()
-        self.reporter.report_devices(data)
+        # 获取设备信息
+        devices_data = self.get_devices()
+
+        # 调用新的注册接口
+        self.reporter.register_env(
+            ip=devices_data["ip"],
+            port=devices_data["port"],
+            devices=devices_data["devices"],
+            version=self._get_version(),
+        )
 
     def _start_device_monitor(self) -> None:
         """启动设备监控（已由 DeviceMonitor 模块接管）。"""

@@ -3,7 +3,7 @@
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 import httpx
 
@@ -30,6 +30,7 @@ class Reporter:
         self.config = config
         self.platform_api = config.platform_api
         self.worker_id = config.id
+        self.namespace = config.namespace
 
         self._client = httpx.Client(timeout=10.0)
         self._enabled = bool(self.platform_api)
@@ -41,6 +42,61 @@ class Reporter:
     def enabled(self) -> bool:
         """上报是否启用。"""
         return self._enabled
+
+    def register_env(
+        self,
+        ip: str,
+        port: int,
+        devices: Dict[str, List[str]],
+        version: Optional[str] = None,
+    ) -> bool:
+        """
+        调用设备注册接口（新格式）。
+
+        Args:
+            ip: 机器 IP 地址
+            port: 机器端口
+            devices: 设备列表，key 为 device_type，value 为 device_sn 列表
+            version: 机器版本（可选）
+
+        Returns:
+            bool: 注册是否成功
+        """
+        if not self._enabled:
+            logger.debug("Reporting disabled, skipping env register")
+            return True
+
+        try:
+            url = f"{self.platform_api}/api/core/env/register"
+            payload = {
+                "ip": ip,
+                "port": str(port),
+                "namespace": self.namespace,
+                "version": version,
+                "devices": devices,
+            }
+
+            response = self._client.post(
+                url,
+                json=payload,
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            if result.get("status") == "success":
+                logger.info(f"Env register sent successfully to {url}")
+                return True
+            else:
+                logger.error(f"Env register failed: {result.get('result', 'Unknown error')}")
+                return False
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to register env (HTTP {e.response.status_code}): {e}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to register env: {e}")
+            return False
 
     def report_full(self, report: WorkerReport) -> bool:
         """

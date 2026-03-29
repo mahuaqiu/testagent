@@ -18,13 +18,14 @@ class WorkerConfig:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     ip: Optional[str] = None  # 指定 IP 地址，None 表示自动获取
     port: int = 8080
-    device_check_interval: int = 300      # 设备检测间隔(秒)，改为5分钟
-    service_retry_count: int = 3          # 服务启动重试次数
-    service_retry_interval: int = 10      # 重试间隔(秒)
+    namespace: str = "public"               # 命名空间，用于分类 Worker
+    device_check_interval: int = 300        # 设备检测间隔(秒)，改为5分钟
+    service_retry_count: int = 3            # 服务启动重试次数
+    service_retry_interval: int = 10        # 重试间隔(秒)
     action_step_delay: float = 0.5  # 动作间隔延迟(秒)
 
     # 外部服务地址
-    platform_api: str = ""
+    platform_api: str = "http://192.168.0.102:8000"
     ocr_service: str = ""
 
     # 平台配置
@@ -55,11 +56,12 @@ class WorkerConfig:
             id=worker_data.get("id") or str(uuid.uuid4())[:8],
             ip=worker_data.get("ip"),
             port=worker_data.get("port", 8080),
+            namespace=worker_data.get("namespace", "public"),
             device_check_interval=worker_data.get("device_check_interval", 300),
             service_retry_count=worker_data.get("service_retry_count", 3),
             service_retry_interval=worker_data.get("service_retry_interval", 10),
             action_step_delay=worker_data.get("action_step_delay", 0.5),
-            platform_api=external.get("platform_api", ""),
+            platform_api=external.get("platform_api", "http://192.168.0.102:8000"),
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
             log_level=logging_cfg.get("level", "INFO"),
