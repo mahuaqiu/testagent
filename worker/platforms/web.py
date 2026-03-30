@@ -505,6 +505,7 @@ class WebPlatformManager(PlatformManager):
         self._playwright = None
         self._sessions.clear()
         self._current_page = None
+        self._captured_tokens.clear()
 
     def _action_start_app(self, action: Action) -> ActionResult:
         """启动/新建浏览器页面。"""
