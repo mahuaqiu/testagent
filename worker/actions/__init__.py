@@ -32,6 +32,7 @@ from worker.actions.coordinate import (
     WaitAction,
 )
 from worker.actions.cmd_exec import CmdExecAction
+from worker.actions.web_token import GetTokenAction
 
 # 注册所有 Actions
 def _register_all_actions():
@@ -60,6 +61,9 @@ def _register_all_actions():
 
     # Cmd Exec Action
     ActionRegistry.register(CmdExecAction())
+
+    # Web Token Action
+    ActionRegistry.register(GetTokenAction())
 
 
 # 模块加载时自动注册
@@ -92,4 +96,6 @@ __all__ = [
     "WaitAction",
     # Cmd Exec Action
     "CmdExecAction",
+    # Web Token Action
+    "GetTokenAction",
 ]
