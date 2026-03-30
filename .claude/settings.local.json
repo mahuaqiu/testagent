@@ -59,7 +59,10 @@
       "Bash(source venv/Scripts/activate)",
       "Bash(grep -l meeting.huaweicloud D:/code/autotest/data/chrome_profile/Default/Cache/Cache_Data/*)",
       "Bash(source .venv/bin/activate)",
-      "Bash(pytest tests/ -v)"
+      "Bash(pytest tests/ -v)",
+      "Bash(git show:*)",
+      "Bash(.venv/Scripts/python -m py_compile worker/actions/__init__.py)",
+      "Bash(.venv/Scripts/activate)"
     ]
   }
 }
