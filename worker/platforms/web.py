@@ -65,7 +65,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app"}
+    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -83,6 +83,10 @@ class WebPlatformManager(PlatformManager):
         self.user_data_dir = config.user_data_dir
         self.clear_profile_on_start = config.clear_profile_on_start  # 启动前清理 Default 目录
         self.request_blacklist = config.request_blacklist  # 请求黑名单
+
+        # Token 捕获
+        self._token_headers: List[str] = config.token_headers or []
+        self._captured_tokens: Dict[str, str] = {}  # 存储捕获的 token
 
     def _get_app_dir(self) -> str:
         """获取应用目录（打包后使用 EXE 目录）。"""
@@ -194,7 +198,29 @@ class WebPlatformManager(PlatformManager):
             except Exception as e:
                 logger.warning(f"Failed to close existing page: {e}")
 
+        # 设置 Token 捕获监听
+        if self._token_headers:
+            await self._setup_token_capture()
+
         logger.info(f"Browser started, user_data_dir={user_data_dir}, clear_profile={self.clear_profile_on_start}")
+
+    async def _setup_token_capture(self) -> None:
+        """设置响应头 Token 捕获监听。"""
+        async def on_response(response):
+            headers = response.headers
+            for header_name in self._token_headers:
+                # HTTP headers 在 Playwright 中是小写的
+                value = headers.get(header_name.lower())
+                if value:
+                    self._captured_tokens[header_name] = value
+                    logger.debug(f"Captured token: {header_name}={value}")
+
+        self._browser_context.on("response", on_response)
+        logger.info(f"Token capture enabled for headers: {self._token_headers}")
+
+    def get_captured_tokens(self) -> Dict[str, str]:
+        """返回捕获的 tokens dict 副本。"""
+        return dict(self._captured_tokens)
 
     async def _setup_context_blacklist(self) -> None:
         """在 context 级别设置请求黑名单拦截。"""
