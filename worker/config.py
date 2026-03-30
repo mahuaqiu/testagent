@@ -100,6 +100,9 @@ class PlatformConfig:
     # action 可选：abort（中止）、404（返回404）、empty（返回空响应）
     request_blacklist: List[Dict[str, str]] = field(default_factory=list)
 
+    # Web 专用 - Token 捕获
+    token_headers: List[str] = field(default_factory=list)  # 要监听的 token header 名称列表
+
     # iOS 专用
     wda_base_port: int = 8100
     wda_ipa_path: str = "wda/WebDriverAgent.ipa"
@@ -122,6 +125,7 @@ class PlatformConfig:
             user_data_dir=data.get("user_data_dir", "data/chrome_profile"),
             clear_profile_on_start=data.get("clear_profile_on_start", True),
             request_blacklist=data.get("request_blacklist", []),
+            token_headers=data.get("token_headers", []),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             u2_port=data.get("u2_port", 7912),
