@@ -445,6 +445,8 @@ class Worker:
     def _on_device_change(self, devices: Dict) -> None:
         """设备状态变更回调。"""
         logger.info(f"Device status changed: {devices}")
+        # 设备变化时重新上报
+        self._report_devices()
 
     # ========== API 方法 ==========
 
