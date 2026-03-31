@@ -107,7 +107,7 @@ PlatformManager (抽象基类)
 | `value` | 文字/URL/按键值 | 所有 OCR 动作、press、navigate |
 | `x`, `y` | 目标坐标 | click, move, swipe, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
-| `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, image_click, image_wait, image_assert |
+| `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, image_click, image_wait, image_assert, image_move |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作、move 类动作 |
 | `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
