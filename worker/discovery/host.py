@@ -253,6 +253,75 @@ class HostDiscoverer:
             display_scale=scale,
         )
 
+    @staticmethod
+    def get_mac_address() -> str:
+        """
+        获取本机首选 MAC 地址。
+
+        优先选择有 IPv4 地址且非虚拟的网卡 MAC 地址。
+
+        Returns:
+            str: MAC 地址（格式：AA:BB:CC:DD:EE:FF），获取失败返回空字符串
+        """
+        try:
+            # 获取所有网络接口
+            net_if_addrs = psutil.net_if_addrs()
+            net_if_stats = psutil.net_if_stats()
+
+            # 按优先级选择网卡：
+            # 1. 有 IPv4 地址（非 127.0.0.1）
+            # 2. 状态为 up
+            # 3. 非虚拟网卡（排除明显的虚拟网卡名称）
+            virtual_keywords = ['virtual', 'vmware', 'vbox', 'hyper-v', 'loopback', 'bluetooth', 'tunnel']
+
+            for interface, addrs in net_if_addrs.items():
+                # 检查是否为虚拟网卡
+                is_virtual = any(kw in interface.lower() for kw in virtual_keywords)
+                if is_virtual:
+                    continue
+
+                # 检查网卡状态
+                stats = net_if_stats.get(interface)
+                if not stats or not stats.isup:
+                    continue
+
+                # 检查是否有 IPv4 地址（非回环）
+                has_ipv4 = False
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        if addr.address != '127.0.0.1':
+                            has_ipv4 = True
+                            break
+
+                if not has_ipv4:
+                    continue
+
+                # 获取 MAC 地址
+                for addr in addrs:
+                    # AF_LINK (macOS) 或 AF_PACKET (Linux) 或 -1 (Windows psutil 特殊值)
+                    if hasattr(socket, 'AF_LINK') and addr.family == socket.AF_LINK:
+                        return addr.address.upper()
+                    elif hasattr(socket, 'AF_PACKET') and addr.family == socket.AF_PACKET:
+                        return addr.address.upper()
+                    elif addr.family == -1:  # Windows psutil MAC 地址
+                        return addr.address.upper()
+
+            # 如果没有找到合适的，尝试获取第一个有 MAC 地址的网卡
+            for interface, addrs in net_if_addrs.items():
+                for addr in addrs:
+                    if addr.family == -1 or \
+                       (hasattr(socket, 'AF_LINK') and addr.family == socket.AF_LINK) or \
+                       (hasattr(socket, 'AF_PACKET') and addr.family == socket.AF_PACKET):
+                        mac = addr.address.upper()
+                        # 排除空 MAC 或全 0 MAC
+                        if mac and mac != '00:00:00:00:00:00':
+                            return mac
+
+        except Exception as e:
+            logger.warning(f"Failed to get MAC address: {e}")
+
+        return ""
+
     @classmethod
     def get_supported_platforms(cls) -> List[str]:
         """

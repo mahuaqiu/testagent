@@ -3,11 +3,32 @@ Worker 配置管理模块。
 """
 
 import os
-import uuid
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 
 import yaml
+
+from worker.discovery.host import HostDiscoverer
+
+
+def _generate_worker_id() -> str:
+    """
+    生成 Worker ID。
+
+    使用本机 MAC 地址作为唯一标识，去掉冒号分隔符。
+
+    Returns:
+        str: Worker ID，格式为 MAC 地址去掉冒号（如 AABBCCDDEEFF）
+    """
+    mac = HostDiscoverer.get_mac_address()
+    if mac:
+        # 去掉冒号分隔符，得到纯 MAC 地址字符串
+        return mac.replace(":", "").replace("-", "")
+    else:
+        # 无法获取 MAC 时，使用 hostname 的哈希作为后备
+        import socket
+        hostname = socket.gethostname()
+        return hostname[:8].lower()
 
 
 @dataclass
@@ -15,7 +36,7 @@ class WorkerConfig:
     """Worker 配置。"""
 
     # Worker 基础配置
-    id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    id: str = field(default_factory=_generate_worker_id)
     ip: Optional[str] = None  # 指定 IP 地址，None 表示自动获取
     port: int = 8080
     namespace: str = "public"               # 命名空间，用于分类 Worker
@@ -53,7 +74,7 @@ class WorkerConfig:
         image_matching = data.get("image_matching", {})
 
         return cls(
-            id=worker_data.get("id") or str(uuid.uuid4())[:8],
+            id=worker_data.get("id") or _generate_worker_id(),
             ip=worker_data.get("ip"),
             port=worker_data.get("port", 8080),
             namespace=worker_data.get("namespace", "public"),
