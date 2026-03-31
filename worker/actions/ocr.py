@@ -282,3 +282,53 @@ class OcrPasteAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Pasted at ({x}, {y})",
         )
+
+
+class OcrMoveAction(BaseActionExecutor):
+    """OCR 定位后移动鼠标。"""
+
+    name = "ocr_move"
+    requires_ocr = True
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 查找文字位置
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(
+            platform, screenshot, action.value, action.match_mode, index
+        )
+
+        if not position:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 移动鼠标（捕获移动端不支持异常）
+        try:
+            platform.move(x, y, context)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Moved to ({x}, {y})",
+            )
+        except NotImplementedError as e:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
