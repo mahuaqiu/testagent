@@ -53,6 +53,8 @@
 | `index` | int | 否 | 选择第几个匹配结果（默认 0） |
 | `offset` | dict | 否 | 坐标偏移 `{"x": 10, "y": 5}` |
 
+> **注意**：目标坐标由图像匹配自动计算，无需用户指定 `x/y`。
+
 **示例**：
 ```json
 {
@@ -75,6 +77,8 @@
 | `match_mode` | string | 否 | OCR 匹配模式（默认 exact） |
 | `index` | int | 否 | 选择第几个匹配结果（默认 0） |
 | `offset` | dict | 否 | 坐标偏移 `{"x": 10, "y": 5}` |
+
+> **注意**：目标坐标由 OCR 定位自动计算，无需用户指定 `x/y`。
 
 **示例**：
 ```json
@@ -103,9 +107,12 @@
 | `worker/actions/coordinate.py` | 修改 | 添加 `MoveAction` 执行器 |
 | `worker/actions/image.py` | 修改 | 添加 `ImageMoveAction` 执行器 |
 | `worker/actions/ocr.py` | 修改 | 添加 `OcrMoveAction` 执行器 |
-| `worker/actions/__init__.py` | 修改 | 注册三个新 Action |
+| `worker/actions/__init__.py` | 修改 | 注册三个新 Action；更新 `__all__` 列表 |
+| `CLAUDE.md` | 修改 | 更新动作类型说明，添加三个新 action |
 
 ---
+
+**关于 ActionType 枚举**：`worker/task/action.py` 中定义的 `ActionType` 枚举主要用于文档目的，实际执行使用 `action.action_type` 字符串字段。本次修改不强制要求更新枚举，但可选择添加 `MOVE`、`IMAGE_MOVE`、`OCR_MOVE` 以保持文档完整性。
 
 ### 1. 平台基类接口
 
@@ -334,16 +341,44 @@ class OcrMoveAction(BaseActionExecutor):
 
 ### 5. Action 注册
 
-在 `worker/actions/__init__.py` 注册三个新 Action：
+在 `worker/actions/__init__.py` 中：
 
+1. **添加导入**：
 ```python
 from worker.actions.coordinate import MoveAction
 from worker.actions.image import ImageMoveAction
 from worker.actions.ocr import OcrMoveAction
+```
 
+2. **在 `_register_all_actions()` 函数中注册**：
+```python
+# Move Actions（在 Coordinate Actions 部分添加）
 ActionRegistry.register(MoveAction())
+
+# Image Move Action（在 Image Actions 部分添加）
 ActionRegistry.register(ImageMoveAction())
+
+# OCR Move Action（在 OCR Actions 部分添加）
 ActionRegistry.register(OcrMoveAction())
+```
+
+3. **更新 `__all__` 列表**：
+```python
+# Coordinate Actions
+"ClickAction",
+"MoveAction",  # 新增
+"InputAction",
+...
+
+# Image Actions
+"ImageClickAction",
+"ImageMoveAction",  # 新增
+...
+
+# OCR Actions
+"OcrClickAction",
+"OcrMoveAction",  # 新增
+...
 ```
 
 ---
