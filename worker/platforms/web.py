@@ -399,6 +399,12 @@ class WebPlatformManager(PlatformManager):
         if page:
             _run_async(page.mouse.click(x, y))
 
+    def move(self, x: int, y: int, context: Any = None) -> None:
+        """移动鼠标到指定坐标。"""
+        page = context or self._current_page
+        if page:
+            _run_async(page.mouse.move(x, y))
+
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本。"""
         page = context or self._current_page
