@@ -233,3 +233,62 @@ class ImageClickNearTextAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) near text \"{action.value}\"",
         )
+
+
+class ImageMoveAction(BaseActionExecutor):
+    """图像匹配后移动鼠标。"""
+
+    name = "image_move"
+    requires_ocr = True
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        if not action.image_base64:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="image_base64 is required",
+            )
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 查找图像位置
+        threshold = action.threshold if action.threshold is not None else 0.8
+        index = action.index if action.index is not None else 0
+        position = self._find_image_position(
+            platform, screenshot, action.image_base64, threshold, index
+        )
+
+        if not position:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 移动鼠标（捕获移动端不支持异常）
+        try:
+            platform.move(x, y, context)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Moved to ({x}, {y})",
+            )
+        except NotImplementedError as e:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
