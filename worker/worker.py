@@ -598,33 +598,83 @@ class Worker:
         """
         检查任务是否需要创建 context。
 
-        stop_app 动作不需要 context。
-        start_app 动作会自己创建 context，不需要预先创建。
+        以下情况不需要 context：
+        1. 任务只有 stop_app 动作
+        2. 任务中所有动作都不需要 context（如 get_token）
+        3. 任务包含 start_app 动作（由 start_app 自己创建 context）
         """
         if not task.actions:
             return True
+
+        from worker.actions import ActionRegistry
+
         # 如果任务只有 stop_app，则不需要 context
-        stop_app_only = all(a.action_type == "stop_app" for a in task.actions)
-        if stop_app_only:
+        if all(a.action_type == "stop_app" for a in task.actions):
             return False
+
         # 如果任务包含 start_app，不预先创建 context（由 start_app 自己创建）
-        has_start_app = any(a.action_type == "start_app" for a in task.actions)
-        if has_start_app:
+        if any(a.action_type == "start_app" for a in task.actions):
             return False
+
+        # 检查所有动作是否都不需要 context
+        # 如果都不需要 context，则不需要创建 context
+        all_no_context = True
+        for action in task.actions:
+            executor = ActionRegistry.get(action.action_type)
+            # 如果动作在 Registry 中且有 requires_context 属性
+            if executor is not None:
+                if executor.requires_context:
+                    all_no_context = False
+                    break
+            # 如果动作不在 Registry 中（如平台特有动作），默认需要 context
+            else:
+                all_no_context = False
+                break
+
+        # 如果所有动作都不需要 context，不创建 context
+        if all_no_context:
+            return False
+
         return True
 
     def _needs_auto_start(self, task: Task) -> bool:
         """
         检查是否需要在执行任务前自动启动平台。
 
-        如果任务包含 start_app 动作，则不需要自动启动，让用户自己控制。
+        以下情况不需要自动启动：
+        1. 任务包含 start_app 动作（由 start_app 自己控制）
+        2. 任务包含 stop_app 动作（不需要启动平台）
+        3. 任务中所有动作都不需要 context（如 get_token）
         """
         if not task.actions:
             return True
-        # 如果任务包含 start_app，则不需要自动启动
+
+        from worker.actions import ActionRegistry
+
+        # 如果任务包含 start_app 或 stop_app，则不需要自动启动
         for action in task.actions:
-            if action.action_type == "start_app":
+            if action.action_type in ["start_app", "stop_app"]:
                 return False
+
+        # 检查所有动作是否都不需要 context
+        # 如果都不需要 context，则不需要启动平台
+        all_no_context = True
+        for action in task.actions:
+            executor = ActionRegistry.get(action.action_type)
+            # 如果动作在 Registry 中且有 requires_context 属性
+            if executor is not None:
+                if executor.requires_context:
+                    all_no_context = False
+                    break
+            # 如果动作不在 Registry 中（如平台特有动作），默认需要 context
+            else:
+                all_no_context = False
+                break
+
+        # 如果所有动作都不需要 context，不启动平台
+        if all_no_context:
+            return False
+
         return True
 
     def execute_task(self, task: Task) -> TaskResult:
