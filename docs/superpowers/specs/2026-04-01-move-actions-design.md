@@ -94,12 +94,12 @@
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `worker/platforms/base.py` | 修改 | 添加抽象方法 `move()` |
+| `worker/platforms/base.py` | 修改 | 添加抽象方法 `move()`；更新 `BASE_SUPPORTED_ACTIONS` |
 | `worker/platforms/web.py` | 修改 | 实现 `move()` 使用 Playwright |
 | `worker/platforms/windows.py` | 修改 | 实现 `move()` 使用 pyautogui |
 | `worker/platforms/mac.py` | 修改 | 实现 `move()` 使用 pyautogui |
-| `worker/platforms/android.py` | 修改 | 实现 `move()` 返回错误 |
-| `worker/platforms/ios.py` | 修改 | 实现 `move()` 返回错误 |
+| `worker/platforms/android.py` | 修改 | 实现 `move()` 抛出 NotImplementedError |
+| `worker/platforms/ios.py` | 修改 | 实现 `move()` 抛出 NotImplementedError |
 | `worker/actions/coordinate.py` | 修改 | 添加 `MoveAction` 执行器 |
 | `worker/actions/image.py` | 修改 | 添加 `ImageMoveAction` 执行器 |
 | `worker/actions/ocr.py` | 修改 | 添加 `OcrMoveAction` 执行器 |
@@ -109,9 +109,10 @@
 
 ### 1. 平台基类接口
 
-在 `worker/platforms/base.py` 添加抽象方法：
+在 `worker/platforms/base.py` 添加抽象方法，并更新支持动作列表：
 
 ```python
+# 添加抽象方法
 @abstractmethod
 def move(self, x: int, y: int, context: Any = None) -> None:
     """
@@ -123,7 +124,17 @@ def move(self, x: int, y: int, context: Any = None) -> None:
         context: 执行上下文（可选）
     """
     pass
-```
+
+# 更新 BASE_SUPPORTED_ACTIONS
+BASE_SUPPORTED_ACTIONS: Set[str] = {
+    "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
+    "ocr_move",  # 新增
+    "image_click", "image_wait", "image_assert", "image_click_near_text",
+    "image_move",  # 新增
+    "click", "swipe", "input", "press", "screenshot", "wait",
+    "move",  # 新增
+    "cmd_exec",
+}
 
 ---
 
@@ -162,6 +173,10 @@ def move(self, x: int, y: int, context: Any = None) -> None:
 ---
 
 ### 4. ActionExecutor 实现
+
+**关于 offset 参数设计**：`move` action 支持 `offset` 参数，参照 `ocr_click` 和 `image_click` 的参数设计（而非 `ClickAction`）。这是因为：
+- offset 对于移动场景特别有用（如悬停到按钮边缘而非中心）
+- 保持 OCR/Image 类动作的参数一致性
 
 #### MoveAction (`worker/actions/coordinate.py`)
 
@@ -202,11 +217,118 @@ class MoveAction(BaseActionExecutor):
 
 #### ImageMoveAction (`worker/actions/image.py`)
 
-与 `ImageClickAction` 相同的定位逻辑，但调用 `platform.move()` 而非 `platform.click()`。
+```python
+class ImageMoveAction(BaseActionExecutor):
+    """图像匹配后移动鼠标。"""
+
+    name = "image_move"
+    requires_ocr = True
+
+    def execute(self, platform, action, context=None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        if not action.image_base64:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="image_base64 is required",
+            )
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 查找图像位置
+        threshold = action.threshold if action.threshold is not None else 0.8
+        index = action.index if action.index is not None else 0
+        position = self._find_image_position(
+            platform, screenshot, action.image_base64, threshold, index
+        )
+
+        if not position:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 移动鼠标（捕获移动端不支持异常）
+        try:
+            platform.move(x, y, context)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Moved to ({x}, {y})",
+            )
+        except NotImplementedError as e:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
+```
 
 #### OcrMoveAction (`worker/actions/ocr.py`)
 
-与 `OcrClickAction` 相同的定位逻辑，但调用 `platform.move()` 而非 `platform.click()`。
+```python
+class OcrMoveAction(BaseActionExecutor):
+    """OCR 定位后移动鼠标。"""
+
+    name = "ocr_move"
+    requires_ocr = True
+
+    def execute(self, platform, action, context=None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 查找文字位置
+        index = action.index if action.index is not None else 0
+        position = self._find_text_position(
+            platform, screenshot, action.value, action.match_mode, index
+        )
+
+        if not position:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(position[0], position[1], action.offset)
+
+        # 移动鼠标（捕获移动端不支持异常）
+        try:
+            platform.move(x, y, context)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Moved to ({x}, {y})",
+            )
+        except NotImplementedError as e:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
+```
 
 ---
 
