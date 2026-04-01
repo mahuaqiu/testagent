@@ -499,13 +499,16 @@ class WebPlatformManager(PlatformManager):
             return False
 
     def _reset_browser_state(self) -> None:
-        """重置浏览器状态，准备重新启动。"""
+        """重置浏览器状态，准备重新启动。
+
+        注意：不清除 _captured_tokens，token 缓存与浏览器生命周期解耦。
+        """
         self._started = False
         self._browser_context = None
         self._playwright = None
         self._sessions.clear()
         self._current_page = None
-        self._captured_tokens.clear()
+        # 不清除 _captured_tokens，保持跨会话持久化
 
     def _action_start_app(self, action: Action) -> ActionResult:
         """启动/新建浏览器页面。"""
