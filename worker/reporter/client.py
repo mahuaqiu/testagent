@@ -32,7 +32,7 @@ class Reporter:
         self.worker_id = config.id
         self.namespace = config.namespace
 
-        self._client = httpx.Client(timeout=10.0)
+        self._client = httpx.Client(timeout=10.0,trust_env=False)
         self._enabled = bool(self.platform_api)
 
         if not self._enabled:
