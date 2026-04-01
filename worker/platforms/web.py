@@ -228,6 +228,12 @@ class WebPlatformManager(PlatformManager):
         async def handler(route):
             try:
                 url = route.request.url
+
+                # 只处理 http/https 请求，跳过特殊 URL（data:, about:, blob: 等）
+                if not url.startswith(("http://", "https://")):
+                    await route.continue_()
+                    return
+
                 # 检查是否匹配黑名单
                 for item in self.request_blacklist:
                     pattern = item.get("pattern", "")
@@ -245,11 +251,12 @@ class WebPlatformManager(PlatformManager):
                             logger.info(f"[Blacklist] Empty: {url}")
                             await route.fulfill(status=200, body="", content_type="application/javascript")
                             return
+
                 # 不在黑名单中，继续请求
                 await route.continue_()
             except Exception as e:
                 # 异常时必须继续请求，否则请求会永远 pending
-                logger.warning(f"[Blacklist] Handler error for {url}: {e}, forcing continue")
+                logger.warning(f"[Blacklist] Handler error: {e}, forcing continue")
                 try:
                     await route.continue_()
                 except Exception:
@@ -261,7 +268,7 @@ class WebPlatformManager(PlatformManager):
 
         await self._browser_context.route("**", handler)
         patterns = [item.get("pattern", "") for item in self.request_blacklist]
-        logger.info(f"Set up context blacklist拦截所有请求，黑名单: {patterns}")
+        logger.info(f"Set up context blacklist，黑名单: {patterns}")
 
     def stop(self) -> None:
         """停止浏览器和 Playwright。"""
@@ -667,7 +674,11 @@ class WebPlatformManager(PlatformManager):
             )
 
     def _action_navigate(self, action: Action, context: Any = None) -> ActionResult:
-        """导航到 URL。"""
+        """导航到 URL。
+
+        使用 wait_until="domcontentloaded" 而不是默认的 "load"，
+        避免 JS 文件加载慢导致超时。
+        """
         url = action.value
         if not url:
             return ActionResult(
@@ -687,7 +698,10 @@ class WebPlatformManager(PlatformManager):
             )
 
         try:
-            _run_async(page.goto(url, timeout=action.timeout))
+            # 使用 domcontentloaded 而不是默认的 load
+            # load 事件等待所有资源加载完成（包括 JS、CSS、图片等）
+            # domcontentloaded 只等待 DOM 解析完成，更快且更可靠
+            _run_async(page.goto(url, timeout=action.timeout, wait_until="domcontentloaded"))
             return ActionResult(
                 number=0,
                 action_type="navigate",
