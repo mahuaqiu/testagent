@@ -16,15 +16,18 @@ from worker.actions.ocr import (
     OcrAssertAction,
     OcrGetTextAction,
     OcrPasteAction,
+    OcrMoveAction,
 )
 from worker.actions.image import (
     ImageClickAction,
     ImageWaitAction,
     ImageAssertAction,
     ImageClickNearTextAction,
+    ImageMoveAction,
 )
 from worker.actions.coordinate import (
     ClickAction,
+    MoveAction,
     InputAction,
     SwipeAction,
     PressAction,
@@ -44,15 +47,18 @@ def _register_all_actions():
     ActionRegistry.register(OcrAssertAction())
     ActionRegistry.register(OcrGetTextAction())
     ActionRegistry.register(OcrPasteAction())
+    ActionRegistry.register(OcrMoveAction())
 
     # Image Actions
     ActionRegistry.register(ImageClickAction())
     ActionRegistry.register(ImageWaitAction())
     ActionRegistry.register(ImageAssertAction())
     ActionRegistry.register(ImageClickNearTextAction())
+    ActionRegistry.register(ImageMoveAction())
 
     # Coordinate Actions
     ActionRegistry.register(ClickAction())
+    ActionRegistry.register(MoveAction())
     ActionRegistry.register(InputAction())
     ActionRegistry.register(SwipeAction())
     ActionRegistry.register(PressAction())
@@ -82,13 +88,16 @@ __all__ = [
     "OcrAssertAction",
     "OcrGetTextAction",
     "OcrPasteAction",
+    "OcrMoveAction",
     # Image Actions
     "ImageClickAction",
     "ImageWaitAction",
     "ImageAssertAction",
     "ImageClickNearTextAction",
+    "ImageMoveAction",
     # Coordinate Actions
     "ClickAction",
+    "MoveAction",
     "InputAction",
     "SwipeAction",
     "PressAction",

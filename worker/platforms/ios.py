@@ -214,6 +214,10 @@ class iOSPlatformManager(PlatformManager):
         if client:
             client.tap(x, y)
 
+    def move(self, x: int, y: int, context: Any = None) -> None:
+        """移动鼠标（移动端不支持）。"""
+        raise NotImplementedError("move action is not supported on mobile platforms")
+
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本。"""
         client = context or self._device_clients.get(self._current_device)

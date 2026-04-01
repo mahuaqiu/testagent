@@ -78,6 +78,10 @@ class WindowsPlatformManager(PlatformManager):
         """点击指定坐标。"""
         pyautogui.click(x, y)
 
+    def move(self, x: int, y: int, context: Any = None) -> None:
+        """移动鼠标到指定坐标。"""
+        pyautogui.moveTo(x, y)
+
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本。"""
         pyautogui.write(text)

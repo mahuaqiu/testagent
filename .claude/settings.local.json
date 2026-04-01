@@ -62,7 +62,8 @@
       "Bash(pytest tests/ -v)",
       "Bash(git show:*)",
       "Bash(.venv/Scripts/python -m py_compile worker/actions/__init__.py)",
-      "Bash(.venv/Scripts/activate)"
+      "Bash(.venv/Scripts/activate)",
+      "Bash(source /Users/ma/Documents/autotest/.venv/bin/activate)"
     ]
   }
 }

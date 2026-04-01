@@ -42,6 +42,40 @@ class ClickAction(BaseActionExecutor):
         )
 
 
+class MoveAction(BaseActionExecutor):
+    """坐标移动。"""
+
+    name = "move"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(action.x, action.y, action.offset)
+
+        try:
+            platform.move(x, y, context)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Moved to ({x}, {y})",
+            )
+        except NotImplementedError as e:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
+
+
 class InputAction(BaseActionExecutor):
     """坐标输入。"""
 
