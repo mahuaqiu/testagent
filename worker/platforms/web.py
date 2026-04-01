@@ -226,26 +226,38 @@ class WebPlatformManager(PlatformManager):
         """在 context 级别设置请求黑名单拦截。"""
         # 拦截所有请求，然后在 handler 中判断
         async def handler(route):
-            url = route.request.url
-            # 检查是否匹配黑名单
-            for item in self.request_blacklist:
-                pattern = item.get("pattern", "")
-                action = item.get("action", "abort")
-                if pattern in url:
-                    if action == "abort":
-                        logger.info(f"[Blacklist] Aborted: {url}")
+            try:
+                url = route.request.url
+                # 检查是否匹配黑名单
+                for item in self.request_blacklist:
+                    pattern = item.get("pattern", "")
+                    action = item.get("action", "abort")
+                    if pattern in url:
+                        if action == "abort":
+                            logger.info(f"[Blacklist] Aborted: {url}")
+                            await route.abort()
+                            return
+                        elif action == "404":
+                            logger.info(f"[Blacklist] 404: {url}")
+                            await route.fulfill(status=404, body="Not Found")
+                            return
+                        elif action == "empty":
+                            logger.info(f"[Blacklist] Empty: {url}")
+                            await route.fulfill(status=200, body="", content_type="application/javascript")
+                            return
+                # 不在黑名单中，继续请求
+                await route.continue_()
+            except Exception as e:
+                # 异常时必须继续请求，否则请求会永远 pending
+                logger.warning(f"[Blacklist] Handler error for {url}: {e}, forcing continue")
+                try:
+                    await route.continue_()
+                except Exception:
+                    # 如果 continue 也失败，尝试 abort
+                    try:
                         await route.abort()
-                        return
-                    elif action == "404":
-                        logger.info(f"[Blacklist] 404: {url}")
-                        await route.fulfill(status=404, body="Not Found")
-                        return
-                    elif action == "empty":
-                        logger.info(f"[Blacklist] Empty: {url}")
-                        await route.fulfill(status=200, body="", content_type="application/javascript")
-                        return
-            # 不在黑名单中，继续请求
-            await route.continue_()
+                    except Exception:
+                        pass  # 无法处理，忽略
 
         await self._browser_context.route("**", handler)
         patterns = [item.get("pattern", "") for item in self.request_blacklist]
@@ -484,16 +496,35 @@ class WebPlatformManager(PlatformManager):
     # ========== 平台特有动作实现 ==========
 
     def _browser_context_is_valid(self) -> bool:
-        """检查浏览器上下文是否仍然有效（未被手动关闭）。"""
+        """检查浏览器上下文是否仍然有效（未被手动关闭）。
+
+        避免创建测试页面，通过检查现有页面状态来判断。
+        """
         if not self._browser_context:
             return False
         try:
-            # 直接尝试创建一个新页面来验证 context 是否有效
-            # 这是最可靠的方式
-            test_page = _run_async(self._browser_context.new_page())
-            # 如果成功，立即关闭测试页面
-            _run_async(test_page.close())
-            return True
+            # 检查现有页面状态，避免创建新页面产生副作用
+            pages = self._browser_context.pages
+            if not pages:
+                # 没有页面不一定意味着 context 无效，需要进一步验证
+                # 尝试获取 context 的浏览器连接状态（轻量操作）
+                # 注意：BrowserContext 没有 closed 属性，但可以通过尝试访问 pages 来间接判断
+                return True  # context 存在且 pages 可访问，认为有效
+
+            # 检查是否有未关闭的页面
+            for page in pages:
+                try:
+                    if not page.is_closed():
+                        # 有活跃页面，context 一定有效
+                        return True
+                except Exception:
+                    # 页面检查异常，可能页面已被销毁
+                    continue
+
+            # 所有页面都已关闭，context 可能仍然有效（可以创建新页面）
+            # 但为安全起见，返回 False 触发重启
+            logger.info("All pages are closed, context may need restart")
+            return False
         except Exception as e:
             logger.info(f"Browser context check failed: {e}")
             return False
