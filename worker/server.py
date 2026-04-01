@@ -164,25 +164,8 @@ async def execute_task(request: TaskRequest):
         logger.error(f"execute_sync failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
-    # 记录任务结果（基本信息和 action 执行摘要）
-    logger.info(
-        f"Sync task result: status={result.get('status')}, "
-        f"platform={result.get('platform')}, duration_ms={result.get('duration_ms')}"
-    )
-
-    # 记录每个 action 的执行结果（DEBUG 级别）
-    if result.get("actions"):
-        for action in result["actions"]:
-            action_idx = action.get("index")
-            action_type = action.get("action_type")
-            status = action.get("status")
-            duration = action.get("duration_ms")
-            output = action.get("output", "")
-            error = action.get("error", "")
-            logger.debug(
-                f"Action[{action_idx}] {action_type}: {status}, duration_ms={duration}, "
-                f"output={output[:50] if output else ''}, error={error[:50] if error else ''}"
-            )
+    # 打印响应结果（排除 base64 数据）
+    logger.info(f"Sync task response: {_format_result_for_log(result)}")
 
     return result
 
@@ -248,16 +231,10 @@ async def get_task_result(task_id: str):
     result = worker.get_task_result(task_id)
 
     if result is None:
+        logger.info(f"Task result not found: task_id={task_id}")
         raise HTTPException(status_code=404, detail="Task not found")
 
-    logger.info(
-        f"Task result queried: task_id={task_id}, status={result.get('status')}, "
-        f"platform={result.get('platform')}, duration_ms={result.get('duration_ms')}, "
-        f"actions_count={len(result.get('actions', []))}"
-    )
-
-    # 打印完整结果（不含 base64 数据）
-    logger.debug(f"Task result details: {_format_result_for_log(result)}")
+    logger.info(f"Task result response: {_format_result_for_log(result)}")
 
     return result
 

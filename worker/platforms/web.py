@@ -213,7 +213,7 @@ class WebPlatformManager(PlatformManager):
                 value = headers.get(header_name.lower())
                 if value:
                     self._captured_tokens[header_name] = value
-                    logger.info(f"Captured token: {header_name}={value}")
+                    logger.debug(f"Captured token: {header_name}={value}")
 
         self._browser_context.on("request", on_request)
         logger.info(f"Token capture enabled for headers: {self._token_headers}")

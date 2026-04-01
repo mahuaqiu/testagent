@@ -861,7 +861,7 @@ class Worker:
                 except Exception as e:
                     logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
 
-                return TaskResult(
+                failed_result = TaskResult(
                     task_id=task.task_id,
                     status=TaskStatus.FAILED,
                     platform=task.platform,
@@ -872,6 +872,18 @@ class Worker:
                     error_screenshot=error_screenshot,
                 )
 
+                # 打印结果（排除截图的 base64 数据）
+                log_dict = failed_result.to_dict()
+                if log_dict.get('error_screenshot'):
+                    log_dict['error_screenshot'] = '<base64_data>'
+                if log_dict.get('actions'):
+                    for ar in log_dict['actions']:
+                        if ar.get('screenshot'):
+                            ar['screenshot'] = '<base64_data>'
+                logger.info(f"Task failed: {log_dict}")
+
+                return failed_result
+
         result = TaskResult(
             task_id=task.task_id,
             status=TaskStatus.SUCCESS,
@@ -881,11 +893,7 @@ class Worker:
             actions=actions_results,
         )
 
-        # 记录任务完成
-        logger.info(
-            f"Task completed: task_id={task.task_id}, status={result.status}, "
-            f"duration={result.duration_ms}ms"
-        )
+        logger.info(f"Task completed: {result.to_dict()}")
 
         return result
 
@@ -1093,18 +1101,20 @@ class Worker:
         Returns:
             Dict | None: 任务结果，不存在返回 None
         """
-        entry = self.task_store.pop(task_id)
+        # 先查询但不移除，检查任务状态
+        entry = self.task_store.get(task_id)
         if entry is None:
             return None
 
-        # 如果任务还在执行中，返回当前状态
+        # 如果任务还在执行中，返回当前状态但不移除（允许持续轮询）
         if entry.status == TaskStatus.RUNNING:
             return {
                 "task_id": entry.task_id,
                 "status": "running",
             }
 
-        # 返回完整结果
+        # 任务已完成，移除并返回完整结果（一次性查询）
+        entry = self.task_store.pop(task_id)
         if entry.result:
             return entry.result.to_dict(include_task_id=True)
 
