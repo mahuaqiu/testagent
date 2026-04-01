@@ -43,6 +43,7 @@ platforms:
     # Token 捕获：监听响应头中的 token header
     token_headers:
       - "X-Auth-Token"
+      - "X-Request-Operator"
       # - "Authorization"  # 可根据需要添加更多
 
   android:
