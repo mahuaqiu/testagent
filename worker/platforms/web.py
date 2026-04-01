@@ -183,6 +183,10 @@ class WebPlatformManager(PlatformManager):
             **context_options
         )
 
+        # 设置 Token 捕获监听（必须最早设置，否则可能错过响应）
+        if self._token_headers:
+            self._setup_token_capture()
+
         # 在 context 级别设置请求黑名单拦截（对所有页面生效）
         if self.request_blacklist:
             await self._setup_context_blacklist()
@@ -198,24 +202,20 @@ class WebPlatformManager(PlatformManager):
             except Exception as e:
                 logger.warning(f"Failed to close existing page: {e}")
 
-        # 设置 Token 捕获监听
-        if self._token_headers:
-            await self._setup_token_capture()
-
         logger.info(f"Browser started, user_data_dir={user_data_dir}, clear_profile={self.clear_profile_on_start}")
 
-    async def _setup_token_capture(self) -> None:
-        """设置响应头 Token 捕获监听。"""
-        async def on_response(response):
-            headers = response.headers
+    def _setup_token_capture(self) -> None:
+        """设置请求头 Token 捕获监听。"""
+        async def on_request(request):
+            headers = request.headers
             for header_name in self._token_headers:
                 # HTTP headers 在 Playwright 中是小写的
                 value = headers.get(header_name.lower())
                 if value:
                     self._captured_tokens[header_name] = value
-                    logger.debug(f"Captured token: {header_name}={value}")
+                    logger.info(f"Captured token: {header_name}={value}")
 
-        self._browser_context.on("response", on_response)
+        self._browser_context.on("request", on_request)
         logger.info(f"Token capture enabled for headers: {self._token_headers}")
 
     def get_captured_tokens(self) -> Dict[str, str]:
