@@ -220,31 +220,6 @@ class Reporter:
             logger.error(f"Failed to report devices: {e}")
             return False
 
-    def unregister(self) -> bool:
-        """
-        注销 Worker。
-
-        Returns:
-            bool: 注销是否成功
-        """
-        if not self._enabled:
-            return True
-
-        try:
-            url = f"{self.platform_api}/unregister"
-            response = self._client.delete(
-                url,
-                params={"worker_id": self.worker_id},
-            )
-            response.raise_for_status()
-
-            logger.info(f"Worker unregistered: {self.worker_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to unregister: {e}")
-            return False
-
     def close(self):
         """关闭客户端连接。"""
         self._client.close()

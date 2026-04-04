@@ -214,12 +214,8 @@ class Worker:
             except Exception as e:
                 logger.error(f"Failed to stop {platform} platform: {e}\n{traceback.format_exc()}")
 
-        # 注销上报
+        # 关闭上报客户端
         if self.reporter:
-            try:
-                self.reporter.unregister()
-            except Exception as e:
-                logger.warning(f"Failed to unregister: {e}\n{traceback.format_exc()}")
             self.reporter.close()
 
         # 关闭 OCR 客户端
