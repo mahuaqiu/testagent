@@ -42,6 +42,33 @@ class ClickAction(BaseActionExecutor):
         )
 
 
+class DoubleClickAction(BaseActionExecutor):
+    """坐标双击。"""
+
+    name = "double_click"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        # 应用偏移
+        x, y = self._apply_offset(action.x, action.y, action.offset)
+
+        platform.double_click(x, y, context)
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Double clicked at ({x}, {y})",
+        )
+
+
 class MoveAction(BaseActionExecutor):
     """坐标移动。"""
 

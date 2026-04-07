@@ -78,6 +78,10 @@ class MacPlatformManager(PlatformManager):
         """点击指定坐标。"""
         pyautogui.click(x, y)
 
+    def double_click(self, x: int, y: int, context: Any = None) -> None:
+        """双击指定坐标。"""
+        pyautogui.doubleClick(x, y)
+
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标到指定坐标。"""
         pyautogui.moveTo(x, y)

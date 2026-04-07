@@ -94,6 +94,12 @@ class Action:
     package_name: Optional[str] = None       # Android 包名
     permissions: Optional[Any] = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
 
+    # 同行定位参数
+    anchor_text: Optional[str] = None        # 锚点文本（用于同行定位）
+    anchor_index: Optional[int] = None       # 锚点索引（第几个匹配）
+    row_tolerance: Optional[int] = None      # 水平带范围（像素，默认20）
+    target_index: Optional[int] = None       # 目标索引（同行第几个匹配）
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -119,6 +125,10 @@ class Action:
             index=data.get("index"),
             time=data.get("time"),
             text=data.get("text"),
+            anchor_text=data.get("anchor_text"),
+            anchor_index=data.get("anchor_index"),
+            row_tolerance=data.get("row_tolerance"),
+            target_index=data.get("target_index"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -163,5 +173,13 @@ class Action:
             result["time"] = self.time
         if self.text is not None:
             result["text"] = self.text
+        if self.anchor_text is not None:
+            result["anchor_text"] = self.anchor_text
+        if self.anchor_index is not None:
+            result["anchor_index"] = self.anchor_index
+        if self.row_tolerance is not None:
+            result["row_tolerance"] = self.row_tolerance
+        if self.target_index is not None:
+            result["target_index"] = self.target_index
 
         return result

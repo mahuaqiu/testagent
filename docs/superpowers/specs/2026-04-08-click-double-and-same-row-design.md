@@ -245,3 +245,34 @@ target_index: Optional[int] = None     # 目标索引
 1. Android/iOS双击为模拟实现，可能存在时序问题
 2. 模糊匹配可能导致误匹配，需要在日志中记录匹配模式
 3. 裁剪区域过小可能导致目标部分被截断
+
+## 实现状态
+
+**状态：已完成** (2026-04-08)
+
+### 已实现功能
+
+| 功能 | Action类型 | 状态 |
+|------|-----------|------|
+| 坐标双击 | `double_click` | ✅ |
+| OCR文字双击 | `ocr_double_click` | ✅ |
+| 图像双击 | `image_double_click` | ✅ |
+| 同行文本点击 | `ocr_click_same_row_text` | ✅ |
+| 同行图片点击 | `ocr_click_same_row_image` | ✅ |
+| 同行文本检查 | `ocr_check_same_row_text` | ✅ |
+| 同行图片检查 | `ocr_check_same_row_image` | ✅ |
+
+### 已更新文件
+
+- `worker/task/action.py` - 新增参数字段
+- `worker/actions/coordinate.py` - 新增 DoubleClickAction
+- `worker/actions/ocr.py` - 新增 OcrDoubleClickAction, OcrClickSameRowTextAction, OcrCheckSameRowTextAction
+- `worker/actions/image.py` - 新增 ImageDoubleClickAction, OcrClickSameRowImageAction, OcrCheckSameRowImageAction
+- `worker/actions/__init__.py` - 注册所有新增Action
+- `worker/platforms/base.py` - 新增 double_click 抽象方法和更新 BASE_SUPPORTED_ACTIONS
+- `worker/platforms/web.py` - 实现 double_click
+- `worker/platforms/windows.py` - 实现 double_click
+- `worker/platforms/mac.py` - 实现 double_click
+- `worker/platforms/android.py` - 实现 double_click（模拟）
+- `worker/platforms/ios.py` - 实现 double_click（模拟）
+- `api.yaml` - 更新API文档

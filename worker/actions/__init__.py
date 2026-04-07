@@ -17,6 +17,9 @@ from worker.actions.ocr import (
     OcrGetTextAction,
     OcrPasteAction,
     OcrMoveAction,
+    OcrDoubleClickAction,
+    OcrClickSameRowTextAction,
+    OcrCheckSameRowTextAction,
 )
 from worker.actions.image import (
     ImageClickAction,
@@ -24,9 +27,13 @@ from worker.actions.image import (
     ImageAssertAction,
     ImageClickNearTextAction,
     ImageMoveAction,
+    ImageDoubleClickAction,
+    OcrClickSameRowImageAction,
+    OcrCheckSameRowImageAction,
 )
 from worker.actions.coordinate import (
     ClickAction,
+    DoubleClickAction,
     MoveAction,
     InputAction,
     SwipeAction,
@@ -48,6 +55,9 @@ def _register_all_actions():
     ActionRegistry.register(OcrGetTextAction())
     ActionRegistry.register(OcrPasteAction())
     ActionRegistry.register(OcrMoveAction())
+    ActionRegistry.register(OcrDoubleClickAction())
+    ActionRegistry.register(OcrClickSameRowTextAction())
+    ActionRegistry.register(OcrCheckSameRowTextAction())
 
     # Image Actions
     ActionRegistry.register(ImageClickAction())
@@ -55,9 +65,13 @@ def _register_all_actions():
     ActionRegistry.register(ImageAssertAction())
     ActionRegistry.register(ImageClickNearTextAction())
     ActionRegistry.register(ImageMoveAction())
+    ActionRegistry.register(ImageDoubleClickAction())
+    ActionRegistry.register(OcrClickSameRowImageAction())
+    ActionRegistry.register(OcrCheckSameRowImageAction())
 
     # Coordinate Actions
     ActionRegistry.register(ClickAction())
+    ActionRegistry.register(DoubleClickAction())
     ActionRegistry.register(MoveAction())
     ActionRegistry.register(InputAction())
     ActionRegistry.register(SwipeAction())
@@ -89,14 +103,21 @@ __all__ = [
     "OcrGetTextAction",
     "OcrPasteAction",
     "OcrMoveAction",
+    "OcrDoubleClickAction",
+    "OcrClickSameRowTextAction",
+    "OcrCheckSameRowTextAction",
     # Image Actions
     "ImageClickAction",
     "ImageWaitAction",
     "ImageAssertAction",
     "ImageClickNearTextAction",
     "ImageMoveAction",
+    "ImageDoubleClickAction",
+    "OcrClickSameRowImageAction",
+    "OcrCheckSameRowImageAction",
     # Coordinate Actions
     "ClickAction",
+    "DoubleClickAction",
     "MoveAction",
     "InputAction",
     "SwipeAction",

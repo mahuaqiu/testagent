@@ -161,6 +161,16 @@ class AndroidPlatformManager(PlatformManager):
         if device:
             device.click(x, y)
 
+    def double_click(self, x: int, y: int, context: Any = None) -> None:
+        """双击指定坐标（模拟两次快速点击）。"""
+        device = context or self._device_clients.get(self._current_device)
+        if device:
+            # 模拟双击：快速两次点击，间隔100ms
+            device.click(x, y)
+            import time
+            time.sleep(0.1)
+            device.click(x, y)
+
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标（移动端不支持）。"""
         raise NotImplementedError("move action is not supported on mobile platforms")

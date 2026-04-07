@@ -418,6 +418,12 @@ class WebPlatformManager(PlatformManager):
         if page:
             _run_async(page.mouse.click(x, y))
 
+    def double_click(self, x: int, y: int, context: Any = None) -> None:
+        """双击指定坐标。"""
+        page = context or self._current_page
+        if page:
+            _run_async(page.mouse.click(x, y, click_count=2))
+
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标到指定坐标。"""
         page = context or self._current_page

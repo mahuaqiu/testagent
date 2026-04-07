@@ -30,10 +30,12 @@ class PlatformManager(ABC):
     # 通用动作列表（所有平台支持）
     BASE_SUPPORTED_ACTIONS: Set[str] = {
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
-        "ocr_move",
+        "ocr_move", "ocr_double_click",
+        "ocr_click_same_row_text", "ocr_click_same_row_image",
+        "ocr_check_same_row_text", "ocr_check_same_row_image",
         "image_click", "image_wait", "image_assert", "image_click_near_text",
-        "image_move",
-        "click", "swipe", "input", "press", "screenshot", "wait",
+        "image_move", "image_double_click",
+        "click", "double_click", "swipe", "input", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
     }
@@ -147,6 +149,18 @@ class PlatformManager(ABC):
     def click(self, x: int, y: int, context: Any = None) -> None:
         """
         点击指定坐标。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            context: 执行上下文（可选）
+        """
+        pass
+
+    @abstractmethod
+    def double_click(self, x: int, y: int, context: Any = None) -> None:
+        """
+        双击指定坐标。
 
         Args:
             x: X 坐标

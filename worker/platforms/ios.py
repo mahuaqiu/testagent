@@ -214,6 +214,16 @@ class iOSPlatformManager(PlatformManager):
         if client:
             client.tap(x, y)
 
+    def double_click(self, x: int, y: int, context: Any = None) -> None:
+        """双击指定坐标（模拟两次快速点击）。"""
+        client = context or self._device_clients.get(self._current_device)
+        if client:
+            # 模拟双击：快速两次点击，间隔100ms
+            client.tap(x, y)
+            import time
+            time.sleep(0.1)
+            client.tap(x, y)
+
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标（移动端不支持）。"""
         raise NotImplementedError("move action is not supported on mobile platforms")
