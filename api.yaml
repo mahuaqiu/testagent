@@ -289,6 +289,7 @@ components:
             - ocr_paste
             - ocr_move
             - ocr_double_click
+            - ocr_exist
             - ocr_click_same_row_text
             - ocr_click_same_row_image
             - ocr_check_same_row_text
@@ -299,6 +300,7 @@ components:
             - image_click_near_text
             - image_move
             - image_double_click
+            - image_exist
             - click
             - double_click
             - move
@@ -323,6 +325,7 @@ components:
             - ocr_paste: OCR 定位后粘贴剪贴板内容
             - ocr_move: 移动鼠标到识别到的文字位置（仅桌面端）
             - ocr_double_click: 双击屏幕上识别到的文字
+            - ocr_exist: 检查文字是否存在，返回 {"exists": true/false}
             - ocr_click_same_row_text: 点击锚点文本同一行的目标文本
             - ocr_click_same_row_image: 点击锚点文本同一行的目标图片
             - ocr_check_same_row_text: 检查锚点文本同一行的目标文本是否存在
@@ -335,6 +338,7 @@ components:
             - image_click_near_text: 点击文本附近最近的图像
             - image_move: 移动鼠标到匹配的图像位置（仅桌面端）
             - image_double_click: 双击匹配到的图像位置
+            - image_exist: 检查图像是否存在，返回 {"exists": true/false}
 
             【坐标动作】
             - click: 点击指定坐标
@@ -355,7 +359,9 @@ components:
           type: string
           description: |
             动作核心值，根据 action_type 不同含义不同：
-            - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_paste: 要识别的文字内容
+            - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_paste/ocr_exist: 要识别的文字内容
+              - 支持 `reg_` 前缀正则匹配，如 `reg_\\d+` 匹配数字
+              - OCR 统一匹配策略：精确匹配 → 模糊匹配，reg_ 前缀直接使用正则匹配
             - image_click_near_text: 要查找的目标文字
             - click/input: 此字段不使用
             - swipe: 此字段不使用
@@ -382,8 +388,8 @@ components:
           default: 0
           description: |
             选择第几个匹配结果（从 0 开始），用于多个相同文字/图像的场景：
-            - ocr_click/ocr_input/ocr_paste/ocr_move/ocr_double_click: 点击第 N 个匹配的文字
-            - image_click/image_wait/image_assert/image_move/image_double_click: 点击第 N 个匹配的图像
+            - ocr_click/ocr_input/ocr_paste/ocr_move/ocr_double_click/ocr_exist: 点击第 N 个匹配的文字
+            - image_click/image_wait/image_assert/image_move/image_double_click/image_exist: 点击第 N 个匹配的图像
             示例：index=1 表示点击第二个匹配结果
         anchor_text:
           type: string
@@ -618,6 +624,15 @@ components:
   # 示例 3: 双击文字并向右偏移
   # {"action_type": "ocr_double_click", "value": "文件", "offset": {"x": 50, "y": 0}}
 
+  # ocr_exist - 检查文字是否存在
+  # 返回 {"exists": true} 或 {"exists": false}，无论是否存在都返回 SUCCESS 状态
+  # 示例 1: 检查"登录"文字是否存在
+  # {"action_type": "ocr_exist", "value": "登录"}
+  # 示例 2: 检查第二个"确定"文字是否存在
+  # {"action_type": "ocr_exist", "value": "确定", "index": 1}
+  # 示例 3: 使用正则匹配检查是否存在数字
+  # {"action_type": "ocr_exist", "value": "reg_\\d+"}
+
   # ocr_click_same_row_text - 点击锚点文本同一行的目标文本
   # 示例 1: 点击"功能名称B"同一行的"开关"文字
   # {"action_type": "ocr_click_same_row_text", "anchor_text": "功能名称B", "value": "开关"}
@@ -682,6 +697,13 @@ components:
   # {"action_type": "image_double_click", "image_base64": "<base64_encoded_image>", "index": 1}
   # 示例 3: 双击图像并偏移
   # {"action_type": "image_double_click", "image_base64": "<base64_encoded_image>", "offset": {"x": 10, "y": 5}}
+
+  # image_exist - 检查图像是否存在
+  # 返回 {"exists": true} 或 {"exists": false}，无论是否存在都返回 SUCCESS 状态
+  # 示例 1: 检查图像是否存在，匹配阈值 0.8
+  # {"action_type": "image_exist", "image_base64": "<base64_encoded_image>", "threshold": 0.8}
+  # 示例 2: 检查第二个匹配的图像是否存在
+  # {"action_type": "image_exist", "image_base64": "<base64_encoded_image>", "index": 1}
 
   # ---------- 坐标动作 ----------
   # click - 点击指定坐标

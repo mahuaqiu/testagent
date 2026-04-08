@@ -94,24 +94,25 @@ PlatformManager (抽象基类)
 ## 动作类型
 
 所有动作基于 OCR/图像识别或坐标定位。核心动作：
-- **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`, `ocr_paste`, `ocr_move`
-- **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`
+- **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`, `ocr_paste`, `ocr_move`, `ocr_exist`
+- **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`, `image_exist`
 - **坐标动作**：`click`, `move`, `swipe`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`
+
+**OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
 ### 动作参数
 
 | 参数 | 说明 | 适用动作 |
 |------|------|----------|
-| `value` | 文字/URL/按键值 | 所有 OCR 动作、press、navigate |
+| `value` | 文字/URL/按键值，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate |
 | `x`, `y` | 目标坐标 | click, move, swipe, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
-| `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, image_click, image_wait, image_assert, image_move |
+| `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作、move 类动作 |
 | `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
-| `match_mode` | OCR 匹配模式（exact/fuzzy/regex） | OCR 动作 |
 | `end_x` | 滑动终点 X 或最大搜索距离 | swipe, image_click_near_text |
 
 ### image_click_near_text 说明
