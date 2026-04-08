@@ -20,6 +20,8 @@
 | match_mode | string | | 匹配模式：exact/fuzzy/regex，默认 exact |
 | index | int | | 选择第几个匹配结果，默认 0 |
 
+**功能扩展**：`ocr_exist` 支持 `index` 参数选择第 N 个匹配，这是相对于 `ocr_assert` 的功能扩展（ocr_assert 不支持选择第 N 个匹配）。
+
 ### image_exist
 
 | 参数 | 类型 | 必填 | 说明 |
@@ -27,6 +29,8 @@
 | image_base64 | string | ✓ | 图像模板 base64 编码 |
 | threshold | float | | 匹配阈值，默认 0.8 |
 | index | int | | 选择第几个匹配结果，默认 0 |
+
+**功能扩展**：`image_exist` 支持 `index` 参数选择第 N 个匹配，这是相对于 `image_assert` 的功能扩展（image_assert 不支持选择第 N 个匹配）。
 
 ## 返回值设计
 
@@ -130,4 +134,4 @@
   - `worker/actions/image.py`（新增 ImageExistAction，更新文件头部注释）
   - `worker/platforms/base.py`（BASE_SUPPORTED_ACTIONS）
   - `worker/actions/__init__.py`（注册新执行器，更新 __all__ 导出列表）
-  - `worker/task/action.py`（ActionType 枚举添加 OCR_EXIST 和 IMAGE_EXIST）
+  - `worker/task/action.py`（ActionType 枚举：OCR_EXIST 添加到 OCR 操作组，IMAGE_EXIST 添加到图像操作组）
