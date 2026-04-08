@@ -33,6 +33,15 @@
 
 - [ ] **Step 1: 在 BaseActionExecutor 新增 _find_text_with_fallback 方法**
 
+首先确认文件顶部已有 logging 导入（如果没有则添加）：
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+```
+
+然后在 `BaseActionExecutor` 类中添加方法：
+
 ```python
 def _find_text_with_fallback(
     self,
@@ -739,7 +748,33 @@ git commit -m "feat: 注册 ocr_exist/image_exist action"
 **Files:**
 - Modify: `worker/actions/__init__.py`
 
-- [ ] **Step 1: 添加到 __all__ 导出列表**
+- [ ] **Step 1: 添加导入**
+
+在导入部分添加：
+```python
+from worker.actions.ocr import (
+    ...,
+    OcrExistAction,  # 新增
+)
+from worker.actions.image import (
+    ...,
+    ImageExistAction,  # 新增
+)
+```
+
+- [ ] **Step 2: 在 _register_all_actions 函数中注册**
+
+在 OCR Actions 部分末尾添加：
+```python
+ActionRegistry.register(OcrExistAction())
+```
+
+在 Image Actions 部分末尾添加：
+```python
+ActionRegistry.register(ImageExistAction())
+```
+
+- [ ] **Step 3: 添加到 __all__ 导出列表**
 
 在 `__all__` 中添加：
 ```python
@@ -747,15 +782,7 @@ git commit -m "feat: 注册 ocr_exist/image_exist action"
 "ImageExistAction",
 ```
 
-- [ ] **Step 2: 注册执行器**
-
-在 `ALL_ACTIONS` dict 中添加：
-```python
-OcrExistAction(): "ocr_exist",
-ImageExistAction(): "image_exist",
-```
-
-- [ ] **Step 3: 提交**
+- [ ] **Step 4: 提交**
 
 ```bash
 git add worker/actions/__init__.py
