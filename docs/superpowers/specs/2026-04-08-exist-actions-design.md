@@ -100,8 +100,12 @@
 以下情况返回 FAILED 状态（非正常执行失败）：
 - OCR 客户端不可用
 - 必填参数缺失（ocr_exist 的 value，image_exist 的 image_base64）
+- 截图获取失败（底层异常向上抛出）
 
 这些情况下 action 本身无法执行，属于操作失败，而非元素不存在。
+
+**参数说明**：
+- 不支持 `offset` 参数（与 ocr_assert/image_assert 保持一致，只判断存在性不进行点击操作）
 
 ## 测试要点
 
@@ -115,12 +119,15 @@
 8. threshold 参数：正确应用匹配阈值
 9. reg_ 前缀：正确处理正则快捷模式（仅 ocr_exist）
 10. 输出格式：output 可通过 json.loads() 正确解析
+11. 行为对比：元素不存在时，ocr_exist 返回 SUCCESS 而 ocr_assert 返回 FAILED
+12. 行为对比：图像不存在时，image_exist 返回 SUCCESS 而 image_assert 返回 FAILED
 
 ## 影响范围
 
 - 新增文件：无
 - 修改文件：
-  - `worker/actions/ocr.py`（新增 OcrExistAction）
-  - `worker/actions/image.py`（新增 ImageExistAction）
+  - `worker/actions/ocr.py`（新增 OcrExistAction，更新文件头部注释）
+  - `worker/actions/image.py`（新增 ImageExistAction，更新文件头部注释）
   - `worker/platforms/base.py`（BASE_SUPPORTED_ACTIONS）
-  - `worker/actions/__init__.py`（注册新执行器）
+  - `worker/actions/__init__.py`（注册新执行器，更新 __all__ 导出列表）
+  - `worker/task/action.py`（ActionType 枚举添加 OCR_EXIST 和 IMAGE_EXIST）
