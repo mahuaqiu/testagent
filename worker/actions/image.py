@@ -2,7 +2,8 @@
 图像类 Action 执行器。
 
 包含所有基于图像匹配的动作：image_click, image_wait, image_assert, image_click_near_text,
-image_double_click, ocr_click_same_row_image, ocr_check_same_row_image。
+image_move, image_double_click, image_exist,
+ocr_click_same_row_image, ocr_check_same_row_image。
 """
 
 import time
@@ -562,3 +563,45 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
             return position
 
         return None
+
+
+class ImageExistAction(BaseActionExecutor):
+    """检查图像是否存在。"""
+
+    name = "image_exist"
+    requires_ocr = True
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        # 检查必填参数
+        if not action.image_base64:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="image_base64 is required",
+            )
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 查找图像位置
+        threshold = action.threshold if action.threshold is not None else 0.8
+        index = action.index if action.index is not None else 0
+        position = self._find_image_position(
+            platform, screenshot, action.image_base64, threshold, index
+        )
+
+        # 返回结果（始终 SUCCESS，通过 output 返回存在性）
+        import json
+        exists = position is not None
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=json.dumps({"exists": exists}),
+        )
