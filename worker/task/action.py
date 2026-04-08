@@ -19,12 +19,14 @@ class ActionType(Enum):
     OCR_INPUT = "ocr_input"           # 在文字附近输入
     OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
     OCR_PASTE = "ocr_paste"           # OCR定位后粘贴
+    OCR_EXIST = "ocr_exist"           # 检查文字是否存在
 
     # 图像匹配操作
     IMAGE_CLICK = "image_click"       # 点击匹配的图像
     IMAGE_ASSERT = "image_assert"     # 断言图像存在
     IMAGE_WAIT = "image_wait"         # 等待图像出现
     IMAGE_CLICK_NEAR_TEXT = "image_click_near_text"  # 点击文本附近最近的图像
+    IMAGE_EXIST = "image_exist"       # 检查图像是否存在
 
     # 基础操作（坐标/按键）
     CLICK = "click"                   # 坐标点击 (x, y)
