@@ -35,10 +35,10 @@ class OcrClickAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
-        # 查找文字位置
+        # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
-        position = self._find_text_position(
-            platform, screenshot, action.value, action.match_mode, index
+        position = self._find_text_with_fallback(
+            platform, screenshot, action.value, index
         )
 
         if not position:
