@@ -468,22 +468,6 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
         )
 
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> Optional[tuple[int, int]]:
-        """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            logger.debug(f"Text found with exact match: \"{text}\"")
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            logger.debug(f"Text found with fuzzy match: \"{text}\"")
-            return position
-
-        return None
-
 
 class OcrCheckSameRowTextAction(BaseActionExecutor):
     """检查同行文本是否存在。"""
@@ -565,17 +549,3 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Found at ({target_x}, {target_y})",
         )
-
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> Optional[tuple[int, int]]:
-        """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            return position
-
-        return None
