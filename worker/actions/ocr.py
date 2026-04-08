@@ -81,10 +81,10 @@ class OcrInputAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
-        # 查找文字位置
+        # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
-        position = self._find_text_position(
-            platform, screenshot, action.value, action.match_mode, index
+        position = self._find_text_with_fallback(
+            platform, screenshot, action.value, index
         )
 
         if not position:
@@ -137,8 +137,8 @@ class OcrWaitAction(BaseActionExecutor):
 
         while time.time() - start_time < timeout:
             screenshot = platform.take_screenshot(context)
-            position = self._find_text_position(
-                platform, screenshot, action.value, action.match_mode
+            position = self._find_text_with_fallback(
+                platform, screenshot, action.value
             )
 
             if position:
@@ -173,14 +173,8 @@ class OcrAssertAction(BaseActionExecutor):
 
         screenshot = platform.take_screenshot(context)
 
-        # 处理正则匹配：以 "reg_" 开头时使用正则模式
-        match_mode = action.match_mode
-        target_value = action.value
-        if action.value and action.value.startswith("reg_"):
-            match_mode = "regex"
-            target_value = action.value[4:]  # 去掉 "reg_" 前缀
-
-        position = self._find_text_position(platform, screenshot, target_value, match_mode)
+        # 使用统一匹配策略（已处理 reg_ 前缀）
+        position = self._find_text_with_fallback(platform, screenshot, action.value)
 
         if position:
             return ActionResult(
@@ -246,10 +240,10 @@ class OcrPasteAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
-        # 查找文字位置
+        # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
-        position = self._find_text_position(
-            platform, screenshot, action.value, action.match_mode, index
+        position = self._find_text_with_fallback(
+            platform, screenshot, action.value, index
         )
 
         if not position:
@@ -302,10 +296,10 @@ class OcrMoveAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
-        # 查找文字位置
+        # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
-        position = self._find_text_position(
-            platform, screenshot, action.value, action.match_mode, index
+        position = self._find_text_with_fallback(
+            platform, screenshot, action.value, index
         )
 
         if not position:
@@ -379,33 +373,6 @@ class OcrDoubleClickAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Double clicked at ({x}, {y})",
         )
-
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> Optional[tuple[int, int]]:
-        """
-        使用降级策略查找文字位置：精确匹配 → 模糊匹配。
-
-        Args:
-            platform: 平台管理器
-            image_bytes: 图像数据
-            text: 目标文字
-            index: 选择第几个匹配结果
-
-        Returns:
-            文字中心坐标 (x, y)，未找到返回 None
-        """
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            logger.debug(f"Text found with exact match: \"{text}\"")
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            logger.debug(f"Text found with fuzzy match: \"{text}\"")
-            return position
-
-        return None
 
 
 class OcrClickSameRowTextAction(BaseActionExecutor):
