@@ -794,44 +794,28 @@ git commit -m "feat: 注册新 action 执行器"
 ### Task 9: 更新 ActionType 枚举
 
 **Files:**
-- Modify: `worker/task/action.py:12-43`
+- Modify: `worker/task/action.py`
 
 - [ ] **Step 1: 添加 OCR_EXIST 和 IMAGE_EXIST**
 
+在 OCR 文字操作部分添加 `OCR_EXIST`，在图像匹配操作部分添加 `IMAGE_EXIST`：
+
 ```python
-class ActionType(Enum):
-    """动作类型枚举。"""
+# OCR 文字操作
+OCR_CLICK = "ocr_click"           # 点击识别到的文字
+OCR_ASSERT = "ocr_assert"         # 断言文字存在
+OCR_WAIT = "ocr_wait"             # 等待文字出现
+OCR_INPUT = "ocr_input"           # 在文字附近输入
+OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
+OCR_PASTE = "ocr_paste"           # OCR定位后粘贴
+OCR_EXIST = "ocr_exist"           # 检查文字是否存在
 
-    # OCR 文字操作
-    OCR_CLICK = "ocr_click"           # 点击识别到的文字
-    OCR_ASSERT = "ocr_assert"         # 断言文字存在
-    OCR_WAIT = "ocr_wait"             # 等待文字出现
-    OCR_INPUT = "ocr_input"           # 在文字附近输入
-    OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
-    OCR_PASTE = "ocr_paste"           # OCR定位后粘贴
-    OCR_EXIST = "ocr_exist"           # 检查文字是否存在
-
-    # 图像匹配操作
-    IMAGE_CLICK = "image_click"       # 点击匹配的图像
-    IMAGE_ASSERT = "image_assert"     # 断言图像存在
-    IMAGE_WAIT = "image_wait"         # 等待图像出现
-    IMAGE_CLICK_NEAR_TEXT = "image_click_near_text"  # 点击文本附近最近的图像
-    IMAGE_EXIST = "image_exist"       # 检查图像是否存在
-
-    # 基础操作（坐标/按键）
-    CLICK = "click"                   # 坐标点击 (x, y)
-    SWIPE = "swipe"                   # 滑动 (方向/坐标)
-    INPUT = "input"                   # 输入文本
-    PRESS = "press"                   # 按键
-    SCREENSHOT = "screenshot"         # 截图
-    WAIT = "wait"                     # 固定等待
-
-    # Web 专用
-    NAVIGATE = "navigate"             # 跳转 URL
-
-    # 应用操作
-    START_APP = "start_app"          # 启动应用
-    STOP_APP = "stop_app"            # 关闭应用
+# 图像匹配操作
+IMAGE_CLICK = "image_click"       # 点击匹配的图像
+IMAGE_ASSERT = "image_assert"     # 断言图像存在
+IMAGE_WAIT = "image_wait"         # 等待图像出现
+IMAGE_CLICK_NEAR_TEXT = "image_click_near_text"  # 点击文本附近最近的图像
+IMAGE_EXIST = "image_exist"       # 检查图像是否存在
 ```
 
 - [ ] **Step 2: 提交**
