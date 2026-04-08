@@ -63,7 +63,14 @@
       "Bash(git show:*)",
       "Bash(.venv/Scripts/python -m py_compile worker/actions/__init__.py)",
       "Bash(.venv/Scripts/activate)",
-      "Bash(source /Users/ma/Documents/autotest/.venv/bin/activate)"
+      "Bash(source /Users/ma/Documents/autotest/.venv/bin/activate)",
+      "Bash(.venv/Scripts/python.exe -m ruff check worker/actions/)",
+      "Bash(venv/Scripts/python.exe -m ruff check worker/actions/)",
+      "Bash(.venv/Scripts/python.exe -m black worker/actions/ --check)",
+      "Bash(venv/Scripts/python.exe -m black worker/actions/ --check)",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.actions import OcrExistAction, ImageExistAction; print\\('导入成功: OcrExistAction, ImageExistAction'\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.platforms.base import PlatformManager; print\\('BASE_SUPPORTED_ACTIONS:', PlatformManager.BASE_SUPPORTED_ACTIONS\\)\")",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.task.action import ActionType; print\\('OCR_EXIST:', ActionType.OCR_EXIST\\); print\\('IMAGE_EXIST:', ActionType.IMAGE_EXIST\\)\")"
     ]
   }
 }
