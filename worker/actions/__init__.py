@@ -18,6 +18,7 @@ from worker.actions.ocr import (
     OcrPasteAction,
     OcrMoveAction,
     OcrDoubleClickAction,
+    OcrExistAction,
     OcrClickSameRowTextAction,
     OcrCheckSameRowTextAction,
 )
@@ -28,6 +29,7 @@ from worker.actions.image import (
     ImageClickNearTextAction,
     ImageMoveAction,
     ImageDoubleClickAction,
+    ImageExistAction,
     OcrClickSameRowImageAction,
     OcrCheckSameRowImageAction,
 )
@@ -56,6 +58,7 @@ def _register_all_actions():
     ActionRegistry.register(OcrPasteAction())
     ActionRegistry.register(OcrMoveAction())
     ActionRegistry.register(OcrDoubleClickAction())
+    ActionRegistry.register(OcrExistAction())
     ActionRegistry.register(OcrClickSameRowTextAction())
     ActionRegistry.register(OcrCheckSameRowTextAction())
 
@@ -66,6 +69,7 @@ def _register_all_actions():
     ActionRegistry.register(ImageClickNearTextAction())
     ActionRegistry.register(ImageMoveAction())
     ActionRegistry.register(ImageDoubleClickAction())
+    ActionRegistry.register(ImageExistAction())
     ActionRegistry.register(OcrClickSameRowImageAction())
     ActionRegistry.register(OcrCheckSameRowImageAction())
 
@@ -104,6 +108,7 @@ __all__ = [
     "OcrPasteAction",
     "OcrMoveAction",
     "OcrDoubleClickAction",
+    "OcrExistAction",
     "OcrClickSameRowTextAction",
     "OcrCheckSameRowTextAction",
     # Image Actions
@@ -113,6 +118,7 @@ __all__ = [
     "ImageClickNearTextAction",
     "ImageMoveAction",
     "ImageDoubleClickAction",
+    "ImageExistAction",
     "OcrClickSameRowImageAction",
     "OcrCheckSameRowImageAction",
     # Coordinate Actions
