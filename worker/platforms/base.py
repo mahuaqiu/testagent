@@ -30,11 +30,11 @@ class PlatformManager(ABC):
     # 通用动作列表（所有平台支持）
     BASE_SUPPORTED_ACTIONS: Set[str] = {
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
-        "ocr_move", "ocr_double_click",
+        "ocr_move", "ocr_double_click", "ocr_exist",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
         "image_click", "image_wait", "image_assert", "image_click_near_text",
-        "image_move", "image_double_click",
+        "image_move", "image_double_click", "image_exist",
         "click", "double_click", "swipe", "input", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
