@@ -33,6 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
     "black>=23.0",
     "ruff>=0.1.0",
 ]
@@ -59,3 +60,9 @@ ignore = ["E501"]
 [tool.black]
 line-length = 120
 target-version = ["py310"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark test as an asyncio test",
+]
