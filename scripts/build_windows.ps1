@@ -167,3 +167,22 @@ Write-Host ""
 Write-Host "Note: Virtual environment preserved at: $VenvPath"
 Write-Host "Use -Clean flag to rebuild from scratch: .\build_windows.ps1 -Clean"
 Write-Host "=========================================="
+
+# 构建安装包（可选）
+Write-Host ""
+Write-Host "是否构建安装包? (用于分发部署)"
+$BuildInstaller = Read-Host "输入 'y' 构建，其他键跳过"
+
+if ($BuildInstaller -eq 'y') {
+    Write-Host "Building installer..."
+    & ".\installer\build_installer.ps1" -Version $Version
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Installer build failed, but EXE package is available"
+    }
+}
+
+Write-Host "=========================================="
+Write-Host "All builds complete!"
+Write-Host "EXE package: $PackageDir"
+Write-Host "Installer: $OutputDir\test-worker-installer.exe (if built)"
+Write-Host "=========================================="
