@@ -67,24 +67,33 @@
 
 ```
 1. 检查 OCR 客户端是否可用（不可用时返回 FAILED）
-2. 获取当前截图
-3. 使用 _find_text_position 查找文字（支持 index 和 match_mode）
-4. 返回 ActionResult:
+2. 检查 value 参数是否提供（缺失时返回 FAILED）
+3. 获取当前截图
+4. 处理正则快捷模式：value 以 "reg_" 开头时使用 regex 模式并去掉前缀
+5. 使用 _find_text_position 查找文字（支持 index 和 match_mode）
+6. 返回 ActionResult:
    - status: SUCCESS
    - output: JSON {"exists": true/false}
 ```
+
+**特殊场景**：
+- 当 index 参数超出实际匹配数量时，返回 `{"exists": false}`（第 N 个元素不存在也是检查结果）
+- 支持 `reg_` 前缀快捷正则模式（与 ocr_assert 保持一致）
 
 ### image_exist
 
 ```
 1. 检查 OCR 客户端是否可用（不可用时返回 FAILED）
-2. 检查 image_base64 参数是否提供
+2. 检查 image_base64 参数是否提供（缺失时返回 FAILED）
 3. 获取当前截图
 4. 使用 _find_image_position 查找图像（支持 index 和 threshold）
 5. 返回 ActionResult:
    - status: SUCCESS
    - output: JSON {"exists": true/false}
 ```
+
+**特殊场景**：
+- 当 index 参数超出实际匹配数量时，返回 `{"exists": false}`（第 N 个元素不存在也是检查结果）
 
 ## 错误处理
 
@@ -101,8 +110,11 @@
 3. 参数缺失：缺少必填参数时返回 FAILED
 4. OCR 客户端不可用：返回 FAILED
 5. index 参数：正确返回第 N 个匹配结果的存在性
-6. match_mode 参数：正确应用不同匹配模式
-7. threshold 参数：正确应用匹配阈值
+6. index 超范围：当 index > 实际匹配数量时返回 {"exists": false}
+7. match_mode 参数：正确应用不同匹配模式
+8. threshold 参数：正确应用匹配阈值
+9. reg_ 前缀：正确处理正则快捷模式（仅 ocr_exist）
+10. 输出格式：output 可通过 json.loads() 正确解析
 
 ## 影响范围
 
