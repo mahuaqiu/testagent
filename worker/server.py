@@ -5,6 +5,9 @@ HTTP Server。
 """
 
 import logging
+import sys
+import threading
+import time
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from worker.worker import Worker, TaskConflictError
 from worker.task import Task
+from worker.upgrade import handle_upgrade, UpgradeError, UpgradeRequest
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +276,58 @@ async def refresh_devices():
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     return worker.refresh_devices()
+
+
+@app.post("/worker/upgrade")
+async def upgrade_worker(request: UpgradeRequest):
+    """
+    Worker 升级接口。
+
+    接收平台下发的升级指令，下载安装包并执行静默安装。
+
+    Args:
+        request: 升级请求
+            - version: 目标版本号（可选）
+            - download_url: 安装包下载地址
+            - force: 是否强制升级（可选，默认 true）
+
+    Returns:
+        Dict: 升级响应
+            - status: skipped/upgrading/failed
+            - message: 状态描述
+            - current_version: 当前版本
+            - target_version: 目标版本
+
+    注意：升级成功后 Worker 会立即退出，由安装程序重启。
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    logger.info(
+        f"Upgrade request: version={request.version}, "
+        f"download_url={request.download_url}, force={request.force}"
+    )
+
+    try:
+        result = await handle_upgrade(request)
+
+        # 如果状态是 upgrading，Worker 立即退出
+        if result.status == "upgrading":
+            logger.info("Worker 即将退出以完成升级...")
+            # 返回响应后退出
+            def delayed_exit():
+                time.sleep(0.5)
+                sys.exit(0)
+            threading.Thread(target=delayed_exit, daemon=True).start()
+
+        return result.to_dict()
+
+    except UpgradeError as e:
+        logger.error(f"Upgrade failed: {e}")
+        return {
+            "status": "failed",
+            "message": str(e),
+        }
 
 
 # 异常处理
