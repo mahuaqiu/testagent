@@ -2,7 +2,10 @@
 OCR 类 Action 执行器。
 
 包含所有基于 OCR 文字识别的动作：ocr_click, ocr_input, ocr_wait, ocr_assert, ocr_get_text, ocr_paste,
-ocr_double_click, ocr_click_same_row_text, ocr_check_same_row_text。
+ocr_move, ocr_double_click, ocr_exist,
+ocr_click_same_row_text, ocr_check_same_row_text。
+
+统一匹配策略：精确匹配 → 模糊匹配，reg_ 开头使用正则匹配。
 """
 
 import time
@@ -548,4 +551,45 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Found at ({target_x}, {target_y})",
+        )
+
+
+class OcrExistAction(BaseActionExecutor):
+    """检查文字是否存在。"""
+
+    name = "ocr_exist"
+    requires_ocr = True
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 检查 OCR 客户端
+        error = self._check_ocr_client(platform)
+        if error:
+            return error
+
+        # 检查必填参数
+        if not action.value:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="value is required",
+            )
+
+        # 获取截图
+        screenshot = platform.take_screenshot(context)
+
+        # 使用统一匹配策略查找文字
+        index = action.index if action.index is not None else 0
+        position = self._find_text_with_fallback(
+            platform, screenshot, action.value, index
+        )
+
+        # 返回结果（始终 SUCCESS，通过 output 返回存在性）
+        import json
+        exists = position is not None
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=json.dumps({"exists": exists}),
         )
