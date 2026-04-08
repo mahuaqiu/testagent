@@ -4,9 +4,12 @@ Action 执行器基类。
 定义所有 Action 需要实现的接口。
 """
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
+
+logger = logging.getLogger(__name__)
 
 from worker.task import Action, ActionResult, ActionStatus
 
@@ -132,3 +135,46 @@ class BaseActionExecutor(ActionExecutor):
             匹配中心坐标 (x, y)，未找到返回 None
         """
         return platform._find_image_position(source_bytes, template_base64, threshold, index)
+
+    def _find_text_with_fallback(
+        self,
+        platform: "PlatformManager",
+        image_bytes: bytes,
+        text: str,
+        index: int = 0
+    ) -> Optional[tuple[int, int]]:
+        """
+        使用统一匹配策略查找文字位置：精确匹配 → 模糊匹配。
+        reg_ 开头的文字使用正则匹配（不受降级约束）。
+
+        Args:
+            platform: 平台管理器
+            image_bytes: 图像数据
+            text: 目标文字（reg_ 开头表示正则匹配）
+            index: 选择第几个匹配结果
+
+        Returns:
+            文字中心坐标 (x, y)，未找到返回 None
+        """
+        # 处理正则快捷模式：reg_ 开头直接使用正则匹配
+        if text.startswith("reg_"):
+            actual_text = text[4:]  # 去掉前缀
+            position = platform._find_text_position(image_bytes, actual_text, "regex", index)
+            if position:
+                logger.debug(f"Text found with regex match: \"{actual_text}\" (from \"{text}\")")
+                return position
+            return None
+
+        # 1. 先精确匹配
+        position = platform._find_text_position(image_bytes, text, "exact", index)
+        if position:
+            logger.debug(f"Text found with exact match: \"{text}\"")
+            return position
+
+        # 2. 再模糊匹配
+        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
+        if position:
+            logger.debug(f"Text found with fuzzy match: \"{text}\"")
+            return position
+
+        return None
