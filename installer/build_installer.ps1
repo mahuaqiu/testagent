@@ -3,7 +3,7 @@
 
 param(
     [string]$Version = "2.0.0",
-    [string]$PyInstallerOutput = "..\dist\test-worker"
+    [string]$PyInstallerOutput = "..\dist\windows\test-worker"
 )
 
 Write-Host "=========================================="

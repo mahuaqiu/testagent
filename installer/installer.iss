@@ -11,7 +11,7 @@ AppVersion={#Version}
 AppPublisher=Test Worker Team
 DefaultDirName=C:\Program Files\Test Worker
 DefaultGroupName=Test Worker
-OutputDir=dist
+OutputDir=..\dist
 OutputBaseFilename=test-worker-installer
 Compression=lzma2/max
 SolidCompression=yes
@@ -26,17 +26,21 @@ WizardSizePercent=100
 Uninstallable=yes
 CreateUninstallRegKey=yes
 
+; 中文界面
+[Languages]
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+
 
 [Files]
 ; Worker 主程序和依赖
-Source: "dist\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
-; 配置目录 - 升级时不覆盖（保留用户配置）
-Source: "dist\test-worker\config\*"; DestDir: "{app}\config"; Flags: onlyifdoesntexist recursesubdirs
+; 配置目录（在 _internal 下）- 升级时不覆盖（保留用户配置）
+Source: "..\dist\windows\test-worker\_internal\config\*"; DestDir: "{app}\_internal\config"; Flags: onlyifdoesntexist recursesubdirs
 
 
 [Dirs]
-Name: "{app}\config"; Permissions: users-modify
+Name: "{app}\_internal\config"; Permissions: users-modify
 Name: "{app}\temp"; Permissions: users-modify
 Name: "{app}\data"; Permissions: users-modify
 
@@ -68,6 +72,7 @@ Type: filesandordirs; Name: "{app}\temp"
 [Code]
 var
   ConfigPage: TInputQueryWizardPage;
+  IpLabel, PortLabel, NamespaceLabel, PlatformApiLabel, OcrServiceLabel: TLabel;
   IpEdit, PortEdit, NamespaceEdit, PlatformApiEdit, OcrServiceEdit: TNewEdit;
   CmdIp, CmdPort, CmdNamespace, CmdPlatformApi, CmdOcrService: String;
 
@@ -86,26 +91,50 @@ begin
   end;
 end;
 
+// 通过注册表获取本机 IP 地址
 function GetLocalIP: String;
 var
-  WSAData: TWSAData;
-  HostName: String;
-  HostEnt: PHostEnt;
-  IPAddr: PInAddr;
+  SubKeyNames: TArrayOfString;
+  I, J: Integer;
+  IPValue: String;
+  Enabled: String;
 begin
   Result := '127.0.0.1';
-  try
-    WSAStartup(MakeWord(1, 1), WSAData);
-    SetLength(HostName, 255);
-    GetHostName(PChar(HostName), 255);
-    HostEnt := GetHostByName(PChar(HostName));
-    if HostEnt <> nil then
+
+  // 查找启用的网络适配器
+  if RegGetSubkeyNames(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces', SubKeyNames) then
+  begin
+    for I := 0 to GetArrayLength(SubKeyNames) - 1 do
     begin
-      IPAddr := PInAddr(HostEnt^.h_addr_list^[0]);
-      Result := inet_ntoa(IPAddr^);
+      // 检查适配器是否启用
+      if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'EnableDHCP', Enabled) then
+      begin
+        if Enabled = '1' then
+        begin
+          // DHCP 启用，读取 DHCP IP
+          if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'DhcpIPAddress', IPValue) then
+          begin
+            if (IPValue <> '') and (IPValue <> '0.0.0.0') then
+            begin
+              Result := IPValue;
+              Exit;
+            end;
+          end;
+        end
+        else if Enabled = '0' then
+        begin
+          // 静态 IP
+          if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'IPAddress', IPValue) then
+          begin
+            if (IPValue <> '') and (IPValue <> '0.0.0.0') then
+            begin
+              Result := IPValue;
+              Exit;
+            end;
+          end;
+        end;
+      end;
     end;
-    WSACleanup;
-  except
   end;
 end;
 
@@ -135,50 +164,90 @@ begin
     '配置 Worker 参数', '请填写以下配置信息',
     '这些配置将写入 config/worker.yaml 文件');
 
+  // IP 地址
+  IpLabel := TLabel.Create(ConfigPage);
+  IpLabel.Parent := ConfigPage.Surface;
+  IpLabel.Caption := 'Worker IP 地址:';
+  IpLabel.Left := ScaleX(0);
+  IpLabel.Top := ScaleY(0);
+  IpLabel.Width := ScaleX(150);
+
   IpEdit := TNewEdit.Create(ConfigPage);
   IpEdit.Parent := ConfigPage.Surface;
   IpEdit.Left := ScaleX(0);
-  IpEdit.Top := ScaleY(10);
+  IpEdit.Top := ScaleY(18);
   IpEdit.Width := ScaleX(300);
   if CmdIp <> '' then
     IpEdit.Text := CmdIp
   else
     IpEdit.Text := GetLocalIP();
 
+  // 端口
+  PortLabel := TLabel.Create(ConfigPage);
+  PortLabel.Parent := ConfigPage.Surface;
+  PortLabel.Caption := 'Worker 端口:';
+  PortLabel.Left := ScaleX(0);
+  PortLabel.Top := ScaleY(44);
+  PortLabel.Width := ScaleX(150);
+
   PortEdit := TNewEdit.Create(ConfigPage);
   PortEdit.Parent := ConfigPage.Surface;
   PortEdit.Left := ScaleX(0);
-  PortEdit.Top := ScaleY(40);
+  PortEdit.Top := ScaleY(62);
   PortEdit.Width := ScaleX(100);
   if CmdPort <> '' then
     PortEdit.Text := CmdPort
   else
     PortEdit.Text := '8088';
 
+  // 命名空间
+  NamespaceLabel := TLabel.Create(ConfigPage);
+  NamespaceLabel.Parent := ConfigPage.Surface;
+  NamespaceLabel.Caption := '命名空间 (Namespace):';
+  NamespaceLabel.Left := ScaleX(0);
+  NamespaceLabel.Top := ScaleY(88);
+  NamespaceLabel.Width := ScaleX(150);
+
   NamespaceEdit := TNewEdit.Create(ConfigPage);
   NamespaceEdit.Parent := ConfigPage.Surface;
   NamespaceEdit.Left := ScaleX(0);
-  NamespaceEdit.Top := ScaleY(70);
+  NamespaceEdit.Top := ScaleY(106);
   NamespaceEdit.Width := ScaleX(200);
   if CmdNamespace <> '' then
     NamespaceEdit.Text := CmdNamespace
   else
     NamespaceEdit.Text := 'meeting_public';
 
+  // 平台 API
+  PlatformApiLabel := TLabel.Create(ConfigPage);
+  PlatformApiLabel.Parent := ConfigPage.Surface;
+  PlatformApiLabel.Caption := '平台 API 地址:';
+  PlatformApiLabel.Left := ScaleX(0);
+  PlatformApiLabel.Top := ScaleY(132);
+  PlatformApiLabel.Width := ScaleX(150);
+
   PlatformApiEdit := TNewEdit.Create(ConfigPage);
   PlatformApiEdit.Parent := ConfigPage.Surface;
   PlatformApiEdit.Left := ScaleX(0);
-  PlatformApiEdit.Top := ScaleY(100);
+  PlatformApiEdit.Top := ScaleY(150);
   PlatformApiEdit.Width := ScaleX(350);
   if CmdPlatformApi <> '' then
     PlatformApiEdit.Text := CmdPlatformApi
   else
     PlatformApiEdit.Text := 'http://192.168.0.102:8000';
 
+  // OCR 服务
+  OcrServiceLabel := TLabel.Create(ConfigPage);
+  OcrServiceLabel.Parent := ConfigPage.Surface;
+  OcrServiceLabel.Caption := 'OCR 服务地址:';
+  OcrServiceLabel.Left := ScaleX(0);
+  OcrServiceLabel.Top := ScaleY(176);
+  OcrServiceLabel.Width := ScaleX(150);
+
   OcrServiceEdit := TNewEdit.Create(ConfigPage);
   OcrServiceEdit.Parent := ConfigPage.Surface;
   OcrServiceEdit.Left := ScaleX(0);
-  OcrServiceEdit.Top := ScaleY(130);
+  OcrServiceEdit.Top := ScaleY(194);
   OcrServiceEdit.Width := ScaleX(350);
   if CmdOcrService <> '' then
     OcrServiceEdit.Text := CmdOcrService
@@ -195,7 +264,7 @@ begin
   begin
     if not IsUpgradeInstall() then
     begin
-      ConfigFile := ExpandConstant('{app}\config\worker.yaml');
+      ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
       ConfigContent :=
         '# Worker 配置文件（安装时生成）' + #13#10 +
         '' + #13#10 +
