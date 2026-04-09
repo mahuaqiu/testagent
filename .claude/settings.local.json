@@ -70,7 +70,20 @@
       "Bash(venv/Scripts/python.exe -m black worker/actions/ --check)",
       "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.actions import OcrExistAction, ImageExistAction; print\\('导入成功: OcrExistAction, ImageExistAction'\\)\")",
       "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.platforms.base import PlatformManager; print\\('BASE_SUPPORTED_ACTIONS:', PlatformManager.BASE_SUPPORTED_ACTIONS\\)\")",
-      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.task.action import ActionType; print\\('OCR_EXIST:', ActionType.OCR_EXIST\\); print\\('IMAGE_EXIST:', ActionType.IMAGE_EXIST\\)\")"
+      "Bash(D:/code/autotest/venv/Scripts/python.exe -c \"from worker.task.action import ActionType; print\\('OCR_EXIST:', ActionType.OCR_EXIST\\); print\\('IMAGE_EXIST:', ActionType.IMAGE_EXIST\\)\")",
+      "Bash(pip install:*)",
+      "Bash(pytest tests/upgrade/test_state.py -v)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/upgrade/test_state.py -v)",
+      "Bash(venv/Scripts/pip.exe install:*)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/upgrade/ -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/upgrade/test_state.py -v)",
+      "Bash(pytest tests/upgrade/test_downloader.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/upgrade/test_handler.py -v)",
+      "Bash(venv/Scripts/python -m pytest tests/upgrade/test_handler.py -v)",
+      "Bash(venv/Scripts/pip list:*)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/upgrade/ -v)",
+      "Bash(pytest tests/upgrade/ -v)"
     ]
   }
 }
