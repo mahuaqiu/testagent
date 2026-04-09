@@ -85,7 +85,10 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/upgrade/ -v)",
       "Bash(pytest tests/upgrade/ -v)",
       "Bash(pytest -x -q)",
-      "Bash(pytest tests/ -x -q)"
+      "Bash(pytest tests/ -x -q)",
+      "Bash(where.exe ISCC)",
+      "Bash(dir \"C:\\\\Program Files\\\\Inno Setup*\")",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\Inno Setup*\")"
     ]
   }
 }

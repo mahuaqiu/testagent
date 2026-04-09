@@ -17,6 +17,13 @@ if (-not (Test-Path $InnoPath)) {
     $InnoPath = "C:\Program Files\Inno Setup 6\ISCC.exe"
 }
 if (-not (Test-Path $InnoPath)) {
+    $InnoPath = "D:\Program Files\Inno Setup 6\ISCC.exe"
+}
+if (-not (Test-Path $InnoPath)) {
+    # 尝试从 PATH 环境变量查找
+    $InnoPath = (Get-Command ISCC -ErrorAction SilentlyContinue).Source
+}
+if (-not $InnoPath -or -not (Test-Path $InnoPath)) {
     Write-Error "Inno Setup 6 not found!"
     Write-Host "Please download from: https://jrsoftware.org/isdl.php"
     exit 1
