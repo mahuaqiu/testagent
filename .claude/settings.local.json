@@ -83,7 +83,8 @@
       "Bash(venv/Scripts/pip list:*)",
       "Bash(venv/Scripts/pip install:*)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/upgrade/ -v)",
-      "Bash(pytest tests/upgrade/ -v)"
+      "Bash(pytest tests/upgrade/ -v)",
+      "Bash(pytest -x -q)"
     ]
   }
 }
