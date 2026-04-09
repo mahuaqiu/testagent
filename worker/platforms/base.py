@@ -33,8 +33,10 @@ class PlatformManager(ABC):
         "ocr_move", "ocr_double_click", "ocr_exist",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
+        "ocr_get_position",
         "image_click", "image_wait", "image_assert", "image_click_near_text",
         "image_move", "image_double_click", "image_exist",
+        "image_get_position",
         "click", "double_click", "swipe", "input", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
@@ -350,6 +352,89 @@ class PlatformManager(ABC):
             if matches and len(matches) > index:
                 return matches[index].center
         return None
+
+    def _find_all_text_positions(self, image_bytes: bytes, text: str) -> List[tuple[int, int]]:
+        """
+        获取所有匹配文字的坐标列表。
+
+        Args:
+            image_bytes: 截图数据
+            text: 目标文字（支持 reg_ 前缀正则匹配）
+
+        Returns:
+            坐标列表 [(x1, y1), (x2, y2), ...]
+            顺序：精确匹配 → 模糊匹配
+        """
+        if not self.ocr_client:
+            logger.error("OCR client not available")
+            return []
+
+        positions: List[tuple[int, int]] = []
+
+        # 处理正则快捷模式：reg_ 开头直接使用正则匹配
+        if text.startswith("reg_"):
+            actual_text = text[4:]  # 去掉前缀
+            all_texts = self.ocr_client.find_all_texts(image_bytes, actual_text, match_mode="regex")
+            positions = [t.center for t in all_texts]
+            logger.debug(f"Found {len(positions)} positions with regex match: \"{actual_text}\"")
+            return positions
+
+        # 先精确匹配
+        exact_texts = self.ocr_client.find_all_texts(image_bytes, text, match_mode="exact")
+        exact_positions = [t.center for t in exact_texts]
+        logger.debug(f"Found {len(exact_positions)} positions with exact match: \"{text}\"")
+
+        # 再模糊匹配
+        fuzzy_texts = self.ocr_client.find_all_texts(image_bytes, text, match_mode="fuzzy")
+        fuzzy_positions = [t.center for t in fuzzy_texts]
+        logger.debug(f"Found {len(fuzzy_positions)} positions with fuzzy match: \"{text}\"")
+
+        # 合并：精确匹配在前，模糊匹配在后
+        # 注意：需要去重，因为模糊匹配可能包含精确匹配的结果
+        for pos in exact_positions:
+            if pos not in positions:
+                positions.append(pos)
+
+        for pos in fuzzy_positions:
+            if pos not in positions:
+                positions.append(pos)
+
+        return positions
+
+    def _find_all_image_positions(
+        self,
+        source_bytes: bytes,
+        template_base64: str,
+        threshold: float = 0.8
+    ) -> List[tuple[int, int]]:
+        """
+        获取所有匹配图片的坐标列表。
+
+        Args:
+            source_bytes: 源图像数据
+            template_base64: 模板图像 base64
+            threshold: 匹配阈值
+
+        Returns:
+            坐标列表 [(x1, y1), (x2, y2), ...]
+        """
+        if not self.ocr_client:
+            logger.error("OCR client not available")
+            return []
+
+        if not template_base64:
+            logger.error("Template image base64 is empty")
+            return []
+
+        # 解码 base64
+        template_bytes = self._base64_to_bytes(template_base64)
+
+        # 获取所有匹配结果
+        matches = self.ocr_client.match_image(source_bytes, template_bytes, threshold=threshold, multi_target=True)
+        positions = [m.center for m in matches]
+        logger.debug(f"Found {len(positions)} image positions with threshold={threshold}")
+
+        return positions
 
     def _apply_offset(self, x: int, y: int, offset: Optional[Dict[str, int]]) -> tuple[int, int]:
         """

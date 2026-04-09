@@ -45,6 +45,7 @@ from worker.actions.coordinate import (
 )
 from worker.actions.cmd_exec import CmdExecAction
 from worker.actions.web_token import GetTokenAction
+from worker.actions.position import OcrGetPositionExecutor, ImageGetPositionExecutor
 
 # 注册所有 Actions
 def _register_all_actions():
@@ -88,6 +89,10 @@ def _register_all_actions():
 
     # Web Token Action
     ActionRegistry.register(GetTokenAction())
+
+    # Position Actions
+    ActionRegistry.register(OcrGetPositionExecutor())
+    ActionRegistry.register(ImageGetPositionExecutor())
 
 
 # 模块加载时自动注册
@@ -134,4 +139,7 @@ __all__ = [
     "CmdExecAction",
     # Web Token Action
     "GetTokenAction",
+    # Position Actions
+    "OcrGetPositionExecutor",
+    "ImageGetPositionExecutor",
 ]

@@ -314,6 +314,9 @@ components:
             - navigate
             - switched_page
             - close_page
+            - web_image_upload
+            - ocr_get_position
+            - image_get_position
             - cmd_exec
           description: |
             动作类型，分为以下几类：
@@ -332,6 +335,7 @@ components:
             - ocr_click_same_row_image: 点击锚点文本同一行的目标图片
             - ocr_check_same_row_text: 检查锚点文本同一行的目标文本是否存在
             - ocr_check_same_row_image: 检查锚点文本同一行的目标图片是否存在
+            - ocr_get_position: 获取文字坐标列表，返回 {"positions": [[x1,y1], [x2,y2], ...]}
 
             【图像识别动作】
             - image_click: 点击匹配到的图像位置
@@ -341,6 +345,7 @@ components:
             - image_move: 移动鼠标到匹配的图像位置（仅桌面端）
             - image_double_click: 双击匹配到的图像位置
             - image_exist: 检查图像是否存在，返回 {"exists": true/false}
+            - image_get_position: 获取图片坐标列表，返回 {"positions": [[x1,y1], [x2,y2], ...]}
 
             【坐标动作】
             - click: 点击指定坐标
@@ -358,6 +363,7 @@ components:
             - navigate: 跳转 URL（Web 专用）
             - switched_page: 切换到指定页面（Web 专用）
             - close_page: 关闭当前页面（Web 专用）
+            - web_image_upload: 处理文件上传弹窗（Web 专用）
             - cmd_exec: 在宿主机执行 shell/cmd 命令
         value:
           type: string
@@ -379,6 +385,8 @@ components:
             - navigate: 要跳转的 URL
             - switched_page: 页面索引（从 1 开始），如 "1"、"2"、"3"
             - close_page: 此字段不使用
+            - web_image_upload: 此字段不使用
+            - ocr_get_position: 要查找的文字内容（支持 reg_ 前缀正则匹配）
             - cmd_exec: 要执行的命令字符串，如 "echo hello" 或 "dir C:\\Users"
         text:
           type: string
@@ -386,9 +394,11 @@ components:
         image_base64:
           type: string
           description: |
-            图像模板 base64 编码，仅 image_* 动作必填：
+            图像模板 base64 编码，仅 image_* 动作和 web_image_upload 必填：
             - image_click/image_wait/image_assert: 要匹配的图像模板
             - image_click_near_text: 要查找的图像模板
+            - image_get_position: 要查找的图像模板
+            - web_image_upload: 要上传的图片
         index:
           type: integer
           default: 0
@@ -789,6 +799,24 @@ components:
   # 关闭后会自动切换到浏览器当前显示的页面
   # 示例: 关闭当前页面
   # {"action_type": "close_page"}
+
+  # web_image_upload - 处理文件上传弹窗（仅 Web 平台）
+  # 使用 Playwright 文件选择器 API 处理原生文件上传对话框
+  # 示例: 点击上传按钮位置并上传图片
+  # {"action_type": "web_image_upload", "x": 500, "y": 300, "image_base64": "<base64_encoded_image>"}
+
+  # ocr_get_position - 获取文字坐标列表
+  # 返回 {"positions": [[x1, y1], [x2, y2], ...]}
+  # 坐标顺序：精确匹配 → 模糊匹配
+  # 示例 1: 获取"登录"文字的所有坐标
+  # {"action_type": "ocr_get_position", "value": "登录"}
+  # 示例 2: 使用正则匹配获取所有数字坐标
+  # {"action_type": "ocr_get_position", "value": "reg_\\d+"}
+
+  # image_get_position - 获取图片坐标列表
+  # 返回 {"positions": [[x1, y1], [x2, y2], ...]}
+  # 示例: 获取匹配图片的所有坐标
+  # {"action_type": "image_get_position", "image_base64": "<base64_encoded_image>", "threshold": 0.8}
 
   # cmd_exec - 在宿主机执行命令
   # 示例 1: 执行简单命令
