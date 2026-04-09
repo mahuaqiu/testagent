@@ -65,7 +65,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token"}
+    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token", "switched_page", "close_page"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -483,6 +483,10 @@ class WebPlatformManager(PlatformManager):
                 result = self._action_stop_app(action)
             elif action.action_type == "navigate":
                 result = self._action_navigate(action, context)
+            elif action.action_type == "switched_page":
+                result = self._action_switched_page(action)
+            elif action.action_type == "close_page":
+                result = self._action_close_page(action)
             else:
                 # 使用 ActionRegistry 执行通用动作
                 executor = ActionRegistry.get(action.action_type)
@@ -727,3 +731,175 @@ class WebPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 error=str(e),
             )
+
+    # ========== 页面管理动作 ==========
+
+    def _get_page_index(self, page: Page) -> int:
+        """获取页面在有效页面列表中的索引（从 1 开始）。
+
+        Args:
+            page: 目标页面
+
+        Returns:
+            页面索引（从 1 开始），如果页面不在列表中或已关闭返回 0
+        """
+        if not self._browser_context or not page:
+            return 0
+
+        try:
+            if page.is_closed():
+                return 0
+        except Exception:
+            return 0
+
+        pages = [p for p in self._browser_context.pages if not p.is_closed()]
+        for i, p in enumerate(pages):
+            if p == page:
+                return i + 1
+        return 0
+
+    def _action_switched_page(self, action: Action) -> ActionResult:
+        """切换到指定页面。
+
+        Args:
+            action: 动作参数，value 为页面索引（从 1 开始）
+
+        Returns:
+            ActionResult: 动作执行结果
+        """
+        # 验证浏览器上下文
+        if not self._browser_context:
+            return ActionResult(
+                number=0,
+                action_type="switched_page",
+                status=ActionStatus.FAILED,
+                error="Browser context not available",
+            )
+
+        # 解析索引
+        if not action.value:
+            return ActionResult(
+                number=0,
+                action_type="switched_page",
+                status=ActionStatus.FAILED,
+                error="Page index is required",
+            )
+
+        try:
+            index = int(action.value)
+        except (ValueError, TypeError):
+            return ActionResult(
+                number=0,
+                action_type="switched_page",
+                status=ActionStatus.FAILED,
+                error=f"Invalid page index: {action.value}",
+            )
+
+        # 获取有效页面列表
+        pages = [p for p in self._browser_context.pages if not p.is_closed()]
+
+        # 验证范围
+        if index < 1 or index > len(pages):
+            return ActionResult(
+                number=0,
+                action_type="switched_page",
+                status=ActionStatus.FAILED,
+                error=f"Page index {index} out of range, only {len(pages)} pages available",
+            )
+
+        # 切换页面
+        target_page = pages[index - 1]
+        self._current_page = target_page
+        self._sessions["default"] = {
+            "context": self._browser_context,
+            "page": target_page,
+        }
+
+        logger.info(f"Switched to page {index}")
+        return ActionResult(
+            number=0,
+            action_type="switched_page",
+            status=ActionStatus.SUCCESS,
+            output=f"Switched to page {index}",
+            context=target_page,
+        )
+
+    def _action_close_page(self, action: Action) -> ActionResult:
+        """关闭当前页面并自动切换焦点。
+
+        Args:
+            action: 动作参数
+
+        Returns:
+            ActionResult: 动作执行结果
+        """
+        # 验证浏览器上下文
+        if not self._browser_context:
+            return ActionResult(
+                number=0,
+                action_type="close_page",
+                status=ActionStatus.FAILED,
+                error="Browser context not available",
+            )
+
+        # 验证当前页面
+        if not self._current_page:
+            return ActionResult(
+                number=0,
+                action_type="close_page",
+                status=ActionStatus.FAILED,
+                error="No active page to close",
+            )
+
+        # 获取有效页面列表
+        pages = [p for p in self._browser_context.pages if not p.is_closed()]
+
+        # 不允许关闭最后一页
+        if len(pages) <= 1:
+            return ActionResult(
+                number=0,
+                action_type="close_page",
+                status=ActionStatus.FAILED,
+                error="Cannot close the last page",
+            )
+
+        # 关闭当前页面
+        old_index = self._get_page_index(self._current_page)
+        try:
+            _run_async(self._current_page.close())
+            logger.info(f"Closed page {old_index}")
+        except Exception as e:
+            return ActionResult(
+                number=0,
+                action_type="close_page",
+                status=ActionStatus.FAILED,
+                error=f"Failed to close page: {e}",
+            )
+
+        # 刷新页面列表，找到新的焦点页面
+        pages = [p for p in self._browser_context.pages if not p.is_closed()]
+        if not pages:
+            return ActionResult(
+                number=0,
+                action_type="close_page",
+                status=ActionStatus.FAILED,
+                error="No pages available after close",
+            )
+
+        # 更新状态（取第一个有效页面作为新焦点）
+        new_page = pages[0]
+        new_index = self._get_page_index(new_page)
+        self._current_page = new_page
+        self._sessions["default"] = {
+            "context": self._browser_context,
+            "page": new_page,
+        }
+
+        logger.info(f"Auto switched to page {new_index}")
+        return ActionResult(
+            number=0,
+            action_type="close_page",
+            status=ActionStatus.SUCCESS,
+            output=f"Closed page {old_index}, now on page {new_index}",
+            context=new_page,
+        )

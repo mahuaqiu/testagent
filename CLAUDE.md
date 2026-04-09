@@ -98,7 +98,7 @@ PlatformManager (抽象基类)
 - **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`, `image_exist`
 - **坐标动作**：`click`, `move`, `swipe`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
-- **Web 特有**：`navigate`
+- **Web 特有**：`navigate`, `switched_page`, `close_page`
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
@@ -106,7 +106,7 @@ PlatformManager (抽象基类)
 
 | 参数 | 说明 | 适用动作 |
 |------|------|----------|
-| `value` | 文字/URL/按键值，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate |
+| `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page |
 | `x`, `y` | 目标坐标 | click, move, swipe, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
