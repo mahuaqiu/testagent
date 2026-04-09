@@ -170,8 +170,8 @@ Write-Host "=========================================="
 
 # 构建安装包（可选）
 Write-Host ""
-Write-Host "是否构建安装包? (用于分发部署)"
-$BuildInstaller = Read-Host "输入 'y' 构建，其他键跳过"
+Write-Host "installation package build?"
+$BuildInstaller = Read-Host "Enter 'y' to build, and skip the other keys"
 
 if ($BuildInstaller -eq 'y') {
     Write-Host "Building installer..."
