@@ -90,7 +90,7 @@ class TrayManager:
 
     def _on_log_click(self):
         """日志菜单点击。"""
-        # 获取日志目录
+        # 获取日志文件所在目录（与日志文件同级）
         if getattr(sys, "frozen", False):
             # EXE 运行
             app_dir = os.path.dirname(sys.executable)
@@ -98,15 +98,9 @@ class TrayManager:
             # 源码运行
             app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        log_dir = os.path.join(app_dir, "logs")
-
-        # 如果目录不存在，创建它
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        # 打开目录
+        # 日志文件在根目录（worker.log），直接打开根目录
         if sys.platform == "win32":
-            os.startfile(log_dir)
+            os.startfile(app_dir)
 
     def _on_settings_click(self):
         """设置菜单点击。"""
@@ -117,8 +111,7 @@ class TrayManager:
         """退出菜单点击。"""
         if self.on_exit:
             self.on_exit()
-        # 停止托盘
-        self.stop()
+        # 注意：不在这里停止托盘，由 GUIApp._do_exit() 处理
 
     def start(self):
         """启动托盘。"""

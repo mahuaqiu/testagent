@@ -8,6 +8,8 @@ PyInstaller 打包配置文件。
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
 
 # 项目根目录
@@ -18,6 +20,30 @@ datas = [
     (os.path.join(PROJECT_ROOT, 'config'), 'config'),
     (os.path.join(PROJECT_ROOT, 'assets'), 'assets'),  # 图标文件
 ]
+
+# 收集 cv2 (OpenCV) 数据文件
+try:
+    datas += collect_data_files('cv2')
+except Exception:
+    pass
+
+# 收集 email-validator 数据文件和元数据（Pydantic EmailStr 类型需要）
+try:
+    datas += collect_data_files('email_validator', include_py_files=False)
+except Exception:
+    pass
+
+# 收集 pydantic 数据文件和元数据
+try:
+    datas += collect_data_files('pydantic', include_py_files=False)
+except Exception:
+    pass
+
+# 收集 pydantic-core 数据文件和元数据
+try:
+    datas += collect_data_files('pydantic_core', include_py_files=False)
+except Exception:
+    pass
 
 # 收集隐藏导入
 hiddenimports = [
@@ -65,6 +91,9 @@ hiddenimports = [
     'PIL',
     'PIL.Image',
     'cv2',
+    'numpy',
+    'numpy.core',
+    'numpy.core._multiarray_umath',
     # GUI 组件（新增）
     'pystray',
     'PyQt5',
@@ -76,17 +105,18 @@ hiddenimports = [
     'yaml',
     'dotenv',
     'psutil',
+    'email_validator',
 ]
 
 a = Analysis(
-    [os.path.join(PROJECT_ROOT, 'worker', 'main.py')],
+    [os.path.join(PROJECT_ROOT, 'worker', 'gui_main.py')],
     pathex=[PROJECT_ROOT],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(PROJECT_ROOT, 'scripts', 'cv2_hook.py')],
     excludes=[
         'pytest',
         'allure',

@@ -90,7 +90,12 @@
       "Bash(dir \"C:\\\\Program Files\\\\Inno Setup*\")",
       "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\Inno Setup*\")",
       "Bash(pytest tests/test_single_instance.py -v)",
-      "Bash(pytest tests/test_upgrade_manager.py -v)"
+      "Bash(pytest tests/test_upgrade_manager.py -v)",
+      "Bash(powershell:*)",
+      "Bash(ls:*)",
+      "Bash(build_env\\\\Scripts\\\\pip install:*)",
+      "Bash(build_env/Scripts/pip install:*)",
+      "Bash(taskkill /f /im test-worker.exe)"
     ]
   }
 }
