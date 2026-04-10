@@ -889,7 +889,13 @@ class Worker:
             actions=actions_results,
         )
 
-        logger.info(f"Task completed: {result.to_dict()}")
+        # 打印结果（排除截图的 base64 数据）
+        log_dict = result.to_dict()
+        if log_dict.get('actions'):
+            for ar in log_dict['actions']:
+                if ar.get('screenshot'):
+                    ar['screenshot'] = '<base64_data>'
+        logger.info(f"Task completed: {log_dict}")
 
         return result
 
