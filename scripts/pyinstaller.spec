@@ -116,7 +116,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[os.path.join(PROJECT_ROOT, 'scripts', 'cv2_hook.py')],
+    runtime_hooks=[],
     excludes=[
         'pytest',
         'allure',
