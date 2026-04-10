@@ -45,6 +45,10 @@ Name: "{app}\temp"; Permissions: users-modify
 Name: "{app}\data"; Permissions: users-modify
 
 
+[Registry]
+Root: HKLM; Subkey: "Software\Test Worker"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"
+
+
 [Icons]
 Name: "{group}\Test Worker"; Filename: "{app}\test-worker.exe"
 Name: "{group}\卸载 Test Worker"; Filename: "{app}\unins000.exe"
@@ -262,6 +266,11 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    // 静默安装模式下自动启动
+    if WizardSilent then
+      ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, 0);
+
+    // 原有配置写入逻辑
     if not IsUpgradeInstall() then
     begin
       ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
