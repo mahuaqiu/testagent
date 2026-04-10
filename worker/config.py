@@ -61,6 +61,11 @@ class WorkerConfig:
     # 图像匹配配置
     image_matching: Dict[str, Any] = field(default_factory=dict)
 
+    # 升级配置
+    upgrade_check_url: str = ""       # 升级检查 URL（对应 YAML 的 upgrade.check_url）
+    upgrade_check_timeout: int = 30   # 升级检查超时（秒）
+    upgrade_download_timeout: int = 300  # 升级下载超时（秒）
+
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
         """从 YAML 文件加载配置。"""
@@ -72,6 +77,7 @@ class WorkerConfig:
         platforms = data.get("platforms", {})
         logging_cfg = data.get("logging", {})
         image_matching = data.get("image_matching", {})
+        upgrade_cfg = data.get("upgrade", {})
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -90,6 +96,9 @@ class WorkerConfig:
             log_max_size=logging_cfg.get("max_size", 52428800),
             log_backup_count=logging_cfg.get("backup_count", 5),
             image_matching=image_matching,
+            upgrade_check_url=upgrade_cfg.get("check_url", ""),
+            upgrade_check_timeout=upgrade_cfg.get("check_timeout", 30),
+            upgrade_download_timeout=upgrade_cfg.get("download_timeout", 300),
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:
