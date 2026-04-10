@@ -105,9 +105,14 @@ class Action:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Action":
         """从字典创建动作。"""
+        # 兼容处理：key 字段映射到 value（用于 press 动作）
+        value = data.get("value")
+        if value is None and data.get("key"):
+            value = data.get("key")
+
         return cls(
             action_type=data.get("action_type", ""),
-            value=data.get("value"),
+            value=value,
             image_base64=data.get("image_base64"),
             offset=data.get("offset"),
             threshold=data.get("threshold", 0.8),

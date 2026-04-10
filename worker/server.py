@@ -34,16 +34,15 @@ def _format_actions_summary(actions: List[Dict[str, Any]], max_actions: int = 10
 
     formatted = []
     for i, action in enumerate(actions[:max_actions]):
-        # 提取所有关键字段
+        # 显示所有字段（排除 image_base64）
         fields = {"number": i}
-        for key in ["action_type", "value", "offset", "x", "y", "image_base64", "package_name", "bundle_id"]:
-            if key in action:
-                fields[key] = action[key]
-
-        # 截断过长的 value
-        value = fields.get("value")
-        if isinstance(value, str) and len(value) > 100:
-            fields["value"] = value[:97] + "..."
+        for key, value in action.items():
+            if key == "image_base64" and value:
+                fields[key] = "<base64_data>"
+            elif key == "value" and isinstance(value, str) and len(value) > 100:
+                fields[key] = value[:97] + "..."
+            else:
+                fields[key] = value
 
         formatted.append(str(fields))
 
@@ -108,6 +107,31 @@ class TaskRequest(BaseModel):
     device_id: Optional[str] = Field(None, description="设备 ID（移动端必填）")
 
 
+def _format_request_for_log(request: TaskRequest) -> Dict[str, Any]:
+    """
+    格式化原始请求用于日志输出，过滤 base64 数据。
+    """
+    log_request = {
+        "platform": request.platform,
+        "device_id": request.device_id,
+        "actions": [],
+    }
+
+    # 处理每个 action，过滤 image_base64
+    for action in request.actions:
+        log_action = {}
+        for key, value in action.items():
+            if key == "image_base64" and value:
+                log_action[key] = "<base64_data>"
+            elif key == "value" and isinstance(value, str) and len(value) > 100:
+                log_action[key] = value[:97] + "..."
+            else:
+                log_action[key] = value
+        log_request["actions"].append(log_action)
+
+    return log_request
+
+
 # FastAPI 应用
 app = FastAPI(
     title="Test Worker API",
@@ -150,12 +174,8 @@ async def execute_task(request: TaskRequest):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 记录任务请求
-    logger.info(
-        f"Sync task request: platform={request.platform}, "
-        f"device_id={request.device_id}, actions_count={len(request.actions)}, "
-        f"actions={_format_actions_summary(request.actions)}"
-    )
+    # 记录原始请求数据（过滤 base64）
+    logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
 
     # 同步执行（不生成 task_id）
     try:
@@ -190,12 +210,8 @@ async def execute_task_async(request: TaskRequest):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 记录任务请求
-    logger.info(
-        f"Async task request: platform={request.platform}, "
-        f"device_id={request.device_id}, actions_count={len(request.actions)}, "
-        f"actions={_format_actions_summary(request.actions)}"
-    )
+    # 记录原始请求数据（过滤 base64）
+    logger.info(f"Async task raw request: {_format_request_for_log(request)}")
 
     try:
         task_id, status = worker.execute_async(
