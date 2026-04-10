@@ -16,6 +16,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPEC)))
 # 收集数据文件
 datas = [
     (os.path.join(PROJECT_ROOT, 'config'), 'config'),
+    (os.path.join(PROJECT_ROOT, 'assets'), 'assets'),  # 图标文件
 ]
 
 # 收集隐藏导入
@@ -64,6 +65,13 @@ hiddenimports = [
     'PIL',
     'PIL.Image',
     'cv2',
+    # GUI 组件（新增）
+    'pystray',
+    'PyQt5',
+    'PyQt5.QtCore',
+    'PyQt5.QtGui',
+    'PyQt5.QtWidgets',
+    'PyQt5.sip',
     # 工具
     'yaml',
     'dotenv',
@@ -103,7 +111,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,        # 关闭 CMD 窗口
+    uac_admin=True,       # 管理员权限
+    icon=os.path.join(PROJECT_ROOT, 'assets', 'icon.ico'),  # EXE 图标
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
