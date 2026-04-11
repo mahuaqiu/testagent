@@ -330,7 +330,9 @@ git commit -m "feat: 添加 _crop_region 和 _offset_position 辅助方法"
 
 - [ ] **Step 2: OcrInputAction 支持 region**
 
-同样模式：截图后裁剪，position 后偏移。修改第 78-119 行。
+修改第 78-119 行。与 Step 1 完全相同的改造模式：
+1. `screenshot = platform.take_screenshot(context)` 后加 `if action.region: screenshot = self._crop_region(screenshot, action.region)`
+2. `position = self._find_text_with_fallback(...)` 后、if not position 之后，加 `if action.region: position = self._offset_position(position, action.region)`
 
 - [ ] **Step 3: OcrWaitAction 支持 region**
 
@@ -349,19 +351,19 @@ git commit -m "feat: 添加 _crop_region 和 _offset_position 辅助方法"
 
 - [ ] **Step 4: OcrAssertAction 支持 region**
 
-修改第 171-195 行。截图后裁剪。
+修改第 171-195 行。截图后裁剪。不需要坐标偏移（只判断文字是否存在）。
 
 - [ ] **Step 5: OcrPasteAction 支持 region**
 
-修改第 229-284 行。截图后裁剪，position 后偏移。
+修改第 229-284 行。截图后裁剪，position 后偏移（同 Step 1 模式）。
 
 - [ ] **Step 6: OcrMoveAction 支持 region**
 
-修改第 293-334 行。截图后裁剪，position 后偏移。
+修改第 293-334 行。截图后裁剪，position 后偏移（同 Step 1 模式）。
 
 - [ ] **Step 7: OcrDoubleClickAction 支持 region**
 
-修改第 343-378 行。截图后裁剪，position 后偏移。
+修改第 343-378 行。截图后裁剪，position 后偏移（同 Step 1 模式）。
 
 - [ ] **Step 8: OcrExistAction 支持 region**
 
@@ -369,15 +371,19 @@ git commit -m "feat: 添加 _crop_region 和 _offset_position 辅助方法"
 
 - [ ] **Step 9: OcrGetTextAction 支持 region**
 
-修改第 204-220 行。截图后裁剪。
+修改第 204-220 行。截图后裁剪，**不需要坐标偏移**（此 action 返回识别到的所有文字内容，不涉及坐标计算）。
+
+> 注意：裁剪后调用 `platform.ocr_client.recognize(screenshot)` 只返回裁剪区域内的文字结果，这正是多画面场景下需要的行为——只获取指定区域的文字。
 
 - [ ] **Step 10: OcrClickSameRowTextAction 支持 region**
 
 修改第 387-472 行。截图后裁剪，target_position 后偏移。
 
+> 注意：region 裁剪应用于整张截图，anchor 文本和 target 文本都在裁剪区域内查找。这意味着用户传入 region 后，anchor 和 target 都必须在该区域内才能成功。
+
 - [ ] **Step 11: OcrCheckSameRowTextAction 支持 region**
 
-修改第 481-554 行。截图后裁剪，target_position 后偏移。
+修改第 481-554 行。截图后裁剪，target_position 后偏移。同样，anchor 和 target 都在裁剪区域内查找。
 
 - [ ] **Step 12: 运行所有测试确认通过**
 
@@ -403,27 +409,29 @@ git commit -m "feat: OCR actions 支持 region 参数"
 
 - [ ] **Step 1: ImageClickAction 支持 region**
 
-修改第 30-76 行。截图后裁剪，position 后偏移。
+修改第 30-76 行。与 OCR action 相同的改造模式：
+1. `screenshot = platform.take_screenshot(context)` 后加 `if action.region: screenshot = self._crop_region(screenshot, action.region)`
+2. `position = self._find_image_position(...)` 后、if not position 之后，加 `if action.region: position = self._offset_position(position, action.region)`
 
 - [ ] **Step 2: ImageWaitAction 支持 region**
 
-修改第 85-125 行。while 循环内每次截图都需要裁剪。
+修改第 85-125 行。while 循环内每次截图都需要裁剪（同 OcrWaitAction）。
 
 - [ ] **Step 3: ImageAssertAction 支持 region**
 
-修改第 134-168 行。截图后裁剪。
+修改第 134-168 行。截图后裁剪。不需要坐标偏移（只判断图像是否存在）。
 
 - [ ] **Step 4: ImageMoveAction 支持 region**
 
-修改第 248-298 行。截图后裁剪，position 后偏移。
+修改第 248-298 行。截图后裁剪，position 后偏移（同 Step 1 模式）。
 
 - [ ] **Step 5: ImageDoubleClickAction 支持 region**
 
-修改第 307-353 行。截图后裁剪，position 后偏移。
+修改第 307-353 行。截图后裁剪，position 后偏移（同 Step 1 模式）。
 
 - [ ] **Step 6: ImageExistAction 支持 region**
 
-修改第 574-607 行。截图后裁剪。不需要坐标偏移。
+修改第 574-607 行。截图后裁剪。不需要坐标偏移（只返回 exists）。
 
 - [ ] **Step 7: ImageClickNearTextAction 支持 region**
 
@@ -433,21 +441,21 @@ git commit -m "feat: OCR actions 支持 region 参数"
         if not match:
             return ActionResult(...)
 
+        # 使用局部变量计算，不修改 match 对象
+        gx, gy = match.center_x, match.center_y
         if action.region:
-            match.center_x, match.center_y = self._offset_position(
-                (match.center_x, match.center_y), action.region
-            )
+            gx, gy = self._offset_position((gx, gy), action.region)
 
-        x, y = self._apply_offset(match.center_x, match.center_y, action.offset)
+        x, y = self._apply_offset(gx, gy, action.offset)
 ```
 
 - [ ] **Step 8: OcrClickSameRowImageAction 支持 region**
 
-修改第 362-450 行。截图后裁剪，target_position 后偏移。
+修改第 362-450 行。截图后裁剪，target_position 后偏移。region 裁剪应用于整张截图，anchor 文本和 target 图像都在裁剪区域内查找。
 
 - [ ] **Step 9: OcrCheckSameRowImageAction 支持 region**
 
-修改第 475-565 行。截图后裁剪，target_position 后偏移。
+修改第 475-565 行。截图后裁剪，target_position 后偏移。同样，anchor 和 target 都在裁剪区域内查找。
 
 - [ ] **Step 10: 运行全部测试**
 
