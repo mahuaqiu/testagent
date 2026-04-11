@@ -12,24 +12,23 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from worker.config import WorkerConfig, PlatformConfig
-from worker.discovery.host import HostDiscoverer, HostInfo
-from worker.discovery.android import AndroidDiscoverer, AndroidDeviceInfo
-from worker.discovery.ios import iOSDiscoverer, iOSDeviceInfo
-from worker.reporter import Reporter, WorkerReport, WorkerCapabilities, DesktopInfo
-from worker.platforms.base import PlatformManager
-from worker.platforms.web import WebPlatformManager
-from worker.platforms.android import AndroidPlatformManager
-from worker.platforms.ios import iOSPlatformManager
-from worker.platforms.windows import WindowsPlatformManager
-from worker.platforms.mac import MacPlatformManager
-from worker.task import Task, TaskResult, TaskStatus, ActionResult, ActionStatus
-from worker.task.store import TaskStore, TaskEntry
+from common.ocr_client import OCRClient
+from worker.config import PlatformConfig, WorkerConfig
 from worker.device_monitor import DeviceMonitor
-
-from common.ocr_client import OCRClient, get_ocr_client
+from worker.discovery.android import AndroidDeviceInfo, AndroidDiscoverer
+from worker.discovery.host import HostDiscoverer, HostInfo
+from worker.discovery.ios import iOSDeviceInfo, iOSDiscoverer
+from worker.platforms.android import AndroidPlatformManager
+from worker.platforms.base import PlatformManager
+from worker.platforms.ios import iOSPlatformManager
+from worker.platforms.mac import MacPlatformManager
+from worker.platforms.web import WebPlatformManager
+from worker.platforms.windows import WindowsPlatformManager
+from worker.reporter import DesktopInfo, Reporter, WorkerCapabilities, WorkerReport
+from worker.task import ActionStatus, Task, TaskResult, TaskStatus
+from worker.task.store import TaskEntry, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class WorkerStatus:
 
     status: str  # online / busy / offline
     started_at: datetime
-    supported_platforms: List[str]
+    supported_platforms: list[str]
 
 
 class TaskScheduler:
@@ -60,10 +59,10 @@ class TaskScheduler:
             "web": threading.Lock(),
         }
         # 设备锁（动态创建）
-        self.device_locks: Dict[str, threading.Lock] = {}
+        self.device_locks: dict[str, threading.Lock] = {}
         self._lock = threading.Lock()
 
-    def acquire(self, platform: str, device_id: Optional[str] = None, blocking: bool = True, timeout: float = -1) -> bool:
+    def acquire(self, platform: str, device_id: str | None = None, blocking: bool = True, timeout: float = -1) -> bool:
         """
         获取执行锁。
 
@@ -83,7 +82,7 @@ class TaskScheduler:
         # blocking=True 时，timeout > 0 用实际值，否则 None 表示无限等待
         return lock.acquire(blocking=True, timeout=timeout if timeout > 0 else None)
 
-    def release(self, platform: str, device_id: Optional[str] = None) -> None:
+    def release(self, platform: str, device_id: str | None = None) -> None:
         """释放执行锁。"""
         lock = self._get_lock(platform, device_id)
         try:
@@ -91,7 +90,7 @@ class TaskScheduler:
         except RuntimeError:
             pass  # 锁已被释放
 
-    def _get_lock(self, platform: str, device_id: Optional[str]) -> threading.Lock:
+    def _get_lock(self, platform: str, device_id: str | None) -> threading.Lock:
         """获取对应的锁。"""
         if platform in self.platform_locks:
             return self.platform_locks[platform]
@@ -111,34 +110,36 @@ class Worker:
     管理设备发现、平台管理器、任务执行、平台上报。
     """
 
-    def __init__(self, config: WorkerConfig):
+    def __init__(self, config: WorkerConfig, log_path: str | None = None):
         """
         初始化 Worker。
 
         Args:
             config: Worker 配置
+            log_path: 实际使用的日志文件路径
         """
         self.config = config
         self.worker_id = config.id
         self.port = config.port
+        self.log_path = log_path  # 存储实际日志路径
 
         # 状态
         self._status = "offline"
         self._started = False
-        self._started_at: Optional[datetime] = None
+        self._started_at: datetime | None = None
 
         # 宿主机信息
-        self.host_info: Optional[HostInfo] = None
-        self.supported_platforms: List[str] = []
+        self.host_info: HostInfo | None = None
+        self.supported_platforms: list[str] = []
 
         # 设备信息
-        self.android_devices: List[AndroidDeviceInfo] = []
-        self.ios_devices: List[iOSDeviceInfo] = []
+        self.android_devices: list[AndroidDeviceInfo] = []
+        self.ios_devices: list[iOSDeviceInfo] = []
 
         # 平台管理器
-        self.platform_managers: Dict[str, PlatformManager] = {}
-        self.android_manager: Optional[AndroidPlatformManager] = None
-        self.ios_manager: Optional[iOSPlatformManager] = None
+        self.platform_managers: dict[str, PlatformManager] = {}
+        self.android_manager: AndroidPlatformManager | None = None
+        self.ios_manager: iOSPlatformManager | None = None
 
         # 任务调度器
         self.scheduler = TaskScheduler()
@@ -147,17 +148,17 @@ class Worker:
         self.task_store = TaskStore()
 
         # 上报客户端
-        self.reporter: Optional[Reporter] = None
+        self.reporter: Reporter | None = None
 
         # OCR 客户端
-        self.ocr_client: Optional[OCRClient] = None
+        self.ocr_client: OCRClient | None = None
 
         # 后台线程
-        self._device_monitor_thread: Optional[threading.Thread] = None
+        self._device_monitor_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # 设备监控
-        self.device_monitor: Optional[DeviceMonitor] = None
+        self.device_monitor: DeviceMonitor | None = None
 
     @property
     def status(self) -> str:
@@ -419,7 +420,7 @@ class Worker:
             self._report_devices()
             logger.info(f"Device changes detected: {len(changes)} changes")
 
-    def _compare_devices(self, platform: str, old_list: List, new_list: List) -> List[str]:
+    def _compare_devices(self, platform: str, old_list: list, new_list: list) -> list[str]:
         """比较设备列表变化。"""
         changes = []
 
@@ -438,7 +439,7 @@ class Worker:
 
         return changes
 
-    def _on_device_change(self, devices: Dict) -> None:
+    def _on_device_change(self, devices: dict) -> None:
         """设备状态变更回调。"""
         logger.info(f"Device status changed: {devices}")
         # 设备变化时重新上报
@@ -446,7 +447,7 @@ class Worker:
 
     # ========== API 方法 ==========
 
-    def _get_version(self) -> Optional[str]:
+    def _get_version(self) -> str | None:
         """
         获取版本号。
 
@@ -468,7 +469,7 @@ class Worker:
             supported_platforms=self.supported_platforms,
         )
 
-    def get_worker_devices(self) -> Dict[str, Any]:
+    def get_worker_devices(self) -> dict[str, Any]:
         """获取 Worker 状态和设备信息。"""
         devices = self.device_monitor.get_all_devices() if self.device_monitor else {}
 
@@ -495,14 +496,14 @@ class Worker:
             },
         }
 
-    def get_devices(self) -> Dict[str, Any]:
+    def get_devices(self) -> dict[str, Any]:
         """
         获取设备信息（已废弃，请使用 get_worker_devices）。
 
         Returns:
             Dict: 包含 ip, port, devices 的字典
         """
-        devices: Dict[str, List[str]] = {}
+        devices: dict[str, list[str]] = {}
 
         # 1. 根据操作系统添加桌面平台
         if self.host_info:
@@ -529,12 +530,12 @@ class Worker:
             "devices": devices,
         }
 
-    def refresh_devices(self) -> Dict[str, List]:
+    def refresh_devices(self) -> dict[str, list]:
         """刷新设备列表。"""
         self._discover_mobile_devices()
         return self.get_devices()
 
-    def _validate_task(self, task: Task, manager: PlatformManager) -> Optional[TaskResult]:
+    def _validate_task(self, task: Task, manager: PlatformManager) -> TaskResult | None:
         """
         验证任务。
 
@@ -785,7 +786,7 @@ class Worker:
         manager: PlatformManager,
         context: Any,
         task: Task,
-        cancel_event: Optional[threading.Event] = None,
+        cancel_event: threading.Event | None = None,
     ) -> TaskResult:
         """
         执行动作列表。
@@ -904,9 +905,9 @@ class Worker:
     def execute_sync(
         self,
         platform: str,
-        actions: List[Dict[str, Any]],
-        device_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        actions: list[dict[str, Any]],
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         同步执行任务（不生成 task_id）。
 
@@ -939,8 +940,8 @@ class Worker:
     def execute_async(
         self,
         platform: str,
-        actions: List[Dict[str, Any]],
-        device_id: Optional[str] = None,
+        actions: list[dict[str, Any]],
+        device_id: str | None = None,
     ) -> tuple:
         """
         异步执行任务（生成 task_id）。
@@ -960,7 +961,7 @@ class Worker:
         if self.task_store.is_busy(platform, device_id):
             busy_task_id = self.task_store.get_busy_task_id(platform, device_id)
             raise TaskConflictError(
-                f"Device/Platform is busy",
+                "Device/Platform is busy",
                 task_id=busy_task_id,
             )
 
@@ -1093,7 +1094,7 @@ class Worker:
                 f"Async task completed: task_id={task.task_id}, status={entry.status}"
             )
 
-    def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
+    def get_task_result(self, task_id: str) -> dict[str, Any] | None:
         """
         获取任务结果（一次性查询，查询后销毁）。
 
@@ -1164,6 +1165,6 @@ class Worker:
 class TaskConflictError(Exception):
     """任务冲突异常。"""
 
-    def __init__(self, message: str, task_id: Optional[str] = None):
+    def __init__(self, message: str, task_id: str | None = None):
         super().__init__(message)
         self.task_id = task_id

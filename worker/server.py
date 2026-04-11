@@ -5,23 +5,23 @@ HTTP Server。
 """
 
 import logging
+import os
 import sys
 import threading
 import time
-from typing import Optional, Dict, Any, List
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from worker.worker import Worker, TaskConflictError
-from worker.task import Task
-from worker.upgrade import handle_upgrade, UpgradeError, UpgradeRequest
+from worker.upgrade import UpgradeError, UpgradeRequest, handle_upgrade
+from worker.worker import TaskConflictError, Worker
 
 logger = logging.getLogger(__name__)
 
 
-def _format_actions_summary(actions: List[Dict[str, Any]], max_actions: int = 10) -> str:
+def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
     """
     格式化请求的 actions 列表为摘要字符串。
 
@@ -53,7 +53,7 @@ def _format_actions_summary(actions: List[Dict[str, Any]], max_actions: int = 10
     return "[" + ", ".join(formatted) + "]"
 
 
-def _format_action_results(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _format_action_results(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     格式化响应中每个 action 的执行结果，排除 base64 数据。
     """
@@ -71,7 +71,7 @@ def _format_action_results(actions: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return formatted
 
 
-def _format_result_for_log(result: Dict[str, Any]) -> Dict[str, Any]:
+def _format_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
     """
     格式化结果用于日志输出，排除大数据字段。
     """
@@ -103,11 +103,11 @@ class TaskRequest(BaseModel):
     """任务请求。"""
 
     platform: str = Field(..., description="目标平台: web/android/ios/windows/mac")
-    actions: List[Dict[str, Any]] = Field(..., description="动作列表")
-    device_id: Optional[str] = Field(None, description="设备 ID（移动端必填）")
+    actions: list[dict[str, Any]] = Field(..., description="动作列表")
+    device_id: str | None = Field(None, description="设备 ID（移动端必填）")
 
 
-def _format_request_for_log(request: TaskRequest) -> Dict[str, Any]:
+def _format_request_for_log(request: TaskRequest) -> dict[str, Any]:
     """
     格式化原始请求用于日志输出，过滤 base64 数据。
     """
@@ -140,7 +140,7 @@ app = FastAPI(
 )
 
 # Worker 实例（在 main.py 中初始化）
-worker: Optional[Worker] = None
+worker: Worker | None = None
 
 
 def set_worker(w: Worker) -> None:
@@ -292,6 +292,45 @@ async def refresh_devices():
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     return worker.refresh_devices()
+
+
+@app.get("/worker/logs", response_class=PlainTextResponse)
+async def get_logs(
+    lines: int = Query(default=400, ge=1, le=2000, description="返回的日志行数"),
+):
+    """
+    获取日志内容。
+
+    返回最后 N 行日志纯文本。
+
+    Args:
+        lines: 返回的行数（默认 400，最大 2000）
+
+    Returns:
+        PlainTextResponse: 日志内容（UTF-8 编码）
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    log_path = worker.log_path
+    if not log_path or not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    try:
+        # 读取最后 N 行日志
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+            last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            content = "".join(last_lines)
+
+        return PlainTextResponse(
+            content=content,
+            media_type="text/plain; charset=utf-8",
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to read log file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {e}")
 
 
 @app.post("/worker/upgrade")

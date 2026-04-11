@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from worker.config import load_config
 from worker.logger import setup_logging
-from worker.worker import Worker
 from worker.server import app, set_worker
+from worker.worker import Worker
 
 
 def main():
@@ -49,8 +49,8 @@ def main():
     logger.info(f"OCR Service: {config.ocr_service or 'Not configured'}")
     logger.info("=" * 50)
 
-    # 创建 Worker
-    worker = Worker(config)
+    # 创建 Worker（传入日志路径）
+    worker = Worker(config, log_path=log_path)
 
     # 启动 Worker
     try:
