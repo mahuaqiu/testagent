@@ -1,5 +1,11 @@
 """OCR/Image action region 参数支持测试。"""
 
+import io
+
+import pytest
+from PIL import Image
+
+from worker.actions.base import BaseActionExecutor
 from worker.task.action import Action
 
 
@@ -35,12 +41,6 @@ class TestActionRegionField:
         action = Action(action_type="ocr_click")
         result = action.to_dict()
         assert "region" not in result
-
-
-import io
-import pytest
-from PIL import Image
-from worker.actions.base import BaseActionExecutor
 
 
 class _ConcreteExecutor(BaseActionExecutor):
