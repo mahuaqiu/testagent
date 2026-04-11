@@ -5,7 +5,7 @@
 #define Version "2.0.0"
 
 [Setup]
-AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}}
+AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName=Test Worker
 AppVersion={#Version}
 AppPublisher=Test Worker Team
@@ -33,6 +33,10 @@ CreateUninstallRegKey=yes
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
+; 自定义窗口标题（显示版本号）
+[Messages]
+SetupWindowTitle=Test Worker {#Version} 安装
+
 
 [Files]
 ; Worker 主程序和依赖（排除配置文件，配置文件单独处理）
@@ -49,7 +53,8 @@ Name: "{app}\data"; Permissions: users-modify
 
 
 [Registry]
-Root: HKLM; Subkey: "Software\Test Worker"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"
+; 使用 HKCU 代替 HKLM，因为 PrivilegesRequired=lowest 不需要管理员权限
+Root: HKCU; Subkey: "Software\Test Worker"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"
 
 
 [Icons]
@@ -63,7 +68,11 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 
 [Run]
-Filename: "{app}\test-worker.exe"; Description: "启动 Test Worker"; Flags: nowait postinstall skipifsilent
+; 交互式安装时，用户勾选启动，弹出 UAC 以管理员权限运行
+; skipifsilent: 静默安装时跳过此启动项（由 CurStepChanged 处理）
+; shellexec: 使用 ShellExecute 启动（Verb 参数必需）
+; runas: 以管理员权限运行（弹出 UAC）
+Filename: "{app}\test-worker.exe"; Description: "启动 Test Worker"; Flags: nowait postinstall skipifsilent shellexec; Verb: runas
 
 
 [UninstallRun]
@@ -288,7 +297,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    // Auto-start in silent mode
+    // Auto-start in silent mode (no UAC, run as current user for unattended upgrade)
     if WizardSilent then
       ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
 

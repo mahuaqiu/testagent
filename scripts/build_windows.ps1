@@ -180,7 +180,7 @@ $BuildInstaller = Read-Host "Enter 'y' to build, and skip the other keys"
 
 if ($BuildInstaller -eq 'y') {
     Write-Host "Building installer..."
-    & ".\installer\build_installer.ps1" -Version $Version
+    & ".\installer\build_installer.ps1" -Version $BuildVersion
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Installer build failed, but EXE package is available"
     }
