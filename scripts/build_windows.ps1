@@ -80,7 +80,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Clean up version file
+# Clean up version file (keep in source)
 Remove-Item $VersionFile -ErrorAction SilentlyContinue
 
 # Check generated directory
@@ -108,6 +108,11 @@ Move-Item "$BuildDir\*" $PackageDir
 if (Test-Path $BuildDir) {
     Remove-Item -Path $BuildDir -Force -Recurse -ErrorAction SilentlyContinue
 }
+
+# Write version to dist directory for installer to read
+$DistVersionFile = "$PackageDir\VERSION"
+Set-Content -Path $DistVersionFile -Value $BuildVersion -Encoding UTF8
+Write-Host "Version saved to: $DistVersionFile"
 
 # Copy Playwright chromium to package
 Write-Host "Copying Playwright chromium..."

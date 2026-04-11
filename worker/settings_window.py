@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QFrame,
     QWidget,
+    QMessageBox,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
@@ -44,13 +45,47 @@ class SettingsWindow(QDialog):
         self._load_values()
 
     def _load_config(self) -> dict:
-        """加载配置文件。"""
-        try:
-            if os.path.exists(self.config_path):
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    return yaml.safe_load(f) or {}
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
+        """加载配置文件。
+
+        尝试多种编码读取，兼容不同来源的配置文件：
+        - UTF-8：标准编码
+        - GBK/GB18030：Windows 中文系统默认编码（如 Inno Setup 生成的配置）
+        """
+        if not os.path.exists(self.config_path):
+            return {}
+
+        # 尝试多种编码
+        encodings = ["utf-8", "gbk", "gb18030"]
+        data = None
+        last_error = None
+
+        for encoding in encodings:
+            try:
+                with open(self.config_path, "r", encoding=encoding) as f:
+                    data = yaml.safe_load(f) or {}
+                logger.info(f"Config loaded successfully with {encoding} encoding")
+                return data
+            except UnicodeDecodeError as e:
+                last_error = f"编码错误 ({encoding}): {e}"
+                logger.warning(f"Failed to load config with {encoding}: {e}")
+                continue
+            except yaml.YAMLError as e:
+                last_error = f"YAML 格式错误: {e}"
+                logger.error(f"YAML parse error: {e}")
+                break
+            except Exception as e:
+                last_error = f"读取失败: {e}"
+                logger.error(f"Failed to load config: {e}")
+                break
+
+        # 加载失败时弹出提示
+        if data is None and last_error:
+            QMessageBox.warning(
+                self,
+                "配置加载失败",
+                f"无法加载配置文件:\n{self.config_path}\n\n错误: {last_error}\n\n将使用默认值，保存时会覆盖原有配置。"
+            )
+
         return {}
 
     def _setup_ui(self):
@@ -328,31 +363,87 @@ class SettingsWindow(QDialog):
         return True
 
     def _show_warning(self, message: str) -> None:
-        """显示警告提示（内联样式，不弹窗）。"""
-        # 简单处理，直接在控制台输出
-        logger.warning(f"Validation warning shown to user: {message}")
+        """显示警告提示对话框。"""
+        QMessageBox.warning(self, "配置验证", message)
 
     def _on_save(self):
         """保存按钮点击。"""
         if not self._validate():
             return
 
-        self._config.setdefault("worker", {})
-        self._config["worker"]["ip"] = self.ip_input.text().strip() or None
-        self._config["worker"]["port"] = int(self.port_input.text().strip())
-        self._config["worker"]["namespace"] = self.namespace_input.text().strip()
-
-        self._config.setdefault("external_services", {})
-        self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()
-        self._config["external_services"]["ocr_service"] = self.ocr_service_input.text().strip()
-
-        self._config.setdefault("logging", {})
-        self._config["logging"]["level"] = self.log_level_combo.currentText()
-
+        # Read original file content to preserve comments and format
+        original_content = ""
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False)
-            logger.info(f"Configuration saved: {self.config_path}")
-            self.accept()
-        except Exception as e:
-            logger.error(f"Failed to save config: {e}")
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    original_content = f.read()
+        except Exception:
+            pass
+
+        if original_content:
+            # Update specific fields using string replacement (preserve comments)
+            original_content = self._update_yaml_value(original_content, "ip", self.ip_input.text().strip() or "null")
+            original_content = self._update_yaml_value(original_content, "port", self.port_input.text().strip())
+            original_content = self._update_yaml_value(original_content, "namespace", self.namespace_input.text().strip())
+            original_content = self._update_yaml_value(original_content, "platform_api", self.platform_api_input.text().strip())
+            original_content = self._update_yaml_value(original_content, "ocr_service", self.ocr_service_input.text().strip())
+            original_content = self._update_yaml_value(original_content, "level", self.log_level_combo.currentText())
+
+            try:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    f.write(original_content)
+                logger.info(f"Configuration saved: {self.config_path}")
+                QMessageBox.information(self, "保存成功", "配置已保存，程序将重启以应用新配置。")
+                self.accept()
+            except Exception as e:
+                logger.error(f"Failed to save config: {e}")
+                QMessageBox.warning(self, "保存失败", f"无法保存配置文件:\n{self.config_path}\n\n错误: {e}")
+        else:
+            # Fallback: create new config if original file doesn't exist
+            self._config.setdefault("worker", {})
+            self._config["worker"]["ip"] = self.ip_input.text().strip() or None
+            self._config["worker"]["port"] = int(self.port_input.text().strip())
+            self._config["worker"]["namespace"] = self.namespace_input.text().strip()
+
+            self._config.setdefault("external_services", {})
+            self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()
+            self._config["external_services"]["ocr_service"] = self.ocr_service_input.text().strip()
+
+            self._config.setdefault("logging", {})
+            self._config["logging"]["level"] = self.log_level_combo.currentText()
+
+            try:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False)
+                logger.info(f"Configuration saved: {self.config_path}")
+                QMessageBox.information(self, "保存成功", "配置已保存，程序将重启以应用新配置。")
+                self.accept()
+            except Exception as e:
+                logger.error(f"Failed to save config: {e}")
+                QMessageBox.warning(self, "保存失败", f"无法保存配置文件:\n{self.config_path}\n\n错误: {e}")
+
+    def _update_yaml_value(self, content: str, key: str, value: str) -> str:
+        """Update YAML value while preserving comments and format.
+
+        Uses simple string replacement to update specific key values.
+        """
+        import re
+
+        # Quote string values (except null, numbers, and already quoted)
+        if value != "null" and not value.isdigit() and not value.startswith('"'):
+            value = f'"{value}"'
+
+        # Pattern: match "  key: value" (with possible comment after)
+        # Handles: key: value, key: "value", key: null
+        pattern = rf'^(\s+){key}:\s*([^\s#]+)(\s*(#.*)?)$'
+
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            match = re.match(pattern, line)
+            if match:
+                indent = match.group(1)
+                comment_part = match.group(3) or ""
+                lines[i] = f"{indent}{key}: {value}{comment_part}"
+                break
+
+        return '\n'.join(lines)

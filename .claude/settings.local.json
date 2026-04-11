@@ -95,7 +95,11 @@
       "Bash(ls:*)",
       "Bash(build_env\\\\Scripts\\\\pip install:*)",
       "Bash(build_env/Scripts/pip install:*)",
-      "Bash(taskkill /f /im test-worker.exe)"
+      "Bash(taskkill /f /im test-worker.exe)",
+      "Bash(ipconfig)",
+      "Bash(xxd \"D:/code/Test Worker/_internal/config/worker.yaml\")",
+      "Bash(xxd \"D:/code/autotest/config/worker.yaml\")",
+      "Bash(xxd \"D:/code/autotest/dist/windows/test-worker/_internal/config/worker.yaml\")"
     ]
   }
 }

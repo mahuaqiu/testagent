@@ -166,7 +166,7 @@ class GUIApp:
         # 初始化日志
         self._splash.update_status("初始化日志...")
         self.app.processEvents()
-        log_path = setup_logging(
+        self._log_path = setup_logging(
             level=self.config.log_level,
             log_file=self.config.log_file,
             max_bytes=self.config.log_max_size,
@@ -240,7 +240,7 @@ class GUIApp:
             return
 
         try:
-            self.worker = Worker(self.config)
+            self.worker = Worker(self.config, log_path=self._log_path)
             self.worker.start()
         except Exception as e:
             logger.error(f"Failed to start worker: {e}")
@@ -355,7 +355,7 @@ class GUIApp:
             self._show_error_dialog("重新加载配置失败", str(e))
             return
 
-        setup_logging(
+        self._log_path = setup_logging(
             level=self.config.log_level,
             log_file=self.config.log_file,
             max_bytes=self.config.log_max_size,

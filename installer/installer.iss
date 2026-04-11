@@ -32,11 +32,11 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 
 
 [Files]
-; Worker 主程序和依赖
-Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+; Worker 主程序和依赖（排除配置文件，配置文件单独处理）
+Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "_internal\config\worker.yaml"
 
-; 配置目录（在 _internal 下）- 升级时不覆盖（保留用户配置）
-Source: "..\dist\windows\test-worker\_internal\config\*"; DestDir: "{app}\_internal\config"; Flags: onlyifdoesntexist recursesubdirs
+; 配置文件 - 总是覆盖（确保配置文件格式正确）
+Source: "..\dist\windows\test-worker\_internal\config\worker.yaml"; DestDir: "{app}\_internal\config"; Flags: ignoreversion
 
 
 [Dirs]
@@ -95,51 +95,69 @@ begin
   end;
 end;
 
-// 通过注册表获取本机 IP 地址
+// 通过注册表获取本机 IP 地址，优先选择 10.xx 和 192.xx 网段
 function GetLocalIP: String;
 var
   SubKeyNames: TArrayOfString;
-  I, J: Integer;
+  I: Integer;
   IPValue: String;
   Enabled: String;
+  IP_10: String;      // 10.x.x.x 网段
+  IP_192: String;     // 192.168.x.x 网段
+  IP_172: String;     // 172.16-31.x.x 网段
+  IP_Other: String;   // 其他有效 IP
 begin
-  Result := '127.0.0.1';
+  // 初始化所有 IP 变量
+  IP_10 := '';
+  IP_192 := '';
+  IP_172 := '';
+  IP_Other := '';
 
-  // 查找启用的网络适配器
+  // 查找所有网络适配器
   if RegGetSubkeyNames(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces', SubKeyNames) then
   begin
     for I := 0 to GetArrayLength(SubKeyNames) - 1 do
     begin
-      // 检查适配器是否启用
-      if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'EnableDHCP', Enabled) then
+      IPValue := '';
+
+      // 尝试读取 DHCP IP（优先）
+      if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'DhcpIPAddress', IPValue) then
       begin
-        if Enabled = '1' then
-        begin
-          // DHCP 启用，读取 DHCP IP
-          if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'DhcpIPAddress', IPValue) then
-          begin
-            if (IPValue <> '') and (IPValue <> '0.0.0.0') then
-            begin
-              Result := IPValue;
-              Exit;
-            end;
-          end;
-        end
-        else if Enabled = '0' then
-        begin
-          // 静态 IP
-          if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'IPAddress', IPValue) then
-          begin
-            if (IPValue <> '') and (IPValue <> '0.0.0.0') then
-            begin
-              Result := IPValue;
-              Exit;
-            end;
-          end;
-        end;
+        // DHCP IP 读取成功
+      end
+      else
+      begin
+        // 尝试读取静态 IP
+        RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'IPAddress', IPValue);
+      end;
+
+      // 检查 IP 是否有效（排除空值、0.0.0.0 和 127.x.x.x）
+      if (IPValue <> '') and (IPValue <> '0.0.0.0') and (Copy(IPValue, 1, 4) <> '127.') then
+      begin
+        // 按优先级分类存储（只存储第一个找到的）
+        if (IP_10 = '') and (Copy(IPValue, 1, 3) = '10.') then
+          IP_10 := IPValue
+        else if (IP_192 = '') and (Copy(IPValue, 1, 8) = '192.168.') then
+          IP_192 := IPValue
+        else if (IP_172 = '') and (Copy(IPValue, 1, 4) = '172.') then
+          IP_172 := IPValue
+        else if (IP_Other = '') then
+          IP_Other := IPValue;
       end;
     end;
   end;
+
+  // 按优先级返回：10.xx > 192.168.xx > 172.xx > 其他 > 127.0.0.1
+  if IP_10 <> '' then
+    Result := IP_10
+  else if IP_192 <> '' then
+    Result := IP_192
+  else if IP_172 <> '' then
+    Result := IP_172
+  else if IP_Other <> '' then
+    Result := IP_Other
+  else
+    Result := '127.0.0.1';
 end;
 
 function IsUpgradeInstall: Boolean;
@@ -262,34 +280,107 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigFile: String;
-  ConfigContent: String;
+  ConfigContent: AnsiString;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    // 静默安装模式下自动启动
+    // Auto-start in silent mode
     if WizardSilent then
-      ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, 0);
+      ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
 
-    // 原有配置写入逻辑
-    if not IsUpgradeInstall() then
-    begin
-      ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
-      ConfigContent :=
-        '# Worker 配置文件（安装时生成）' + #13#10 +
-        '' + #13#10 +
-        'worker:' + #13#10 +
-        '  id: null' + #13#10 +
-        '  ip: "' + IpEdit.Text + '"' + #13#10 +
-        '  port: ' + PortEdit.Text + #13#10 +
-        '  namespace: "' + NamespaceEdit.Text + '"' + #13#10 +
-        '  device_check_interval: 300' + #13#10 +
-        '' + #13#10 +
-        'external_services:' + #13#10 +
-        '  platform_api: "' + PlatformApiEdit.Text + '"' + #13#10 +
-        '  ocr_service: "' + OcrServiceEdit.Text + '"' + #13#10 +
-        '' + #13#10 +
-        '# 其他配置请参考完整配置文件模板' + #13#10;
-      SaveStringToFile(ConfigFile, ConfigContent, False);
-    end;
+    // Write config file with user input values (UTF-8 encoding, English comments)
+    ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
+
+    ConfigContent := '# Worker Configuration File' + #13#10 +
+      '# Edit this file after installation based on your environment' + #13#10 +
+      '' + #13#10 +
+      '# Worker Basic Settings' + #13#10 +
+      'worker:' + #13#10 +
+      '  id: null                          # Auto-generated, or specify manually' + #13#10 +
+      '  ip: "' + IpEdit.Text + '"                          # Specify IP address, null means auto-detect' + #13#10 +
+      '  port: ' + PortEdit.Text + '                        # HTTP service port' + #13#10 +
+      '  namespace: ' + NamespaceEdit.Text + '         # Namespace for categorizing Workers' + #13#10 +
+      '  device_check_interval: 300        # Device check interval (seconds), 5 minutes' + #13#10 +
+      '  service_retry_count: 3            # Service startup retry count' + #13#10 +
+      '  service_retry_interval: 10        # Retry interval (seconds)' + #13#10 +
+      '  action_step_delay: 0.5            # Action step delay (seconds)' + #13#10 +
+      '' + #13#10 +
+      '# External Services (Required)' + #13#10 +
+      'external_services:' + #13#10 +
+      '  platform_api: "' + PlatformApiEdit.Text + '"  # Platform API URL' + #13#10 +
+      '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL' + #13#10 +
+      '' + #13#10 +
+      '# Platform Settings' + #13#10 +
+      'platforms:' + #13#10 +
+      '  web:' + #13#10 +
+      '    enabled: null                   # Auto-detect based on system' + #13#10 +
+      '    headless: false                 # Headless mode' + #13#10 +
+      '    browser_type: chromium          # chromium / firefox / webkit' + #13#10 +
+      '    timeout: 30000                  # Timeout (ms)' + #13#10 +
+      '    session_timeout: 300            # Session timeout (seconds)' + #13#10 +
+      '    screenshot_dir: data/screenshots' + #13#10 +
+      '    ignore_https_errors: true       # Ignore HTTPS certificate errors' + #13#10 +
+      '    user_data_dir: data/chrome_profile  # Browser user data directory' + #13#10 +
+      '    permissions:                    # Web permissions' + #13#10 +
+      '      - camera' + #13#10 +
+      '      - microphone' + #13#10 +
+      '    clear_profile_on_start: true' + #13#10 +
+      '    request_blacklist:' + #13#10 +
+      '      - pattern: "uba.js"' + #13#10 +
+      '        action: "404"' + #13#10 +
+      '      - pattern: "tinyReporter.min.js"' + #13#10 +
+      '        action: "404"' + #13#10 +
+      '    token_headers:' + #13#10 +
+      '      - "X-Auth-Token"' + #13#10 +
+      '      - "X-Request-Operator"' + #13#10 +
+      '' + #13#10 +
+      '  android:' + #13#10 +
+      '    enabled: null                   # Only on Windows' + #13#10 +
+      '    u2_port: 7912                   # uiautomator2 port' + #13#10 +
+      '    session_timeout: 300' + #13#10 +
+      '    screenshot_dir: data/screenshots' + #13#10 +
+      '' + #13#10 +
+      '  ios:' + #13#10 +
+      '    enabled: null                   # Only on Windows' + #13#10 +
+      '    wda_base_port: 8100             # WDA base port' + #13#10 +
+      '    wda_ipa_path: wda/WebDriverAgent.ipa' + #13#10 +
+      '    session_timeout: 300' + #13#10 +
+      '    screenshot_dir: data/screenshots' + #13#10 +
+      '' + #13#10 +
+      '  windows:' + #13#10 +
+      '    enabled: null                   # Only on Windows' + #13#10 +
+      '    session_timeout: 300' + #13#10 +
+      '    screenshot_dir: data/screenshots' + #13#10 +
+      '' + #13#10 +
+      '  mac:' + #13#10 +
+      '    enabled: null                   # Only on macOS' + #13#10 +
+      '    session_timeout: 300' + #13#10 +
+      '    screenshot_dir: data/screenshots' + #13#10 +
+      '' + #13#10 +
+      '# Image Matching Settings' + #13#10 +
+      'image_matching:' + #13#10 +
+      '  default_threshold: 0.8            # Default matching threshold' + #13#10 +
+      '  methods:' + #13#10 +
+      '    - template                      # Template matching' + #13#10 +
+      '    - sift                          # Feature point matching' + #13#10 +
+      '' + #13#10 +
+      '# Logging Settings' + #13#10 +
+      'logging:' + #13#10 +
+      '  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR' + #13#10 +
+      '  file: null                        # Log file path' + #13#10 +
+      '  max_size: 52428800                # Max file size, default 50MB' + #13#10 +
+      '  backup_count: 5                   # Number of backup files' + #13#10 +
+      '' + #13#10 +
+      '# Upgrade Settings' + #13#10 +
+      'upgrade:' + #13#10 +
+      '  check_url: ""                     # Upgrade check API URL' + #13#10 +
+      '  check_timeout: 30                 # Check timeout (seconds)' + #13#10 +
+      '  download_timeout: 300             # Download timeout (seconds)' + #13#10 +
+      '' + #13#10;
+
+    // Delete existing file and write new content with UTF-8 encoding
+    DeleteFile(ConfigFile);
+    SaveStringToFile(ConfigFile, ConfigContent, True);
   end;
 end;

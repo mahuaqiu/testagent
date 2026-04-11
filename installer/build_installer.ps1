@@ -1,17 +1,16 @@
 # installer/build_installer.ps1
-# Windows 安装包构建脚本
+# Windows Installer Build Script
 
 param(
-    [string]$Version = "2.0.0",
+    [string]$Version = "",
     [string]$PyInstallerOutput = "..\dist\windows\test-worker"
 )
 
 Write-Host "=========================================="
 Write-Host "Building Test Worker Installer"
-Write-Host "Version: $Version"
 Write-Host "=========================================="
 
-# 检查 Inno Setup
+# Check Inno Setup
 $InnoPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $InnoPath)) {
     $InnoPath = "C:\Program Files\Inno Setup 6\ISCC.exe"
@@ -20,7 +19,6 @@ if (-not (Test-Path $InnoPath)) {
     $InnoPath = "D:\Program Files\Inno Setup 6\ISCC.exe"
 }
 if (-not (Test-Path $InnoPath)) {
-    # 尝试从 PATH 环境变量查找
     $InnoPath = (Get-Command ISCC -ErrorAction SilentlyContinue).Source
 }
 if (-not $InnoPath -or -not (Test-Path $InnoPath)) {
@@ -29,7 +27,7 @@ if (-not $InnoPath -or -not (Test-Path $InnoPath)) {
     exit 1
 }
 
-# 检查 PyInstaller 输出
+# Check PyInstaller output
 $OutputDir = Join-Path $PSScriptRoot $PyInstallerOutput
 if (-not (Test-Path $OutputDir)) {
     Write-Error "PyInstaller output not found: $OutputDir"
@@ -37,13 +35,28 @@ if (-not (Test-Path $OutputDir)) {
     exit 1
 }
 
-# 检查 dist 目录
+# Auto-read version
+if ($Version -eq "") {
+    $VersionFile = Join-Path $OutputDir "VERSION"
+    if (Test-Path $VersionFile) {
+        $Version = Get-Content $VersionFile -Raw
+        $Version = $Version.Trim()
+        Write-Host "Auto-detected version: $Version"
+    } else {
+        $Version = Get-Date -Format "yyyyMMddHHmm"
+        Write-Host "No VERSION file found, using timestamp: $Version"
+    }
+}
+
+Write-Host "Version: $Version"
+
+# Check dist directory
 $DistDir = Join-Path $PSScriptRoot "..\dist"
 if (-not (Test-Path $DistDir)) {
     New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 }
 
-# 编译安装脚本
+# Compile installer script
 Write-Host "Compiling installer script..."
 $ScriptPath = Join-Path $PSScriptRoot "installer.iss"
 

@@ -1,91 +1,90 @@
-# Worker 配置文件
-# 打包后请根据实际环境修改此文件
+# Worker Configuration File
+# Edit this file after installation based on your environment
 
-# Worker 基础配置
+# Worker Basic Settings
 worker:
-  id: null                          # 自动生成，也可指定
-  ip: null                          # 指定 IP 地址，null 表示自动获取
-  port: 8088                        # HTTP 服务端口
-  namespace: meeting_public                 # 命名空间，用于分类 Worker
-  device_check_interval: 300        # 设备检测间隔(秒)，5分钟
-  service_retry_count: 3            # 服务启动重试次数
-  service_retry_interval: 10        # 重试间隔(秒)
-  action_step_delay: 0.5            # 动作间隔延迟(秒)，两个action之间没有wait时自动等待
+  id: null                          # Auto-generated, or specify manually
+  ip: null                          # Specify IP address, null means auto-detect
+  port: 8088                        # HTTP service port
+  namespace: meeting_public         # Namespace for categorizing Workers
+  device_check_interval: 300        # Device check interval (seconds), 5 minutes
+  service_retry_count: 3            # Service startup retry count
+  service_retry_interval: 10        # Retry interval (seconds)
+  action_step_delay: 0.5            # Action step delay (seconds), auto-wait between actions
 
-# 外部服务地址（必须配置）
+# External Services (Required)
 external_services:
-  platform_api: "http://192.168.0.102:8000"  # 配置平台 API
-  ocr_service: "http://192.168.0.102:9021"   # OCR 服务地址
+  platform_api: "http://192.168.0.102:8000"  # Platform API URL
+  ocr_service: "http://192.168.0.102:9021"   # OCR service URL
 
-# 平台配置
+# Platform Settings
 platforms:
   web:
-    enabled: null                   # 根据系统自动判断
-    headless: false                  # 无头模式
+    enabled: null                   # Auto-detect based on system
+    headless: false                 # Headless mode
     browser_type: chromium          # chromium / firefox / webkit
-    timeout: 30000                  # 超时时间(ms)
-    session_timeout: 300            # 会话超时(秒)
+    timeout: 30000                  # Timeout (ms)
+    session_timeout: 300            # Session timeout (seconds)
     screenshot_dir: data/screenshots
-    ignore_https_errors: true       # 忽略 HTTPS 证书错误
-    user_data_dir: data/chrome_profile  # 浏览器用户数据目录
-    permissions:                    # 网页权限（摄像头、麦克风等）
+    ignore_https_errors: true       # Ignore HTTPS certificate errors
+    user_data_dir: data/chrome_profile  # Browser user data directory
+    permissions:                    # Web permissions (camera, microphone, etc.)
       - camera
       - microphone
-    # 启动前清理 Default 目录数据（保留 Cache 目录），避免账号缓存
+    # Clear Default directory on startup (keep Cache directory) to avoid account cache
     clear_profile_on_start: true
-    # 请求黑名单：拦截特定请求（如某些 JS 文件加载超时）
-    # action 可选值：abort（中止请求）、404（返回404）、empty（返回空内容）
+    # Request blacklist: intercept specific requests (e.g. JS files that timeout)
+    # Action options: abort (cancel request), 404 (return 404), empty (return empty content)
     request_blacklist:
       - pattern: "uba.js"
         action: "404"
       - pattern: "tinyReporter.min.js"
         action: "404"
-    # Token 捕获：监听响应头中的 token header
+    # Token capture: listen for token headers in responses
     token_headers:
       - "X-Auth-Token"
       - "X-Request-Operator"
-      # - "Authorization"  # 可根据需要添加更多
+      # - "Authorization"  # Add more as needed
 
   android:
-    enabled: null                   # 仅 Windows
-    u2_port: 7912                   # uiautomator2 端口
+    enabled: null                   # Only on Windows
+    u2_port: 7912                   # uiautomator2 port
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   ios:
-    enabled: null                   # 仅 Windows
-    wda_base_port: 8100             # WDA 基础端口
+    enabled: null                   # Only on Windows
+    wda_base_port: 8100             # WDA base port
     wda_ipa_path: wda/WebDriverAgent.ipa
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   windows:
-    enabled: null                   # 仅 Windows
+    enabled: null                   # Only on Windows
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   mac:
-    enabled: null                   # 仅 macOS
+    enabled: null                   # Only on macOS
     session_timeout: 300
     screenshot_dir: data/screenshots
 
-# 图像匹配配置
+# Image Matching Settings
 image_matching:
-  default_threshold: 0.8            # 默认匹配阈值
-  methods:                          # 支持的匹配方法
-    - template                      # 模板匹配
-    - sift                          # 特征点匹配
+  default_threshold: 0.8            # Default matching threshold
+  methods:                          # Supported matching methods
+    - template                      # Template matching
+    - sift                          # Feature point matching
 
-# 日志配置
+# Logging Settings
 logging:
-  level: INFO                       # 日志级别: DEBUG / INFO / WARNING / ERROR
-  file: null                        # 日志文件路径，null 表示使用默认路径（exe同目录/worker.log）
-  max_size: 52428800                # 单文件最大字节数，默认 50MB
-  backup_count: 5                   # 保留的备份文件数量
+  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR
+  file: null                        # Log file path, null means default (exe_dir/worker.log)
+  max_size: 52428800                # Max file size in bytes, default 50MB
+  backup_count: 5                   # Number of backup files to keep
 
-# 升级配置
+# Upgrade Settings
 upgrade:
-  check_url: ""                     # 升级检查接口地址，如 "http://192.168.0.102:8000/get_worker_upgrade"
-  check_timeout: 30                  # 升级检查超时（秒）
-  download_timeout: 300             # 下载超时（秒）
-  
+  check_url: ""                     # Upgrade check API URL, e.g. "http://192.168.0.102:8000/get_worker_upgrade"
+  check_timeout: 30                 # Upgrade check timeout (seconds)
+  download_timeout: 300             # Download timeout (seconds)

@@ -3,6 +3,7 @@ Worker 配置管理模块。
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
 
@@ -68,9 +69,27 @@ class WorkerConfig:
 
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
-        """从 YAML 文件加载配置。"""
-        with open(path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+        """从 YAML 文件加载配置。
+
+        尝试多种编码读取，兼容不同来源的配置文件：
+        - UTF-8：标准编码
+        - GBK/GB18030：Windows 中文系统默认编码（如 Inno Setup 生成的配置）
+        """
+        # 尝试多种编码
+        encodings = ["utf-8", "gbk", "gb18030"]
+        data = None
+
+        for encoding in encodings:
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    data = yaml.safe_load(f) or {}
+                break
+            except UnicodeDecodeError:
+                continue
+
+        # 所有编码都失败时使用默认配置
+        if data is None:
+            data = {}
 
         worker_data = data.get("worker", {})
         external = data.get("external_services", {})
@@ -163,12 +182,26 @@ class PlatformConfig:
 
 
 def get_default_config_path() -> str:
-    """获取默认配置文件路径。"""
-    return os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "config",
-        "worker.yaml"
-    )
+    """获取默认配置文件路径。
+
+    在打包环境下（目录模式），配置文件位于 exe 同级的 _internal/config 目录。
+    在开发环境下，配置文件位于项目根目录的 config 目录。
+    """
+    # 检查是否在 PyInstaller 打包环境下运行
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包模式（目录模式）
+        # sys.executable 是 exe 文件路径
+        # 配置文件在 exe 同级的 _internal/config 目录
+        exe_dir = os.path.dirname(sys.executable)
+        return os.path.join(exe_dir, "_internal", "config", "worker.yaml")
+    else:
+        # 开发模式
+        # 使用 __file__ 计算相对路径
+        return os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "config",
+            "worker.yaml"
+        )
 
 
 def load_config() -> WorkerConfig:
