@@ -6,7 +6,7 @@
 
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 
 class ActionType(Enum):
@@ -101,6 +101,7 @@ class Action:
     anchor_index: Optional[int] = None       # 锚点索引（第几个匹配）
     row_tolerance: Optional[int] = None      # 水平带范围（像素，默认20）
     target_index: Optional[int] = None       # 目标索引（同行第几个匹配）
+    region: Optional[List[int]] = None       # 操作区域 [x1, y1, x2, y2]
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Action":
@@ -136,6 +137,7 @@ class Action:
             anchor_index=data.get("anchor_index"),
             row_tolerance=data.get("row_tolerance"),
             target_index=data.get("target_index"),
+            region=data.get("region"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -188,5 +190,7 @@ class Action:
             result["row_tolerance"] = self.row_tolerance
         if self.target_index is not None:
             result["target_index"] = self.target_index
+        if self.region is not None:
+            result["region"] = self.region
 
         return result
