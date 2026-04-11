@@ -4,9 +4,9 @@
 所有平台统一使用 OCR/图像识别定位，不依赖传统元素选择器。
 """
 
+from dataclasses import dataclass
 from enum import Enum
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Any
 
 
 class ActionType(Enum):
@@ -69,42 +69,42 @@ class Action:
     """
 
     action_type: str                         # 动作类型
-    value: Optional[str] = None              # 文字/URL/按键值
-    image_base64: Optional[str] = None       # 图像模板 base64 编码
-    offset: Optional[Dict[str, int]] = None  # 点击偏移 {"x": 10, "y": 5}
+    value: str | None = None              # 文字/URL/按键值
+    image_base64: str | None = None       # 图像模板 base64 编码
+    offset: dict[str, int] | None = None  # 点击偏移 {"x": 10, "y": 5}
     threshold: float = 0.8                   # 图像匹配阈值
     timeout: int = 30000                     # 超时时间(ms)
     match_mode: str = "exact"                # OCR 匹配模式
     screenshot: bool = False                 # 是否截图
-    wait: Optional[int] = None               # 等待时间(ms)
+    wait: int | None = None               # 等待时间(ms)
 
     # 扩展参数
-    index: Optional[int] = None              # 选择第几个匹配结果（默认0）
-    time: Optional[int] = None               # 等待时间（秒），用于 ocr_wait/wait
-    text: Optional[str] = None               # 粘贴内容，用于 ocr_paste
+    index: int | None = None              # 选择第几个匹配结果（默认0）
+    time: int | None = None               # 等待时间（秒），用于 ocr_wait/wait
+    text: str | None = None               # 粘贴内容，用于 ocr_paste
 
     # 坐标操作
-    x: Optional[int] = None                  # X 坐标
-    y: Optional[int] = None                  # Y 坐标
-    end_x: Optional[int] = None              # 终点 X 坐标（滑动）
-    end_y: Optional[int] = None              # 终点 Y 坐标（滑动）
-    direction: Optional[str] = None          # 滑动方向
+    x: int | None = None                  # X 坐标
+    y: int | None = None                  # Y 坐标
+    end_x: int | None = None              # 终点 X 坐标（滑动）
+    end_y: int | None = None              # 终点 Y 坐标（滑动）
+    direction: str | None = None          # 滑动方向
 
     # 应用操作
-    app_path: Optional[str] = None           # 应用路径
-    bundle_id: Optional[str] = None          # iOS Bundle ID
-    package_name: Optional[str] = None       # Android 包名
-    permissions: Optional[Any] = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
+    app_path: str | None = None           # 应用路径
+    bundle_id: str | None = None          # iOS Bundle ID
+    package_name: str | None = None       # Android 包名
+    permissions: Any | None = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
 
     # 同行定位参数
-    anchor_text: Optional[str] = None        # 锚点文本（用于同行定位）
-    anchor_index: Optional[int] = None       # 锚点索引（第几个匹配）
-    row_tolerance: Optional[int] = None      # 水平带范围（像素，默认20）
-    target_index: Optional[int] = None       # 目标索引（同行第几个匹配）
-    region: Optional[List[int]] = None       # 操作区域 [x1, y1, x2, y2]
+    anchor_text: str | None = None        # 锚点文本（用于同行定位）
+    anchor_index: int | None = None       # 锚点索引（第几个匹配）
+    row_tolerance: int | None = None      # 水平带范围（像素，默认20）
+    target_index: int | None = None       # 目标索引（同行第几个匹配）
+    region: list[int] | None = None       # 操作区域 [x1, y1, x2, y2]
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Action":
+    def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
         # 兼容处理：key 字段映射到 value（用于 press 动作）
         value = data.get("value")
@@ -140,7 +140,7 @@ class Action:
             region=data.get("region"),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典。"""
         result = {"action_type": self.action_type}
 

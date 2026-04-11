@@ -6,9 +6,8 @@ Action 执行器基类。
 
 import io
 import logging
-import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PIL import Image
 
@@ -38,7 +37,7 @@ class ActionExecutor(ABC):
     requires_ocr: bool = False
 
     @abstractmethod
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         """
         执行动作。
 
@@ -52,7 +51,7 @@ class ActionExecutor(ABC):
         """
         pass
 
-    def _apply_offset(self, x: int, y: int, offset: Optional[dict]) -> tuple[int, int]:
+    def _apply_offset(self, x: int, y: int, offset: dict | None) -> tuple[int, int]:
         """
         应用偏移量。
 
@@ -116,7 +115,7 @@ class BaseActionExecutor(ActionExecutor):
     提供一些通用的辅助方法，子类可以继承以减少重复代码。
     """
 
-    def _check_ocr_client(self, platform: "PlatformManager") -> Optional[ActionResult]:
+    def _check_ocr_client(self, platform: "PlatformManager") -> ActionResult | None:
         """
         检查 OCR 客户端是否可用。
 
@@ -139,7 +138,7 @@ class BaseActionExecutor(ActionExecutor):
         text: str,
         match_mode: str = "exact",
         index: int = 0
-    ) -> Optional[tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """
         在图像中查找文字位置。
 
@@ -162,7 +161,7 @@ class BaseActionExecutor(ActionExecutor):
         template_base64: str,
         threshold: float = 0.8,
         index: int = 0
-    ) -> Optional[tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """
         在源图像中查找模板图像位置。
 
@@ -184,7 +183,7 @@ class BaseActionExecutor(ActionExecutor):
         image_bytes: bytes,
         text: str,
         index: int = 0
-    ) -> Optional[tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """
         使用统一匹配策略查找文字位置：精确匹配 → 模糊匹配。
         reg_ 开头的文字使用正则匹配（不受降级约束）。
