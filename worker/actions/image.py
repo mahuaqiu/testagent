@@ -6,14 +6,15 @@ image_move, image_double_click, image_exist,
 ocr_click_same_row_image, ocr_check_same_row_image。
 """
 
-import time
-import logging
 import io
-from typing import Optional, TYPE_CHECKING
+import logging
+import time
+from typing import TYPE_CHECKING
+
 from PIL import Image
 
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -27,7 +28,7 @@ class ImageClickAction(BaseActionExecutor):
     name = "image_click"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -43,6 +44,8 @@ class ImageClickAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
         threshold = action.threshold if action.threshold is not None else 0.8
@@ -56,8 +59,12 @@ class ImageClickAction(BaseActionExecutor):
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
+                error="Image not found" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -82,7 +89,7 @@ class ImageWaitAction(BaseActionExecutor):
     name = "image_wait"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -103,6 +110,8 @@ class ImageWaitAction(BaseActionExecutor):
 
         while time.time() - start_time < timeout:
             screenshot = platform.take_screenshot(context)
+            if action.region:
+                screenshot = self._crop_region(screenshot, action.region)
             position = self._find_image_position(
                 platform, screenshot, action.image_base64, threshold, index
             )
@@ -131,7 +140,7 @@ class ImageAssertAction(BaseActionExecutor):
     name = "image_assert"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -146,6 +155,8 @@ class ImageAssertAction(BaseActionExecutor):
             )
 
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
         threshold = action.threshold if action.threshold is not None else 0.8
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
@@ -174,7 +185,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
     name = "image_click_near_text"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -198,6 +209,8 @@ class ImageClickNearTextAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 解码 base64 模板图片
         template_bytes = platform._base64_to_bytes(action.image_base64)
@@ -222,8 +235,13 @@ class ImageClickNearTextAction(BaseActionExecutor):
                 error=f"Image not found near text: {action.value}",
             )
 
+        # 将相对坐标转换为全局坐标
+        gx, gy = match.center_x, match.center_y
+        if action.region:
+            gx, gy = self._offset_position((gx, gy), action.region)
+
         # 应用偏移
-        x, y = self._apply_offset(match.center_x, match.center_y, action.offset)
+        x, y = self._apply_offset(gx, gy, action.offset)
 
         # 记录匹配结果
         logger.debug(f"Image near text matched: text=\"{action.value}\", position=({x}, {y}), distance<={max_distance}")
@@ -245,7 +263,7 @@ class ImageMoveAction(BaseActionExecutor):
     name = "image_move"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -261,6 +279,8 @@ class ImageMoveAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
         threshold = action.threshold if action.threshold is not None else 0.8
@@ -274,8 +294,12 @@ class ImageMoveAction(BaseActionExecutor):
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
+                error="Image not found" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -304,7 +328,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
     name = "image_double_click"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -320,6 +344,8 @@ class ImageDoubleClickAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
         threshold = action.threshold if action.threshold is not None else 0.8
@@ -333,8 +359,12 @@ class ImageDoubleClickAction(BaseActionExecutor):
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found" + (f" at index {index}" if index > 0 else ""),
+                error="Image not found" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -359,7 +389,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
     name = "ocr_click_same_row_image"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -383,6 +413,8 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
 
         # 获取完整截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
@@ -399,11 +431,11 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
         anchor_x, anchor_y = anchor_position
         logger.debug(f"Anchor found: text=\"{action.anchor_text}\", position=({anchor_x}, {anchor_y})")
 
-        # 获取截图尺寸
+        # 获取截图尺寸（region 裁剪后的尺寸）
         img = Image.open(io.BytesIO(screenshot))
         img_width, img_height = img.size
 
-        # 裁剪水平带状区域
+        # 裁剪水平带状区域（使用 region 相对坐标）
         row_tolerance = action.row_tolerance if action.row_tolerance is not None else 20
         top = max(0, anchor_y - row_tolerance)
         bottom = min(img_height, anchor_y + row_tolerance + 1)
@@ -434,6 +466,10 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
         target_x = target_position[0]
         target_y = target_position[1] + top
 
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            target_x, target_y = self._offset_position((target_x, target_y), action.region)
+
         logger.debug(f"Target image found: position=({target_x}, {target_y}) in row")
 
         # 应用偏移
@@ -449,7 +485,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
         )
 
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> Optional[tuple[int, int]]:
+    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> tuple[int, int] | None:
         """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
         # 1. 先精确匹配
         position = platform._find_text_position(image_bytes, text, "exact", index)
@@ -472,7 +508,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
     name = "ocr_check_same_row_image"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -496,6 +532,8 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
 
         # 获取完整截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
@@ -511,7 +549,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
 
         anchor_x, anchor_y = anchor_position
 
-        # 获取截图尺寸并裁剪水平带状区域
+        # 获取截图尺寸并裁剪水平带状区域（使用 region 相对坐标）
         img = Image.open(io.BytesIO(screenshot))
         img_width, img_height = img.size
 
@@ -543,6 +581,10 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
         target_x = target_position[0]
         target_y = target_position[1] + top
 
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            target_x, target_y = self._offset_position((target_x, target_y), action.region)
+
         return ActionResult(
             number=0,
             action_type=self.name,
@@ -550,7 +592,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
             output=f"Found at ({target_x}, {target_y})",
         )
 
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> Optional[tuple[int, int]]:
+    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> tuple[int, int] | None:
         """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
         # 1. 先精确匹配
         position = platform._find_text_position(image_bytes, text, "exact", index)
@@ -571,7 +613,7 @@ class ImageExistAction(BaseActionExecutor):
     name = "image_exist"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -588,6 +630,8 @@ class ImageExistAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
         threshold = action.threshold if action.threshold is not None else 0.8
