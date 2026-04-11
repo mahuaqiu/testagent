@@ -313,8 +313,13 @@ async def get_logs(
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     log_path = worker.log_path
-    if not log_path or not os.path.exists(log_path):
-        raise HTTPException(status_code=404, detail="Log file not found")
+    if not log_path:
+        logger.warning(f"Log path not set, worker.log_path={log_path}")
+        raise HTTPException(status_code=404, detail="Log path not configured")
+
+    if not os.path.exists(log_path):
+        logger.warning(f"Log file not found: {log_path}")
+        raise HTTPException(status_code=404, detail=f"Log file not found: {log_path}")
 
     try:
         # 读取最后 N 行日志
