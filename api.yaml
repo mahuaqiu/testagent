@@ -257,7 +257,7 @@ components:
         screenshot_on_error:
           type: boolean
           default: true
-          description: "任务失败时是否自动截图，截图将以 base64 编码返回"
+          description: "任务失败时是否自动截图，截图将以 base64 编码返回"ss
         slow_motion:
           type: integer
           default: 0
@@ -268,7 +268,7 @@ components:
           description: "失败重试次数，任务失败后自动重试"
       example:
         timeout: 60000
-        action_timeout: 10000
+        action_timeout: 5000
         screenshot_on_error: true
         slow_motion: 500
         retry_count: 1
@@ -437,6 +437,21 @@ components:
             - ocr_click_same_row_text/ocr_check_same_row_text: 选择同行第 N 个匹配的目标文本
             - ocr_click_same_row_image/ocr_check_same_row_image: 选择同行第 N 个匹配的目标图片
             示例：target_index=1 表示使用同行第二个匹配的目标
+        region:
+          type: array
+          items:
+            type: integer
+          minItems: 4
+          maxItems: 4
+          description: |
+            操作区域 [x1, y1, x2, y2]，限制 OCR/图像识别在指定矩形区域内执行：
+            - x1, y1: 区域左上角坐标
+            - x2, y2: 区域右下角坐标
+            - 坐标必须为非负整数，且 x1 < x2、y1 < y2
+            - 超出图像边界的部分会自动截断
+            - 适用动作：所有 ocr_* 和 image_* 动作
+            - 使用场景：多画面会场场景，只关注屏幕某一部分的变化
+            示例：region=[960, 0, 1920, 540] 表示屏幕右半部分
         offset:
           type: object
           description: |
@@ -598,7 +613,9 @@ components:
   # 示例 3: 点击第二个"确定"按钮（index 从 0 开始）
   # {"action_type": "ocr_click", "value": "确定", "index": 1}
   # 示例 4: 点击"登录"按钮并设置超时
-  # {"action_type": "ocr_click", "value": "登录", "timeout": 10000}
+  # {"action_type": "ocr_click", "value": "登录", "timeout": 5000}
+  # 示例 5: 仅在屏幕右半部分查找并点击"会场名称"
+  # {"action_type": "ocr_click", "value": "会场名称", "region": [960, 0, 1920, 540]}
 
   # ocr_input - 在文字附近输入文本
   # 示例 1: 在"用户名"标签右侧输入账号
@@ -608,7 +625,7 @@ components:
 
   # ocr_wait - 等待文字出现
   # 示例: 等待"加载完成"出现，最多等 10 秒
-  # {"action_type": "ocr_wait", "value": "加载完成", "timeout": 10000}
+  # {"action_type": "ocr_wait", "value": "加载完成", "timeout": 5000}
 
   # ocr_assert - 断言文字存在
   # 示例: 断言"操作成功"文字存在
@@ -681,6 +698,8 @@ components:
   # {"action_type": "image_click", "image_base64": "<base64_encoded_image>", "threshold": 0.9}
   # 示例 2: 点击第二个匹配的图像
   # {"action_type": "image_click", "image_base64": "<base64_encoded_image>", "index": 1}
+  # 示例 3: 仅在屏幕左上四分之一区域查找并点击图像
+  # {"action_type": "image_click", "image_base64": "<base64_encoded_image>", "region": [0, 0, 960, 540]}
 
   # image_wait - 等待图像出现
   # 示例 1: 等待图像出现，最多等 8 秒

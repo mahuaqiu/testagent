@@ -102,6 +102,8 @@ PlatformManager (抽象基类)
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
+**region 操作区域**：所有 OCR/Image 动作支持 `region` 参数 `[x1, y1, x2, y2]`，限制操作在屏幕指定矩形区域内执行。适用于多画面会场场景，只关注屏幕某一部分的变化。
+
 ### 动作参数
 
 | 参数 | 说明 | 适用动作 |
@@ -114,6 +116,7 @@ PlatformManager (抽象基类)
 | `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
 | `end_x` | 滑动终点 X 或最大搜索距离 | swipe, image_click_near_text |
+| `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
 
 ### image_click_near_text 说明
 
