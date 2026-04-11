@@ -82,11 +82,27 @@ class ActionExecutor(ABC):
         Raises:
             ValueError: region 无效
         """
+        # 验证 region 格式
+        if len(region) != 4:
+            raise ValueError(f"Invalid region: {region}, must have exactly 4 elements [x1, y1, x2, y2]")
+        if not all(isinstance(v, int) for v in region):
+            raise ValueError(f"Invalid region: {region}, all values must be integers")
+        if any(v < 0 for v in region):
+            raise ValueError(f"Invalid region: {region}, coordinates must be non-negative")
+
         x1, y1, x2, y2 = region
         if x1 >= x2 or y1 >= y2:
             raise ValueError(f"Invalid region: {region}, x1 must be < x2 and y1 must be < y2")
 
         img = Image.open(io.BytesIO(image_bytes))
+        img_width, img_height = img.size
+
+        # 将 region 限制在图像边界内
+        x1 = min(x1, img_width)
+        y1 = min(y1, img_height)
+        x2 = min(x2, img_width)
+        y2 = min(y2, img_height)
+
         # PIL.crop 使用 (left, upper, right, lower) 即 (x1, y1, x2, y2)
         cropped = img.crop((x1, y1, x2, y2))
         buf = io.BytesIO()
