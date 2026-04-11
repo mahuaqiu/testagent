@@ -8,14 +8,16 @@ ocr_click_same_row_text, ocr_check_same_row_text。
 统一匹配策略：精确匹配 → 模糊匹配，reg_ 开头使用正则匹配。
 """
 
-import time
-import logging
 import io
-from typing import Optional, TYPE_CHECKING
+import json
+import logging
+import time
+from typing import TYPE_CHECKING
+
 from PIL import Image
 
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -29,7 +31,7 @@ class OcrClickAction(BaseActionExecutor):
     name = "ocr_click"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -37,6 +39,10 @@ class OcrClickAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
@@ -51,6 +57,10 @@ class OcrClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -75,7 +85,7 @@ class OcrInputAction(BaseActionExecutor):
     name = "ocr_input"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -83,6 +93,10 @@ class OcrInputAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
@@ -97,6 +111,10 @@ class OcrInputAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -125,7 +143,7 @@ class OcrWaitAction(BaseActionExecutor):
     name = "ocr_wait"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -140,11 +158,16 @@ class OcrWaitAction(BaseActionExecutor):
 
         while time.time() - start_time < timeout:
             screenshot = platform.take_screenshot(context)
+            if action.region:
+                screenshot = self._crop_region(screenshot, action.region)
             position = self._find_text_with_fallback(
                 platform, screenshot, action.value
             )
 
             if position:
+                # 将相对坐标转换为全局坐标
+                if action.region:
+                    position = self._offset_position(position, action.region)
                 return ActionResult(
                     number=0,
                     action_type=self.name,
@@ -168,13 +191,17 @@ class OcrAssertAction(BaseActionExecutor):
     name = "ocr_assert"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
             return error
 
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 使用统一匹配策略（已处理 reg_ 前缀）
         position = self._find_text_with_fallback(platform, screenshot, action.value)
@@ -201,13 +228,18 @@ class OcrGetTextAction(BaseActionExecutor):
     name = "ocr_get_text"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
             return error
 
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
+
         texts = platform.ocr_client.recognize(screenshot)
 
         all_text = " ".join([t.text for t in texts])
@@ -226,7 +258,7 @@ class OcrPasteAction(BaseActionExecutor):
     name = "ocr_paste"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -243,6 +275,10 @@ class OcrPasteAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
+
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
@@ -256,6 +292,10 @@ class OcrPasteAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -290,7 +330,7 @@ class OcrMoveAction(BaseActionExecutor):
     name = "ocr_move"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -298,6 +338,10 @@ class OcrMoveAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
@@ -312,6 +356,10 @@ class OcrMoveAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -340,7 +388,7 @@ class OcrDoubleClickAction(BaseActionExecutor):
     name = "ocr_double_click"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -348,6 +396,10 @@ class OcrDoubleClickAction(BaseActionExecutor):
 
         # 获取截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 查找文字位置（使用降级匹配策略）
         index = action.index if action.index is not None else 0
@@ -360,6 +412,10 @@ class OcrDoubleClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
             )
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            position = self._offset_position(position, action.region)
 
         # 应用偏移
         x, y = self._apply_offset(position[0], position[1], action.offset)
@@ -384,7 +440,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
     name = "ocr_click_same_row_text"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -408,6 +464,10 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
 
         # 获取完整截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
@@ -452,9 +512,13 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
                 error=f"Target text not found in row of \"{action.anchor_text}\": {action.value}" + (f" at target_index {target_index}" if target_index > 0 else ""),
             )
 
-        # 计算目标在原图中的坐标（加上裁剪偏移）
+        # 计算目标在 region 裁剪图中的坐标（加上 row 裁剪偏移）
         target_x = target_position[0]
         target_y = target_position[1] + top
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            target_x, target_y = self._offset_position((target_x, target_y), action.region)
 
         logger.debug(f"Target found: text=\"{action.value}\", position=({target_x}, {target_y}) in row")
 
@@ -478,7 +542,7 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
     name = "ocr_check_same_row_text"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -502,6 +566,10 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
 
         # 获取完整截图
         screenshot = platform.take_screenshot(context)
+
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
@@ -542,9 +610,13 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
                 error=f"Target text not found in row of \"{action.anchor_text}\"",
             )
 
-        # 计算目标在原图中的坐标
+        # 计算目标在 region 裁剪图中的坐标（加上 row 裁剪偏移）
         target_x = target_position[0]
         target_y = target_position[1] + top
+
+        # 将相对坐标转换为全局坐标
+        if action.region:
+            target_x, target_y = self._offset_position((target_x, target_y), action.region)
 
         return ActionResult(
             number=0,
@@ -560,7 +632,7 @@ class OcrExistAction(BaseActionExecutor):
     name = "ocr_exist"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -578,6 +650,10 @@ class OcrExistAction(BaseActionExecutor):
         # 获取截图
         screenshot = platform.take_screenshot(context)
 
+        # 应用 region 裁剪
+        if action.region:
+            screenshot = self._crop_region(screenshot, action.region)
+
         # 使用统一匹配策略查找文字
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
@@ -585,7 +661,6 @@ class OcrExistAction(BaseActionExecutor):
         )
 
         # 返回结果（始终 SUCCESS，通过 output 返回存在性）
-        import json
         exists = position is not None
         return ActionResult(
             number=0,
