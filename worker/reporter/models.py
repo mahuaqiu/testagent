@@ -12,6 +12,7 @@ class AndroidDeviceInfo:
     """Android 设备信息。"""
 
     udid: str
+    name: str
     model: str
     brand: str
     os_version: str

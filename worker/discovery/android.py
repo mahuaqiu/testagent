@@ -15,6 +15,7 @@ class AndroidDeviceInfo:
     """Android 设备信息。"""
 
     udid: str
+    name: str
     model: str
     brand: str
     manufacturer: str
@@ -30,6 +31,7 @@ class AndroidDeviceInfo:
         return {
             "platform": "android",
             "udid": self.udid,
+            "name": self.name,
             "model": self.model,
             "brand": self.brand,
             "manufacturer": self.manufacturer,
@@ -167,6 +169,7 @@ class AndroidDiscoverer:
             # 离线或未授权设备，只返回基本信息
             return AndroidDeviceInfo(
                 udid=udid,
+                name="Unknown",
                 model="Unknown",
                 brand="Unknown",
                 manufacturer="Unknown",
@@ -187,12 +190,19 @@ class AndroidDiscoverer:
             sdk_version_str = AndroidDiscoverer.get_device_property(udid, "ro.build.version.sdk")
             cpu_abi = AndroidDiscoverer.get_device_property(udid, "ro.product.cpu.abi")
             density_str = AndroidDiscoverer.get_device_property(udid, "ro.sf.lcd_density")
+            # 获取设备名称（优先使用 display_name，否则组合 brand + model）
+            display_name = AndroidDiscoverer.get_device_property(udid, "ro.product.display_name")
+            if display_name:
+                name = display_name
+            else:
+                name = f"{brand} {model}" if brand and model else model or "Unknown"
 
             # 获取分辨率
             resolution = AndroidDiscoverer.get_resolution(udid)
 
             return AndroidDeviceInfo(
                 udid=udid,
+                name=name or "Unknown",
                 model=model or "Unknown",
                 brand=brand or "Unknown",
                 manufacturer=manufacturer or "Unknown",
