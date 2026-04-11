@@ -375,9 +375,12 @@ async def upgrade_worker(request: UpgradeRequest):
         if result.status == "upgrading":
             logger.info("Worker 即将退出以完成升级...")
             # 返回响应后退出
+            # 注意：sys.exit() 在子线程中只会终止该线程，不会终止进程
+            # 使用 os._exit() 强制终止整个进程
             def delayed_exit():
                 time.sleep(0.5)
-                sys.exit(0)
+                logger.info("Worker 退出中...")
+                os._exit(0)
             threading.Thread(target=delayed_exit, daemon=True).start()
 
         return result.to_dict()

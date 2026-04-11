@@ -13,6 +13,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Windows 进程创建标志，使子进程独立于父进程
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+
 
 def get_current_install_dir() -> str:
     """
@@ -63,15 +67,18 @@ def run_silent_install(installer_path: str, install_dir: Optional[str] = None) -
     logger.info(f"启动静默安装: {' '.join(cmd)}")
 
     try:
-        # 启动安装进程（后台运行，不等待）
+        # 启动安装进程（后台运行，不等待，独立进程）
+        # 使用 CREATE_BREAKAWAY_FROM_JOB 标志确保进程独立
+        # Windows 服务或进程组可能限制子进程，此标志允许子进程脱离父进程组
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
         subprocess.Popen(
-            cmd,
-            shell=True,
+            [installer_path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f'/DIR={install_dir}'],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
         )
-        logger.info("静默安装进程已启动")
+        logger.info("静默安装进程已启动（独立进程）")
 
     except Exception as e:
         raise InstallError(f"启动安装失败: {e}")

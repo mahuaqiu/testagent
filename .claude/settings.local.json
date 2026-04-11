@@ -99,7 +99,9 @@
       "Bash(ipconfig)",
       "Bash(xxd \"D:/code/Test Worker/_internal/config/worker.yaml\")",
       "Bash(xxd \"D:/code/autotest/config/worker.yaml\")",
-      "Bash(xxd \"D:/code/autotest/dist/windows/test-worker/_internal/config/worker.yaml\")"
+      "Bash(xxd \"D:/code/autotest/dist/windows/test-worker/_internal/config/worker.yaml\")",
+      "Bash(tasklist)",
+      "Bash(findstr -i installer)"
     ]
   }
 }

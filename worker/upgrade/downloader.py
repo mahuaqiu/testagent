@@ -7,8 +7,11 @@
 import os
 import sys
 import logging
+import shutil
 import httpx
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +40,12 @@ def download_installer(url: str, expected_size: Optional[int] = None) -> str:
     """
     下载安装包。
 
+    支持两种方式：
+    - HTTP/HTTPS URL: 使用 httpx 下载
+    - UNC/本地路径: 使用文件复制
+
     Args:
-        url: 安装包下载地址
+        url: 安装包下载地址（HTTP/HTTPS URL 或 UNC/本地路径）
         expected_size: 预期文件大小（字节），用于校验，可选
 
     Returns:
@@ -54,30 +61,54 @@ def download_installer(url: str, expected_size: Optional[int] = None) -> str:
     logger.info(f"目标路径: {installer_path}")
 
     try:
-        with httpx.Client(timeout=300.0, trust_env=False, follow_redirects=True) as client:
-            response = client.get(url)
-            response.raise_for_status()
+        # 判断是 HTTP/HTTPS URL 还是本地/UNC 路径
+        parsed = urlparse(url)
+        is_http_url = parsed.scheme in ('http', 'https')
+        is_unc_or_local = (
+            url.startswith('\\\\') or  # UNC 路径: \\server\share
+            os.path.isabs(url) or       # 绝对路径: C:\path
+            parsed.scheme == ''         # 相对路径或无协议
+        )
 
-            # 写入文件
-            with open(installer_path, 'wb') as f:
-                f.write(response.content)
+        if is_http_url:
+            # HTTP/HTTPS 下载
+            with httpx.Client(timeout=300.0, trust_env=False, follow_redirects=True) as client:
+                response = client.get(url)
+                response.raise_for_status()
 
-            # 校验文件大小
-            actual_size = os.path.getsize(installer_path)
-            logger.info(f"下载完成，文件大小: {actual_size} bytes")
+                # 写入文件
+                with open(installer_path, 'wb') as f:
+                    f.write(response.content)
 
-            if expected_size and actual_size != expected_size:
-                os.remove(installer_path)
-                raise DownloadError(
-                    f"文件大小不匹配: 预期 {expected_size}, 实际 {actual_size}"
-                )
+        elif is_unc_or_local:
+            # UNC 路径或本地文件复制
+            source_path = Path(url)
+            if not source_path.exists():
+                raise DownloadError(f"源文件不存在: {url}")
+            shutil.copy2(url, installer_path)
+            logger.info(f"文件复制完成: {url} -> {installer_path}")
 
-            return installer_path
+        else:
+            raise DownloadError(f"不支持的下载路径格式: {url}")
+
+        # 校验文件大小
+        actual_size = os.path.getsize(installer_path)
+        logger.info(f"下载完成，文件大小: {actual_size} bytes")
+
+        if expected_size and actual_size != expected_size:
+            os.remove(installer_path)
+            raise DownloadError(
+                f"文件大小不匹配: 预期 {expected_size}, 实际 {actual_size}"
+            )
+
+        return installer_path
 
     except httpx.HTTPStatusError as e:
         raise DownloadError(f"下载失败 (HTTP {e.response.status_code}): {e}")
     except httpx.RequestError as e:
         raise DownloadError(f"下载请求失败: {e}")
+    except DownloadError:
+        raise
     except Exception as e:
         raise DownloadError(f"下载失败: {e}")
 

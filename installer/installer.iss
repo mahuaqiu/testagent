@@ -15,7 +15,10 @@ OutputDir=..\dist
 OutputBaseFilename=test-worker-installer
 Compression=lzma2/max
 SolidCompression=yes
-PrivilegesRequired=admin
+; 权限设置：允许普通用户安装（升级时不需要管理员权限）
+; 如果安装到 Program Files，会提示需要管理员权限
+; 如果安装到用户目录，可以普通用户安装
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
 ; 界面设置
