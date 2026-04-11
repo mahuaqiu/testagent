@@ -4,10 +4,13 @@ Action 执行器基类。
 定义所有 Action 需要实现的接口。
 """
 
+import io
 import logging
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
+
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,45 @@ class ActionExecutor(ABC):
             x += offset.get("x", 0)
             y += offset.get("y", 0)
         return (x, y)
+
+    def _crop_region(self, image_bytes: bytes, region: list[int]) -> bytes:
+        """
+        按 region [x1, y1, x2, y2] 裁剪图像。
+
+        Args:
+            image_bytes: 原始图像数据
+            region: 操作区域 [x1, y1, x2, y2]
+
+        Returns:
+            bytes: 裁剪后的图像数据
+
+        Raises:
+            ValueError: region 无效
+        """
+        x1, y1, x2, y2 = region
+        if x1 >= x2 or y1 >= y2:
+            raise ValueError(f"Invalid region: {region}, x1 must be < x2 and y1 must be < y2")
+
+        img = Image.open(io.BytesIO(image_bytes))
+        # PIL.crop 使用 (left, upper, right, lower) 即 (x1, y1, x2, y2)
+        cropped = img.crop((x1, y1, x2, y2))
+        buf = io.BytesIO()
+        cropped.save(buf, format=img.format or "PNG")
+        return buf.getvalue()
+
+    def _offset_position(self, position: tuple[int, int], region: list[int]) -> tuple[int, int]:
+        """
+        将相对于裁剪区域的坐标转换为全局坐标。
+
+        Args:
+            position: 相对坐标 (x, y)
+            region: 操作区域 [x1, y1, x2, y2]
+
+        Returns:
+            tuple[int, int]: 全局坐标 (x+x1, y+y1)
+        """
+        x1, y1, _, _ = region
+        return (position[0] + x1, position[1] + y1)
 
 
 class BaseActionExecutor(ActionExecutor):
