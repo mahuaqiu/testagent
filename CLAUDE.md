@@ -133,8 +133,23 @@ PlatformManager (抽象基类)
 // 点击原生共享对话框中的"屏幕 1"
 {"action_type": "ocr_click", "value": "屏幕 1", "level": "system"}
 
-// 系统级截图（截取整个屏幕包括原生对话框）
+// 系统级截图（截取第一个显示器）
 {"action_type": "screenshot", "value": "native", "level": "system"}
+```
+
+### monitor 显示器选择（配合 level: system）
+
+指定系统级截图截取哪个显示器：
+
+| 值 | 说明 |
+|----|------|
+| `1` | 第一个显示器（默认） |
+| `2` | 第二个显示器 |
+
+**使用示例**：
+```json
+// 截取第二个显示器上的原生对话框
+{"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
 ```
 
 **依赖**：`level: system` 需要 `mss` 和 `pyautogui` 库。

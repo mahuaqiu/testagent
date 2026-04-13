@@ -81,6 +81,9 @@ class Action:
     # 执行层级（Web 平台专用）
     level: str = "browser"                   # "browser" 使用 Playwright，"system" 使用系统级操作（pyautogui）
 
+    # 系统级截图参数（Web 平台专用，配合 level: system 使用）
+    monitor: int = 1                         # 截取哪个显示器：1=第一个显示器，2=第二个显示器，默认 1
+
     # 扩展参数
     index: int | None = None              # 选择第几个匹配结果（默认0）
     time: int | None = None               # 等待时间（秒），用于 ocr_wait/wait
@@ -125,6 +128,7 @@ class Action:
             screenshot=data.get("screenshot", False),
             wait=data.get("wait"),
             level=data.get("level", "browser"),
+            monitor=data.get("monitor", 1),
             x=data.get("x"),
             y=data.get("y"),
             end_x=data.get("end_x"),
@@ -166,6 +170,8 @@ class Action:
             result["wait"] = self.wait
         if self.level != "browser":
             result["level"] = self.level
+        if self.monitor != 1:
+            result["monitor"] = self.monitor
         if self.x is not None:
             result["x"] = self.x
         if self.y is not None:

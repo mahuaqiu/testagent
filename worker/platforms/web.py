@@ -93,6 +93,7 @@ class WebPlatformManager(PlatformManager):
         self._browser_context: Optional[BrowserContext] = None  # 持久化浏览器上下文
         self._current_page: Optional[Page] = None  # 当前页面，用于基础能力操作
         self._current_level: str = "browser"  # 当前执行层级："browser" 或 "system"
+        self._current_monitor: int = 1  # 当前截取的显示器：1 或 2
         # 会话管理：key="default", value={"context", "page"}
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.headless = config.headless
@@ -555,11 +556,13 @@ class WebPlatformManager(PlatformManager):
         pyautogui.press(pyautogui_key)
         logger.debug(f"System-level press: {key} -> {pyautogui_key}")
 
-    def take_screenshot(self, context: Any = None, level: str = None) -> bytes:
+    def take_screenshot(self, context: Any = None, level: str = None, monitor: int = None) -> bytes:
         """获取截图。根据 _current_level 决定使用 Playwright 还是系统级截图。"""
         effective_level = level or self._current_level
+        effective_monitor = monitor or self._current_monitor
+        logger.debug(f"take_screenshot: level={effective_level}, monitor={effective_monitor}")
         if effective_level == "system":
-            return self._take_system_screenshot()
+            return self._take_system_screenshot(effective_monitor)
         page = context or self._current_page
         if page:
             try:
@@ -568,19 +571,33 @@ class WebPlatformManager(PlatformManager):
                 return b""
         return b""
 
-    def _take_system_screenshot(self) -> bytes:
-        """系统级截图（使用 mss，截取整个屏幕）。"""
+    def _take_system_screenshot(self, monitor: int = None) -> bytes:
+        """系统级截图（使用 mss，截取指定显示器）。"""
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
         try:
+            effective_monitor = monitor or self._current_monitor
+            logger.info(f"Taking system-level screenshot (mss), monitor={effective_monitor}")
             with mss.mss() as sct:
-                # 截取主显示器（monitor 1）
-                screenshot = sct.grab(sct.monitors[1])
+                monitors = sct.monitors
+                logger.debug(f"Available monitors: {len(monitors)} total")
+                for i, m in enumerate(monitors):
+                    logger.debug(f"  monitor[{i}]: {m}")
+
+                # 选择截取的显示器
+                if effective_monitor < len(monitors):
+                    target_monitor = monitors[effective_monitor]
+                else:
+                    # 如果指定的显示器不存在，使用第一个显示器
+                    logger.warning(f"Monitor {effective_monitor} not found, using monitor 1")
+                    target_monitor = monitors[1]
+
+                screenshot = sct.grab(target_monitor)
                 # 转换为 PNG bytes
                 img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
-                logger.debug("System-level screenshot taken")
+                logger.debug(f"System-level screenshot size: {len(buf.getvalue())} bytes, dimensions: {screenshot.size}")
                 return buf.getvalue()
         except Exception as e:
             logger.error(f"System-level screenshot failed: {e}")
@@ -597,6 +614,10 @@ class WebPlatformManager(PlatformManager):
         start_time = time.time()
 
         try:
+            # 重置执行层级和显示器为默认值（确保每个 action 独立控制）
+            self._current_level = "browser"
+            self._current_monitor = 1
+
             # 更新当前页面引用
             if context and isinstance(context, Page):
                 self._current_page = context
