@@ -4,10 +4,11 @@
 在宿主机执行 shell/cmd 命令，所有平台均支持。
 """
 
-import subprocess
+import subprocess  # 用于 TimeoutExpired 异常类型
 import logging
 from typing import Optional, TYPE_CHECKING
 
+from common.utils import run_cmd
 from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
 
@@ -41,11 +42,9 @@ class CmdExecAction(BaseActionExecutor):
         logger.info(f"Executing command: {cmd[:100]}...")
 
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 cmd,
                 shell=True,
-                capture_output=True,
-                text=True,
                 timeout=timeout_sec,
             )
 

@@ -5,9 +5,10 @@ Android 设备发现模块。
 """
 
 import re
-import subprocess
 from dataclasses import dataclass
 from typing import List, Optional, Dict
+
+from common.utils import run_cmd
 
 
 @dataclass
@@ -51,10 +52,8 @@ class AndroidDiscoverer:
     def check_adb_available() -> bool:
         """检查 ADB 是否可用。"""
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 ["adb", "version"],
-                capture_output=True,
-                text=True,
                 timeout=5
             )
             return result.returncode == 0
@@ -70,10 +69,8 @@ class AndroidDiscoverer:
             List[str]: 设备 UDID 列表
         """
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 ["adb", "devices"],
-                capture_output=True,
-                text=True,
                 timeout=10
             )
 
@@ -105,10 +102,8 @@ class AndroidDiscoverer:
             List[tuple[str, str]]: (udid, status) 列表
         """
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 ["adb", "devices"],
-                capture_output=True,
-                text=True,
                 timeout=10
             )
 
@@ -143,10 +138,8 @@ class AndroidDiscoverer:
             str: 属性值
         """
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 ["adb", "-s", udid, "shell", "getprop", prop],
-                capture_output=True,
-                text=True,
                 timeout=10
             )
             return result.stdout.strip()
@@ -228,10 +221,8 @@ class AndroidDiscoverer:
             str: 分辨率字符串，如 "1080x2400"
         """
         try:
-            result = subprocess.run(
+            result = run_cmd(
                 ["adb", "-s", udid, "shell", "wm", "size"],
-                capture_output=True,
-                text=True,
                 timeout=10
             )
 

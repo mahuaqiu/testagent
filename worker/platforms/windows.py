@@ -6,12 +6,13 @@ Windows 桌面平台执行引擎。
 
 import io
 import logging
-import subprocess
+import subprocess  # 用于 CalledProcessError 异常类型
 import time
 from typing import Any, Dict, Optional, Set
 
 import pyautogui
 
+from common.utils import run_cmd, popen_cmd
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
@@ -168,7 +169,7 @@ class WindowsPlatformManager(PlatformManager):
                 error="app_path is required",
             )
 
-        subprocess.Popen(app_path)
+        popen_cmd(app_path)
         time.sleep(2)  # 等待应用启动
 
         return ActionResult(
@@ -190,7 +191,7 @@ class WindowsPlatformManager(PlatformManager):
             )
 
         try:
-            subprocess.run(["taskkill", "/IM", app_name, "/F"], check=True)
+            run_cmd(["taskkill", "/IM", app_name, "/F"], check=True)
             return ActionResult(
                 number=0,
                 action_type="stop_app",

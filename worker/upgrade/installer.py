@@ -11,6 +11,8 @@ import subprocess
 import logging
 from typing import Optional
 
+from common.utils import SUBPROCESS_HIDE_WINDOW
+
 logger = logging.getLogger(__name__)
 
 # Windows 进程创建标志，使子进程独立于父进程
@@ -76,7 +78,7 @@ def run_silent_install(installer_path: str, install_dir: Optional[str] = None) -
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB | SUBPROCESS_HIDE_WINDOW,
         )
         logger.info("静默安装进程已启动（独立进程）")
 

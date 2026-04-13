@@ -78,6 +78,9 @@ class Action:
     screenshot: bool = False                 # 是否截图
     wait: int | None = None               # 等待时间(ms)
 
+    # 执行层级（Web 平台专用）
+    level: str = "browser"                   # "browser" 使用 Playwright，"system" 使用系统级操作（pyautogui）
+
     # 扩展参数
     index: int | None = None              # 选择第几个匹配结果（默认0）
     time: int | None = None               # 等待时间（秒），用于 ocr_wait/wait
@@ -121,6 +124,7 @@ class Action:
             match_mode=data.get("match_mode", "exact"),
             screenshot=data.get("screenshot", False),
             wait=data.get("wait"),
+            level=data.get("level", "browser"),
             x=data.get("x"),
             y=data.get("y"),
             end_x=data.get("end_x"),
@@ -160,6 +164,8 @@ class Action:
             result["screenshot"] = self.screenshot
         if self.wait is not None:
             result["wait"] = self.wait
+        if self.level != "browser":
+            result["level"] = self.level
         if self.x is not None:
             result["x"] = self.x
         if self.y is not None:

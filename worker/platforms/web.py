@@ -3,11 +3,13 @@ Web 平台执行引擎。
 
 基于 Playwright 实现，支持 OCR/图像识别定位。
 使用 async_api 以支持在 asyncio 环境中正确运行。
+支持系统级操作（pyautogui）处理原生对话框等场景。
 """
 
 import asyncio
 import base64
 import concurrent.futures
+import io
 import logging
 import os
 import shutil
@@ -17,7 +19,16 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set
 
+from PIL import Image
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+
+try:
+    import mss
+    import pyautogui
+    SYSTEM_LEVEL_AVAILABLE = True
+except ImportError:
+    SYSTEM_LEVEL_AVAILABLE = False
+    logger.warning("mss or pyautogui not available, system-level operations disabled")
 
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
@@ -75,6 +86,7 @@ class WebPlatformManager(PlatformManager):
         self._playwright: Optional[Playwright] = None
         self._browser_context: Optional[BrowserContext] = None  # 持久化浏览器上下文
         self._current_page: Optional[Page] = None  # 当前页面，用于基础能力操作
+        self._current_level: str = "browser"  # 当前执行层级："browser" 或 "system"
         # 会话管理：key="default", value={"context", "page"}
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.headless = config.headless
@@ -414,32 +426,80 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 基础能力实现 ==========
 
-    def click(self, x: int, y: int, context: Any = None) -> None:
-        """点击指定坐标。"""
+    def click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
+        """点击指定坐标。根据 _current_level 决定使用 Playwright 还是系统级操作。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_click(x, y)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.click(x, y))
 
-    def double_click(self, x: int, y: int, context: Any = None) -> None:
+    def _system_click(self, x: int, y: int) -> None:
+        """系统级点击（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
+        pyautogui.click(x, y)
+        logger.debug(f"System-level click at ({x}, {y})")
+
+    def double_click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """双击指定坐标。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_double_click(x, y)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.click(x, y, click_count=2))
 
-    def move(self, x: int, y: int, context: Any = None) -> None:
+    def _system_double_click(self, x: int, y: int) -> None:
+        """系统级双击（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+        pyautogui.doubleClick(x, y)
+        logger.debug(f"System-level double click at ({x}, {y})")
+
+    def move(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """移动鼠标到指定坐标。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_move(x, y)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.move(x, y))
 
-    def input_text(self, text: str, context: Any = None) -> None:
+    def _system_move(self, x: int, y: int) -> None:
+        """系统级移动鼠标（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+        pyautogui.moveTo(x, y)
+        logger.debug(f"System-level move to ({x}, {y})")
+
+    def input_text(self, text: str, context: Any = None, level: str = None) -> None:
         """输入文本。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_input(text)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.keyboard.type(text))
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+    def _system_input(self, text: str) -> None:
+        """系统级输入文本（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+        pyautogui.write(text)
+        logger.debug(f"System-level input: {text}")
+
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None, level: str = None) -> None:
         """滑动/拖拽。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_drag(start_x, start_y, end_x, end_y)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.move(start_x, start_y))
@@ -447,14 +507,53 @@ class WebPlatformManager(PlatformManager):
             _run_async(page.mouse.move(end_x, end_y))
             _run_async(page.mouse.up())
 
-    def press(self, key: str, context: Any = None) -> None:
+    def _system_drag(self, start_x: int, start_y: int, end_x: int, end_y: int) -> None:
+        """系统级拖拽（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+        pyautogui.moveTo(start_x, start_y)
+        pyautogui.drag(end_x - start_x, end_y - start_y)
+        logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y})")
+
+    def press(self, key: str, context: Any = None, level: str = None) -> None:
         """按键。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            self._system_press(key)
+            return
         page = context or self._current_page
         if page:
             _run_async(page.keyboard.press(key))
 
-    def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图。"""
+    def _system_press(self, key: str) -> None:
+        """系统级按键（使用 pyautogui）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+        # 转换 Playwright 键名到 pyautogui 键名
+        key_map = {
+            "Enter": "enter",
+            "Tab": "tab",
+            "Escape": "escape",
+            "Backspace": "backspace",
+            "Delete": "delete",
+            "ArrowUp": "up",
+            "ArrowDown": "down",
+            "ArrowLeft": "left",
+            "ArrowRight": "right",
+            "Control": "ctrl",
+            "Alt": "alt",
+            "Shift": "shift",
+            "Meta": "win",  # Windows 键
+        }
+        pyautogui_key = key_map.get(key, key.lower())
+        pyautogui.press(pyautogui_key)
+        logger.debug(f"System-level press: {key} -> {pyautogui_key}")
+
+    def take_screenshot(self, context: Any = None, level: str = None) -> bytes:
+        """获取截图。根据 _current_level 决定使用 Playwright 还是系统级截图。"""
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            return self._take_system_screenshot()
         page = context or self._current_page
         if page:
             try:
@@ -462,6 +561,24 @@ class WebPlatformManager(PlatformManager):
             except Exception:
                 return b""
         return b""
+
+    def _take_system_screenshot(self) -> bytes:
+        """系统级截图（使用 mss，截取整个屏幕）。"""
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
+        try:
+            with mss.mss() as sct:
+                # 截取主显示器（monitor 1）
+                screenshot = sct.grab(sct.monitors[1])
+                # 转换为 PNG bytes
+                img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                logger.debug("System-level screenshot taken")
+                return buf.getvalue()
+        except Exception as e:
+            logger.error(f"System-level screenshot failed: {e}")
+            return b""
 
     def get_screenshot(self, context: Any) -> bytes:
         """获取当前页面截图（兼容旧接口）。"""

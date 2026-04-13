@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from typing import Optional
 from datetime import datetime
 
+from common.utils import SUBPROCESS_HIDE_WINDOW
+
 logger = logging.getLogger(__name__)
 
 
@@ -217,6 +219,7 @@ class UpgradeManager:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=SUBPROCESS_HIDE_WINDOW,
             )
             logger.info("静默安装进程已启动")
 

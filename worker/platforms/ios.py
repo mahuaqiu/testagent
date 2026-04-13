@@ -5,10 +5,11 @@ iOS 平台执行引擎。
 """
 
 import logging
-import subprocess
+import subprocess  # 用于 CalledProcessError 异常类型
 import time
 from typing import Any, Dict, Optional, Set
 
+from common.utils import run_cmd, popen_cmd
 from worker.platforms.base import PlatformManager
 from worker.platforms.wda_client import WDAClient
 from worker.task import Action, ActionResult, ActionStatus
@@ -121,7 +122,7 @@ class iOSPlatformManager(PlatformManager):
             port = self._allocate_port()
 
             # t3 runwda 命令格式
-            process = subprocess.Popen(
+            process = popen_cmd(
                 [
                     "t3",
                     "-u", udid,
@@ -332,7 +333,7 @@ class iOSPlatformManager(PlatformManager):
         if client and self._current_device:
             try:
                 # t3 app launch 命令格式
-                subprocess.run(
+                run_cmd(
                     ["t3", "-u", self._current_device, "app", "launch", bundle_id],
                     check=True, timeout=30
                 )

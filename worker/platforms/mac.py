@@ -6,12 +6,13 @@ Mac 桌面平台执行引擎。
 
 import io
 import logging
-import subprocess
+import subprocess  # 用于 CalledProcessError 异常类型
 import time
 from typing import Any, Dict, Optional, Set
 
 import pyautogui
 
+from common.utils import run_cmd
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
@@ -169,7 +170,7 @@ class MacPlatformManager(PlatformManager):
             )
 
         # macOS 使用 open 命令启动应用
-        subprocess.run(["open", "-a", app_name])
+        run_cmd(["open", "-a", app_name])
         time.sleep(2)  # 等待应用启动
 
         return ActionResult(
@@ -191,7 +192,7 @@ class MacPlatformManager(PlatformManager):
             )
 
         try:
-            subprocess.run(
+            run_cmd(
                 ["osascript", "-e", f'tell app "{app_name}" to quit'],
                 check=True,
             )

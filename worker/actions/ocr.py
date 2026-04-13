@@ -32,6 +32,9 @@ class OcrClickAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -86,6 +89,9 @@ class OcrInputAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -144,6 +150,9 @@ class OcrWaitAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -192,6 +201,9 @@ class OcrAssertAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -229,6 +241,9 @@ class OcrGetTextAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -259,6 +274,9 @@ class OcrPasteAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -331,6 +349,9 @@ class OcrMoveAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -389,6 +410,9 @@ class OcrDoubleClickAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -441,6 +465,9 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -543,6 +570,9 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:
@@ -633,6 +663,9 @@ class OcrExistAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:

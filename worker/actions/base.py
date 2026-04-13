@@ -51,6 +51,26 @@ class ActionExecutor(ABC):
         """
         pass
 
+    def _set_level(self, platform: "PlatformManager", action: Action) -> str:
+        """
+        设置执行层级（Web 平台专用）。
+
+        对于 Web 平台，根据 action.level 决定使用 Playwright 还是系统级操作。
+        其他平台忽略此参数。
+
+        Args:
+            platform: 平台管理器
+            action: 动作参数
+
+        Returns:
+            执行层级字符串
+        """
+        level = action.level if hasattr(action, 'level') else "browser"
+        # 只有 Web 平台支持 level 参数
+        if hasattr(platform, '_current_level'):
+            platform._current_level = level
+        return level
+
     def _apply_offset(self, x: int, y: int, offset: dict | None) -> tuple[int, int]:
         """
         应用偏移量。

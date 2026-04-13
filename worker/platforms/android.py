@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Set
 
 import uiautomator2 as u2
 
+from common.utils import run_cmd
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
@@ -50,8 +51,7 @@ class AndroidPlatformManager(PlatformManager):
             return
 
         try:
-            import subprocess
-            result = subprocess.run(["adb", "version"], capture_output=True, timeout=5)
+            result = run_cmd(["adb", "version"], timeout=5)
             if result.returncode != 0:
                 logger.warning("ADB not available")
         except Exception as e:

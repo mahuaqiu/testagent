@@ -2,12 +2,110 @@
 通用工具函数模块。
 
 Usage:
-    from common.utils import retry, timestamp, wait_until
+    from common.utils import retry, timestamp, wait_until, run_cmd, popen_cmd
 """
 
+import platform
+import subprocess
 import time
 import functools
-from typing import Callable
+from typing import Callable, Optional, Union, List, Any
+
+
+# Windows 上隐藏子进程窗口的标志
+if platform.system().lower() == "windows":
+    SUBPROCESS_HIDE_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    SUBPROCESS_HIDE_WINDOW = 0
+
+
+def run_cmd(
+    cmd: Union[str, List[str]],
+    shell: bool = False,
+    capture_output: bool = True,
+    text: bool = True,
+    timeout: Optional[float] = None,
+    check: bool = False,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess:
+    """
+    执行命令并等待完成（封装 subprocess.run）。
+
+    在 Windows 上自动添加 CREATE_NO_WINDOW 标志，隐藏子进程的控制台窗口，
+    避免打包后的 GUI 程序出现黑色 CMD 弹窗。
+
+    Args:
+        cmd: 命令（字符串或列表）
+        shell: 是否使用 shell 执行
+        capture_output: 是否捕获输出
+        text: 是否以文本模式返回输出
+        timeout: 超时时间（秒）
+        check: 是否检查返回码（非零时抛异常）
+        **kwargs: 其他 subprocess.run 参数
+
+    Returns:
+        subprocess.CompletedProcess: 执行结果
+
+    Usage:
+        result = run_cmd(["adb", "devices"])
+        result = run_cmd("echo hello", shell=True)
+    """
+    # 在 Windows 上添加隐藏窗口标志
+    if platform.system().lower() == "windows":
+        kwargs.setdefault("creationflags", SUBPROCESS_HIDE_WINDOW)
+
+    return subprocess.run(
+        cmd,
+        shell=shell,
+        capture_output=capture_output,
+        text=text,
+        timeout=timeout,
+        check=check,
+        **kwargs,
+    )
+
+
+def popen_cmd(
+    cmd: Union[str, List[str]],
+    shell: bool = False,
+    stdout: Optional[Any] = None,
+    stderr: Optional[Any] = None,
+    stdin: Optional[Any] = None,
+    **kwargs: Any,
+) -> subprocess.Popen:
+    """
+    启动子进程（封装 subprocess.Popen）。
+
+    在 Windows 上自动添加 CREATE_NO_WINDOW 标志，隐藏子进程的控制台窗口，
+    避免打包后的 GUI 程序出现黑色 CMD 弹窗。
+
+    Args:
+        cmd: 命令（字符串或列表）
+        shell: 是否使用 shell 执行
+        stdout: 标准输出处理
+        stderr: 标准错误处理
+        stdin: 标准输入处理
+        **kwargs: 其他 subprocess.Popen 参数
+
+    Returns:
+        subprocess.Popen: 进程对象
+
+    Usage:
+        process = popen_cmd(["adb", "logcat"], stdout=subprocess.PIPE)
+        process = popen_cmd("some_app.exe")  # 启动 GUI 应用
+    """
+    # 在 Windows 上添加隐藏窗口标志
+    if platform.system().lower() == "windows":
+        kwargs.setdefault("creationflags", SUBPROCESS_HIDE_WINDOW)
+
+    return subprocess.Popen(
+        cmd,
+        shell=shell,
+        stdout=stdout,
+        stderr=stderr,
+        stdin=stdin,
+        **kwargs,
+    )
 
 
 def retry(max_attempts: int = 3, delay: float = 1.0):

@@ -5,11 +5,12 @@
 import logging
 import platform
 import socket
-import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 
 import psutil
+
+from common.utils import run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,8 @@ class HostDiscoverer:
         if system == "windows":
             # Windows 版本信息
             try:
-                result = subprocess.run(
+                result = run_cmd(
                     ["wmic", "os", "get", "Caption,Version", "/value"],
-                    capture_output=True,
-                    text=True,
                     timeout=10
                 )
                 lines = result.stdout.strip().split("\n")
@@ -71,10 +70,8 @@ class HostDiscoverer:
         elif system == "darwin":
             # macOS 版本信息
             try:
-                result = subprocess.run(
+                result = run_cmd(
                     ["sw_vers"],
-                    capture_output=True,
-                    text=True,
                     timeout=5
                 )
                 lines = result.stdout.strip().split("\n")
@@ -159,10 +156,8 @@ class HostDiscoverer:
 
         if system == "windows":
             try:
-                result = subprocess.run(
+                result = run_cmd(
                     ["wmic", "cpu", "get", "Name", "/value"],
-                    capture_output=True,
-                    text=True,
                     timeout=10
                 )
                 for line in result.stdout.strip().split("\n"):
@@ -174,10 +169,8 @@ class HostDiscoverer:
 
         elif system == "darwin":
             try:
-                result = subprocess.run(
+                result = run_cmd(
                     ["sysctl", "-n", "machdep.cpu.brand_string"],
-                    capture_output=True,
-                    text=True,
                     timeout=5
                 )
                 return result.stdout.strip() or platform.processor() or "Unknown CPU"
