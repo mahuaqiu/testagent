@@ -45,6 +45,13 @@ try:
 except Exception:
     pass
 
+# 收集 uiautomator2 数据文件（关键：包含 u2.jar 和 app-uiautomator.apk）
+# 这些文件需要推送到 Android 设备上才能正常运行
+try:
+    datas += collect_data_files('uiautomator2', include_py_files=False)
+except Exception:
+    pass
+
 # 收集隐藏导入
 hiddenimports = [
     # FastAPI / Uvicorn
@@ -81,6 +88,12 @@ hiddenimports = [
     'appium.options.ios',
     'selenium',
     'selenium.webdriver',
+    # Android 直连 (uiautomator2)
+    'uiautomator2',
+    'uiautomator2.__main__',
+    # iOS 直连 (tidevice3)
+    'tidevice3',
+    'tidevice3.cli',
     # 桌面自动化
     'pyautogui',
     'pyscreeze',
