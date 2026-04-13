@@ -853,7 +853,13 @@ components:
   # 示例 5: 系统级等待文字（等待原生对话框文字出现）
   # {"action_type": "ocr_wait", "value": "共享", "timeout": 5000, "level": "system"}
 
-  # 示例 6: 处理文件上传原生对话框（点击上传按钮触发对话框后）
+  # 示例 6: 系统级图像点击（在原生对话框中点击图像图标）
+  # {"action_type": "image_click", "image_base64": "<base64>", "level": "system"}
+
+  # 示例 7: 系统级图像等待（等待原生对话框中的图标出现）
+  # {"action_type": "image_wait", "image_base64": "<base64>", "timeout": 5000, "level": "system"}
+
+  # 示例 8: 处理文件上传原生对话框（点击上传按钮触发对话框后）
   # 第一步：点击上传按钮（browser 级别，触发原生文件选择器）
   # {"action_type": "click", "x": 500, "y": 300}
   # 第二步：等待并操作原生文件选择器（system 级别）
