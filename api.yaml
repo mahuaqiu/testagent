@@ -385,12 +385,11 @@ components:
           default: 1
           description: |
             截取哪个显示器，仅 Web 平台配合 level: system 使用：
-            - 1: 第一个显示器（默认）
-            - 2: 第二个显示器
+            - 1: 主屏幕（自动识别 left=0 的显示器，即 Windows 设置中的主屏幕）
+            - 2: 副屏幕（另一个显示器）
 
-            注意：mss 的显示器顺序可能和 Windows 显示设置不同
-            - monitor[1] 通常对应 Windows 设置中的某个显示器
-            - monitor[2] 对应另一个显示器
+            自动识别规则：系统会自动找到 left=0 的显示器作为主屏幕，
+            无需关心 mss 库的原始编号顺序。
 
             示例：截取第二个显示器上的原生对话框
             {"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
@@ -855,13 +854,13 @@ components:
   # 示例 1: 系统级截图（截取第一个显示器，包括原生对话框）
   # {"action_type": "screenshot", "value": "native_dialog", "level": "system"}
 
-  # 示例 2: 系统级截图（截取第二个显示器）
+  # 示例 2: 系统级截图（截取副屏幕）
   # {"action_type": "screenshot", "value": "screen2", "level": "system", "monitor": 2}
 
   # 示例 3: 系统级 OCR 点击（点击原生对话框中的文字）
   # {"action_type": "ocr_click", "value": "屏幕 1", "level": "system"}
 
-  # 示例 4: 系统级 OCR 点击（在第二个显示器上操作）
+  # 示例 4: 系统级 OCR 点击（在副屏幕上操作）
   # {"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
 
   # 示例 5: 系统级坐标点击（点击原生对话框中的坐标）

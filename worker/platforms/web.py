@@ -572,7 +572,15 @@ class WebPlatformManager(PlatformManager):
         return b""
 
     def _take_system_screenshot(self, monitor: int = None) -> bytes:
-        """系统级截图（使用 mss，截取指定显示器）。"""
+        """系统级截图（使用 mss，截取指定显示器）。
+
+        显示器编号规则（与用户直觉一致）：
+        - monitor=1: 主屏幕（left=0 的显示器）
+        - monitor=2: 副屏幕（另一个显示器）
+
+        注意：mss 库的原始编号顺序与 Windows 主屏幕设置无关，
+        这里做了映射处理使其符合用户直觉。
+        """
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
         try:
@@ -584,13 +592,37 @@ class WebPlatformManager(PlatformManager):
                 for i, m in enumerate(monitors):
                     logger.debug(f"  monitor[{i}]: {m}")
 
-                # 选择截取的显示器
-                if effective_monitor < len(monitors):
-                    target_monitor = monitors[effective_monitor]
+                # 重新映射显示器编号，使其符合用户直觉
+                # mss 原始编号：monitors[1] 可能是任意显示器，取决于连接顺序
+                # 映射规则：monitor=1 选择 left=0 的（主屏幕），monitor=2 选择另一个
+                if len(monitors) > 2:  # 有多个显示器
+                    # 找到 left=0 的显示器索引（主屏幕）
+                    primary_index = None
+                    secondary_index = None
+                    for i in range(1, len(monitors)):
+                        if monitors[i]['left'] == 0:
+                            primary_index = i
+                        else:
+                            secondary_index = i
+
+                    if primary_index is None:
+                        # 没找到 left=0，使用 mss 默认编号
+                        logger.warning("Could not find primary monitor (left=0), using mss default order")
+                        target_index = effective_monitor
+                    else:
+                        # 映射：monitor=1 -> 主屏幕，monitor=2 -> 副屏幕
+                        if effective_monitor == 1:
+                            target_index = primary_index
+                        elif effective_monitor == 2:
+                            target_index = secondary_index if secondary_index else primary_index
+                        else:
+                            target_index = effective_monitor
+
+                    logger.debug(f"Monitor mapping: user requested {effective_monitor} -> mss index {target_index}")
+                    target_monitor = monitors[target_index]
                 else:
-                    # 如果指定的显示器不存在，使用第一个显示器
-                    logger.warning(f"Monitor {effective_monitor} not found, using monitor 1")
-                    target_monitor = monitors[1]
+                    # 只有一个显示器，直接使用 monitors[1]
+                    target_monitor = monitors[1] if len(monitors) > 1 else monitors[0]
 
                 screenshot = sct.grab(target_monitor)
                 # 转换为 PNG bytes
