@@ -638,6 +638,9 @@ class ImageExistAction(BaseActionExecutor):
     requires_ocr = True
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         # 检查 OCR 客户端
         error = self._check_ocr_client(platform)
         if error:

@@ -24,6 +24,9 @@ class ClickAction(BaseActionExecutor):
     name = "click"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -48,6 +51,9 @@ class DoubleClickAction(BaseActionExecutor):
     name = "double_click"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -75,6 +81,9 @@ class MoveAction(BaseActionExecutor):
     name = "move"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -109,6 +118,9 @@ class InputAction(BaseActionExecutor):
     name = "input"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -138,6 +150,9 @@ class SwipeAction(BaseActionExecutor):
     name = "swipe"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -165,6 +180,9 @@ class PressAction(BaseActionExecutor):
     name = "press"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         if not action.value:
             return ActionResult(
                 number=0,
@@ -189,6 +207,9 @@ class ScreenshotAction(BaseActionExecutor):
     name = "screenshot"
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
         screenshot = platform.take_screenshot(context)
         screenshot_base64 = base64.b64encode(screenshot).decode("utf-8")
 

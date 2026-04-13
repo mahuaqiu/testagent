@@ -22,13 +22,19 @@ from typing import Any, Dict, List, Optional, Set
 from PIL import Image
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
+from worker.platforms.base import PlatformManager
+from worker.task import Action, ActionResult, ActionStatus
+from worker.config import PlatformConfig
+from worker.actions import ActionRegistry
+
+logger = logging.getLogger(__name__)
+
 try:
     import mss
     import pyautogui
     SYSTEM_LEVEL_AVAILABLE = True
 except ImportError:
     SYSTEM_LEVEL_AVAILABLE = False
-    logger.warning("mss or pyautogui not available, system-level operations disabled")
 
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
@@ -78,7 +84,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token", "switched_page", "close_page", "web_image_upload"}
+    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token", "switched_page", "close_page"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -606,8 +612,6 @@ class WebPlatformManager(PlatformManager):
                 result = self._action_switched_page(action)
             elif action.action_type == "close_page":
                 result = self._action_close_page(action)
-            elif action.action_type == "web_image_upload":
-                result = self._action_web_image_upload(action)
             else:
                 # 使用 ActionRegistry 执行通用动作
                 executor = ActionRegistry.get(action.action_type)
@@ -1025,127 +1029,4 @@ class WebPlatformManager(PlatformManager):
             context=new_page,
         )
 
-    # ========== 文件上传动作 ==========
-
-    def _action_web_image_upload(self, action: Action) -> ActionResult:
-        """处理 Web 文件上传弹窗。
-
-        使用 Playwright 的文件选择器 API 处理原生文件上传对话框。
-
-        Args:
-            action: 动作参数
-                - x, y: 触发上传弹窗的点击坐标
-                - image_base64: 要上传的图片 base64 编码
-
-        Returns:
-            ActionResult: 动作执行结果
-        """
-        # 验证浏览器上下文
-        if not self._browser_context:
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.FAILED,
-                error="Browser context not available",
-            )
-
-        # 验证坐标参数
-        if action.x is None or action.y is None:
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.FAILED,
-                error="Click coordinates (x, y) are required",
-            )
-
-        # 验证图片数据
-        if not action.image_base64:
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.FAILED,
-                error="image_base64 is required",
-            )
-
-        # 解码 base64
-        try:
-            image_bytes = base64.b64decode(action.image_base64)
-        except Exception as e:
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.FAILED,
-                error=f"Invalid base64 image data: {e}",
-            )
-
-        # 保存到临时文件
-        temp_file = None
-        try:
-            # 创建临时文件
-            temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            temp_file.write(image_bytes)
-            temp_file_path = temp_file.name
-            temp_file.close()
-
-            logger.debug(f"Saved upload image to temp file: {temp_file_path}")
-
-            # 获取超时时间
-            timeout = action.timeout if action.timeout else 5000
-
-            # 执行上传
-            _run_async(self._async_upload_file(
-                self._current_page,
-                action.x,
-                action.y,
-                temp_file_path,
-                timeout
-            ))
-
-            logger.info(f"Successfully uploaded image via file chooser at ({action.x}, {action.y})")
-
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.SUCCESS,
-                output=f"Uploaded image via file chooser at ({action.x}, {action.y})",
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to upload image: {e}")
-            return ActionResult(
-                number=0,
-                action_type="web_image_upload",
-                status=ActionStatus.FAILED,
-                error=f"Failed to set upload file: {e}",
-            )
-        finally:
-            # 清理临时文件
-            if temp_file and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                    logger.debug(f"Cleaned up temp file: {temp_file_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temp file: {e}")
-
-    async def _async_upload_file(
-        self,
-        page: Page,
-        x: int,
-        y: int,
-        file_path: str,
-        timeout: int
-    ) -> None:
-        """异步执行文件上传。
-
-        Args:
-            page: 当前页面
-            x: 点击坐标 X
-            y: 点击坐标 Y
-            file_path: 临时文件路径
-            timeout: 超时时间（毫秒）
-        """
-        async with page.expect_file_chooser(timeout=timeout) as fc_info:
-            await page.mouse.click(x, y)
-
-        file_chooser = await fc_info.value
-        await file_chooser.set_files([file_path])
+    

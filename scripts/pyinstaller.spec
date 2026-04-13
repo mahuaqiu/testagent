@@ -100,6 +100,10 @@ hiddenimports = [
     'pygetwindow',
     'mouseinfo',
     'pyrect',
+    'mss',
+    'mss.base',
+    'mss.windows',
+    'mss.darwin',
     # 图像处理
     'PIL',
     'PIL.Image',
