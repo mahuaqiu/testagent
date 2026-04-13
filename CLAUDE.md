@@ -117,6 +117,27 @@ PlatformManager (抽象基类)
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
 | `end_x` | 滑动终点 X 或最大搜索距离 | swipe, image_click_near_text |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
+| `level` | 执行层级：`browser`（Playwright）或 `system`（pyautogui），仅 Web 平台支持 | 所有动作 |
+
+### level 执行层级（Web 平台专用）
+
+用于处理浏览器原生对话框等场景，Playwright 无法截取/操作浏览器外部的原生 UI。
+
+| 值 | 说明 | 适用场景 |
+|----|------|----------|
+| `browser` | 使用 Playwright 操作浏览器内部内容（默认） | 正常 Web 页面操作 |
+| `system` | 使用系统级操作（mss 截屏 + pyautogui 点击） | 原生对话框、文件选择器、权限弹窗 |
+
+**使用示例**：
+```json
+// 点击原生共享对话框中的"屏幕 1"
+{"action_type": "ocr_click", "value": "屏幕 1", "level": "system"}
+
+// 系统级截图（截取整个屏幕包括原生对话框）
+{"action_type": "screenshot", "value": "native", "level": "system"}
+```
+
+**依赖**：`level: system` 需要 `mss` 和 `pyautogui` 库。
 
 ### image_click_near_text 说明
 
@@ -127,8 +148,10 @@ PlatformManager (抽象基类)
   "action_type": "image_click_near_text",
   "image_base64": "<base64_encoded_image>",
   "value": "密码",
-  "end_x": 500,  // max_distance，最大搜索距离（像素）
+  "end_x": 500,
   "threshold": 0.8
+}
+```
 }
 
 ## 任务执行流程
