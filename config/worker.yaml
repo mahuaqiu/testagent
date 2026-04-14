@@ -22,7 +22,7 @@ platforms:
   web:
     enabled: null                   # Auto-detect based on system
     headless: false                 # Headless mode
-    browser_type: chromium          # chromium / firefox / webkit
+    browser_type: chrome            # 使用系统 Chrome（不是 Chromium）以支持屏幕共享
     timeout: 30000                  # Timeout (ms)
     session_timeout: 300            # Session timeout (seconds)
     screenshot_dir: data/screenshots

@@ -102,7 +102,14 @@
       "Bash(xxd \"D:/code/autotest/dist/windows/test-worker/_internal/config/worker.yaml\")",
       "Bash(tasklist)",
       "Bash(findstr -i installer)",
-      "WebFetch(domain:jrsoftware.org)"
+      "WebFetch(domain:jrsoftware.org)",
+      "Bash(reg query:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:stackoverflow.com)",
+      "WebFetch(domain:playwright.dev)",
+      "Bash(powershell.exe:*)",
+      "Bash(cmd.exe /c \"whoami /priv\")",
+      "Bash(git checkout:*)"
     ]
   }
 }

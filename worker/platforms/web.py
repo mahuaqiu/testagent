@@ -182,18 +182,33 @@ class WebPlatformManager(PlatformManager):
         if self.clear_profile_on_start:
             self._clear_profile_data(user_data_dir)
 
-        # 选择浏览器类型
+        # 选择浏览器类型和启动器
+        # Playwright 的 browser_type 只有 chromium/firefox/webkit 三种
+        # 要使用系统 Chrome/Edge，需要用 chromium 启动器 + channel 参数
         if self.browser_type == "firefox":
             browser_launcher = self._playwright.firefox
         elif self.browser_type == "webkit":
             browser_launcher = self._playwright.webkit
         else:
+            # chromium 类型（包括 chrome、msedge、chromium）
             browser_launcher = self._playwright.chromium
 
         # 使用持久化上下文启动浏览器（保留缓存、Cookie等）
         context_options = {
             "headless": self.headless,
         }
+
+        # 系统浏览器支持：使用 channel 参数指定系统安装的 Chrome/Edge
+        # browser_type='chrome' -> channel='chrome' (使用系统 Chrome)
+        # browser_type='msedge' -> channel='msedge' (使用系统 Edge)
+        # browser_type='chromium' -> 无 channel (使用 Playwright 内置 Chromium)
+        if self.browser_type == "chrome":
+            context_options["channel"] = "chrome"
+            logger.info("Using system Chrome browser")
+        elif self.browser_type == "msedge" or self.browser_type == "edge":
+            context_options["channel"] = "msedge"
+            logger.info("Using system Edge browser")
+
         if self.ignore_https_errors:
             context_options["ignore_https_errors"] = True
         if self.permissions:
@@ -300,7 +315,7 @@ class WebPlatformManager(PlatformManager):
                 logger.warning(f"Failed to close context: {e}")
         self._contexts.clear()
 
-        if self._browser or self._playwright:
+        if self._browser_context or self._playwright:
             try:
                 _run_async(self._async_stop())
             except Exception as e:
