@@ -135,6 +135,10 @@ paths:
                     platform: "web"
                     duration_ms: 1500
                     actions: []
+                    screenshots: []
+                    metadata: {}
+                    started_at: "2026-03-17T12:00:00.000000"
+                    finished_at: "2026-03-17T12:00:01.500000"
         "404":
           description: "任务不存在"
           content:
@@ -589,6 +593,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionResult"
+        screenshots:
+          type: array
+          items:
+            type: string
+          description: "截图列表（base64 编码）"
+        metadata:
+          type: object
+          description: "任务元数据（扩展信息）"
         error:
           type: string
           description: "错误信息"
@@ -613,8 +625,17 @@ components:
           type: integer
           description: "执行耗时(ms)"
         output:
-          type: string
-          description: "输出内容"
+          type: object
+          description: |
+            输出内容，根据动作类型返回不同的对象：
+            - ocr_get_text: {"text": "识别到的文字内容"}
+            - ocr_get_position: {"positions": [[x1,y1], [x2,y2], ...]}
+            - image_get_position: {"positions": [[x1,y1], [x2,y2], ...]}
+            - ocr_exist: {"exists": true} 或 {"exists": false}
+            - image_exist: {"exists": true} 或 {"exists": false}
+            - ocr_check_same_row_text: {"exists": true} 或 {"exists": false}
+            - ocr_check_same_row_image: {"exists": true} 或 {"exists": false}
+            - 其他动作: null 或空对象
         error:
           type: string
           description: "错误信息"
