@@ -50,7 +50,7 @@ class OcrClickAction(BaseActionExecutor):
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index
+            platform, screenshot, action.value, index, action.match_mode
         )
 
         if not position:
@@ -107,7 +107,7 @@ class OcrInputAction(BaseActionExecutor):
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index
+            platform, screenshot, action.value, index, action.match_mode
         )
 
         if not position:
@@ -170,7 +170,7 @@ class OcrWaitAction(BaseActionExecutor):
             if action.region:
                 screenshot = self._crop_region(screenshot, action.region)
             position = self._find_text_with_fallback(
-                platform, screenshot, action.value
+                platform, screenshot, action.value, match_mode=action.match_mode
             )
 
             if position:
@@ -216,7 +216,7 @@ class OcrAssertAction(BaseActionExecutor):
             screenshot = self._crop_region(screenshot, action.region)
 
         # 使用统一匹配策略（已处理 reg_ 前缀）
-        position = self._find_text_with_fallback(platform, screenshot, action.value)
+        position = self._find_text_with_fallback(platform, screenshot, action.value, match_mode=action.match_mode)
 
         if position:
             return ActionResult(
@@ -300,7 +300,7 @@ class OcrPasteAction(BaseActionExecutor):
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index
+            platform, screenshot, action.value, index, action.match_mode
         )
 
         if not position:
@@ -367,7 +367,7 @@ class OcrMoveAction(BaseActionExecutor):
         # 查找文字位置（使用统一匹配策略）
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index
+            platform, screenshot, action.value, index, action.match_mode
         )
 
         if not position:
@@ -498,7 +498,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
-        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index)
+        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index, action.match_mode)
 
         if not anchor_position:
             return ActionResult(
@@ -529,7 +529,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
 
         # 在裁剪区域内查找目标文本（使用降级匹配策略）
         target_index = action.target_index if action.target_index is not None else 0
-        target_position = self._find_text_with_fallback(platform, cropped_bytes, action.value, target_index)
+        target_position = self._find_text_with_fallback(platform, cropped_bytes, action.value, target_index, action.match_mode)
 
         if not target_position:
             return ActionResult(
@@ -603,7 +603,7 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
-        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index)
+        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index, action.match_mode)
 
         if not anchor_position:
             return ActionResult(
@@ -630,7 +630,7 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
 
         # 在裁剪区域内查找目标文本
         target_index = action.target_index if action.target_index is not None else 0
-        target_position = self._find_text_with_fallback(platform, cropped_bytes, action.value, target_index)
+        target_position = self._find_text_with_fallback(platform, cropped_bytes, action.value, target_index, action.match_mode)
 
         if not target_position:
             return ActionResult(
@@ -690,7 +690,7 @@ class OcrExistAction(BaseActionExecutor):
         # 使用统一匹配策略查找文字
         index = action.index if action.index is not None else 0
         position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index
+            platform, screenshot, action.value, index, action.match_mode
         )
 
         # 返回结果（始终 SUCCESS，通过 output 返回存在性）

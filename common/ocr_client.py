@@ -159,32 +159,28 @@ class OCRClient:
         self,
         image_bytes: bytes,
         target_text: str,
-        match_mode: str = "exact",
         confidence_threshold: float = 0.0,
     ) -> Optional[TextBlock]:
         """
         在图片中查找指定文字。
 
+        OCR 服务端自动处理匹配策略：精确匹配 → 模糊匹配。
+        正则匹配通过 "reg_" 前缀标识，如 "reg_雨[大中小]"。
+
         Args:
             image_bytes: 图像字节数据。
-            target_text: 目标文字。
-            match_mode: 匹配模式（exact/fuzzy/regex），正则表达式以 "reg_" 开头。
+            target_text: 目标文字（以 reg_ 开头表示正则表达式）。
             confidence_threshold: 置信度阈值。
 
         Returns:
             TextBlock | None: 找到的文字块，未找到返回 None。
         """
-        # 使用新的 /ocr/get_coord_by_text API 直接查找
+        # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
         image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        # 处理正则表达式模式
-        filter_text = target_text
-        if match_mode == "regex":
-            filter_text = f"reg_{target_text}"
 
         response = self._post("/ocr/get_coord_by_text", {
             "image": image_base64,
-            "filter_text": filter_text,
+            "filter_text": target_text,
             "confidence_threshold": confidence_threshold,
         })
 
@@ -194,7 +190,7 @@ class OCRClient:
 
         texts = response.get("texts", [])
         if not texts:
-            logger.info(f"OCR查找文字未找到: target=\"{target_text}\" mode={match_mode}")
+            logger.info(f"OCR查找文字未找到: target=\"{target_text}\"")
             return None
 
         logger.info(f"OCR查找文字结果: {texts}")

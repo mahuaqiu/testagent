@@ -182,17 +182,24 @@ class BaseActionExecutor(ActionExecutor):
         """
         在图像中查找文字位置。
 
+        OCR 服务端自动处理匹配策略：精确匹配 → 模糊匹配。
+        正则匹配通过 "reg_" 前缀标识。
+
         Args:
             platform: 平台管理器
             image_bytes: 图像数据
             text: 目标文字
-            match_mode: 匹配模式
+            match_mode: 匹配模式（regex 需添加 reg_ 前缀，其他直接透传）
             index: 选择第几个匹配结果
 
         Returns:
             文字中心坐标 (x, y)，未找到返回 None
         """
-        return platform._find_text_position(image_bytes, text, match_mode, index)
+        # 处理正则模式：添加 reg_ 前缀
+        actual_text = text
+        if match_mode == "regex" and not text.startswith("reg_"):
+            actual_text = f"reg_{text}"
+        return platform._find_text_position(image_bytes, actual_text, "exact", index)
 
     def _find_image_position(
         self,
@@ -222,40 +229,28 @@ class BaseActionExecutor(ActionExecutor):
         platform: "PlatformManager",
         image_bytes: bytes,
         text: str,
-        index: int = 0
+        index: int = 0,
+        match_mode: str = "exact"
     ) -> tuple[int, int] | None:
         """
-        使用统一匹配策略查找文字位置：精确匹配 → 模糊匹配。
-        reg_ 开头的文字使用正则匹配（不受降级约束）。
+        使用统一匹配策略查找文字位置。
+
+        OCR 服务端自动处理匹配策略：精确匹配 → 模糊匹配。
+        正则匹配通过 "reg_" 前缀标识。
 
         Args:
             platform: 平台管理器
             image_bytes: 图像数据
-            text: 目标文字（reg_ 开头表示正则匹配）
+            text: 目标文字
             index: 选择第几个匹配结果
+            match_mode: 匹配模式（regex 需添加 reg_ 前缀，其他直接透传）
 
         Returns:
             文字中心坐标 (x, y)，未找到返回 None
         """
-        # 处理正则快捷模式：reg_ 开头直接使用正则匹配
-        if text.startswith("reg_"):
-            actual_text = text[4:]  # 去掉前缀
-            position = platform._find_text_position(image_bytes, actual_text, "regex", index)
-            if position:
-                logger.debug(f"Text found with regex match: \"{actual_text}\" (from \"{text}\")")
-                return position
-            return None
-
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            logger.debug(f"Text found with exact match: \"{text}\"")
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            logger.debug(f"Text found with fuzzy match: \"{text}\"")
-            return position
-
-        return None
+        # 处理正则模式：添加 reg_ 前缀
+        actual_text = text
+        if match_mode == "regex" and not text.startswith("reg_"):
+            actual_text = f"reg_{text}"
+        # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
+        return platform._find_text_position(image_bytes, actual_text, "exact", index)

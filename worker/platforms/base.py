@@ -292,10 +292,13 @@ class PlatformManager(ABC):
         """
         在图像中查找文字位置，支持 index 参数选择第几个匹配结果。
 
+        OCR 服务端自动处理匹配策略：精确匹配 → 模糊匹配。
+        正则匹配通过 "reg_" 前缀标识。
+
         Args:
             image_bytes: 图像数据
             text: 目标文字
-            match_mode: 匹配模式
+            match_mode: 匹配模式（regex 需添加 reg_ 前缀，其他直接透传）
             index: 选择第几个匹配结果（0=第一个，1=第二个，以此类推）
 
         Returns:
@@ -305,14 +308,19 @@ class PlatformManager(ABC):
             logger.error("OCR client not available")
             return None
 
+        # 处理正则模式：添加 reg_ 前缀
+        actual_text = text
+        if match_mode == "regex" and not text.startswith("reg_"):
+            actual_text = f"reg_{text}"
+
         if index == 0:
             # 使用原有的 find_text，只返回第一个结果
-            text_block = self.ocr_client.find_text(image_bytes, text, match_mode=match_mode)
+            text_block = self.ocr_client.find_text(image_bytes, actual_text)
             if text_block:
                 return text_block.center
         else:
             # index > 0 时，获取所有匹配结果
-            all_texts = self.ocr_client.find_all_texts(image_bytes, text)
+            all_texts = self.ocr_client.find_all_texts(image_bytes, actual_text)
             if all_texts and len(all_texts) > index:
                 return all_texts[index].center
         return None
@@ -357,48 +365,24 @@ class PlatformManager(ABC):
         """
         获取所有匹配文字的坐标列表。
 
+        OCR 服务端自动处理匹配策略：精确匹配 → 模糊匹配。
+        正则匹配通过 "reg_" 前缀标识。
+
         Args:
             image_bytes: 截图数据
-            text: 目标文字（支持 reg_ 前缀正则匹配）
+            text: 目标文字（以 reg_ 开头表示正则表达式）
 
         Returns:
             坐标列表 [(x1, y1), (x2, y2), ...]
-            顺序：精确匹配 → 模糊匹配
         """
         if not self.ocr_client:
             logger.error("OCR client not available")
             return []
 
-        positions: List[tuple[int, int]] = []
-
-        # 处理正则快捷模式：reg_ 开头直接使用正则匹配
-        if text.startswith("reg_"):
-            actual_text = text[4:]  # 去掉前缀
-            all_texts = self.ocr_client.find_all_texts(image_bytes, actual_text, match_mode="regex")
-            positions = [t.center for t in all_texts]
-            logger.debug(f"Found {len(positions)} positions with regex match: \"{actual_text}\"")
-            return positions
-
-        # 先精确匹配
-        exact_texts = self.ocr_client.find_all_texts(image_bytes, text, match_mode="exact")
-        exact_positions = [t.center for t in exact_texts]
-        logger.debug(f"Found {len(exact_positions)} positions with exact match: \"{text}\"")
-
-        # 再模糊匹配
-        fuzzy_texts = self.ocr_client.find_all_texts(image_bytes, text, match_mode="fuzzy")
-        fuzzy_positions = [t.center for t in fuzzy_texts]
-        logger.debug(f"Found {len(fuzzy_positions)} positions with fuzzy match: \"{text}\"")
-
-        # 合并：精确匹配在前，模糊匹配在后
-        # 注意：需要去重，因为模糊匹配可能包含精确匹配的结果
-        for pos in exact_positions:
-            if pos not in positions:
-                positions.append(pos)
-
-        for pos in fuzzy_positions:
-            if pos not in positions:
-                positions.append(pos)
-
+        # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
+        all_texts = self.ocr_client.find_all_texts(image_bytes, text)
+        positions = [t.center for t in all_texts]
+        logger.debug(f"Found {len(positions)} positions for text: \"{text}\"")
         return positions
 
     def _find_all_image_positions(

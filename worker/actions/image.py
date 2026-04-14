@@ -439,7 +439,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
-        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index)
+        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index, action.match_mode)
 
         if not anchor_position:
             return ActionResult(
@@ -506,21 +506,13 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
         )
 
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> tuple[int, int] | None:
-        """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            logger.debug(f"Text found with exact match: \"{text}\"")
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            logger.debug(f"Text found with fuzzy match: \"{text}\"")
-            return position
-
-        return None
+    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:
+        """使用统一匹配策略查找文字位置。OCR 服务端自动处理精确→模糊降级匹配。"""
+        # 处理正则模式：添加 reg_ 前缀
+        actual_text = text
+        if match_mode == "regex" and not text.startswith("reg_"):
+            actual_text = f"reg_{text}"
+        return platform._find_text_position(image_bytes, actual_text, "exact", index)
 
 
 class OcrCheckSameRowImageAction(BaseActionExecutor):
@@ -561,7 +553,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
 
         # 定位锚点文本（使用降级匹配策略）
         anchor_index = action.anchor_index if action.anchor_index is not None else 0
-        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index)
+        anchor_position = self._find_text_with_fallback(platform, screenshot, action.anchor_text, anchor_index, action.match_mode)
 
         if not anchor_position:
             return ActionResult(
@@ -616,19 +608,13 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
             output=f"Found at ({target_x}, {target_y})",
         )
 
-    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0) -> tuple[int, int] | None:
-        """使用降级策略查找文字位置：精确匹配 → 模糊匹配。"""
-        # 1. 先精确匹配
-        position = platform._find_text_position(image_bytes, text, "exact", index)
-        if position:
-            return position
-
-        # 2. 再模糊匹配
-        position = platform._find_text_position(image_bytes, text, "fuzzy", index)
-        if position:
-            return position
-
-        return None
+    def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:
+        """使用统一匹配策略查找文字位置。OCR 服务端自动处理精确→模糊降级匹配。"""
+        # 处理正则模式：添加 reg_ 前缀
+        actual_text = text
+        if match_mode == "regex" and not text.startswith("reg_"):
+            actual_text = f"reg_{text}"
+        return platform._find_text_position(image_bytes, actual_text, "exact", index)
 
 
 class ImageExistAction(BaseActionExecutor):
