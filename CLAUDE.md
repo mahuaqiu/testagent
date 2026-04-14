@@ -96,7 +96,7 @@ PlatformManager (抽象基类)
 所有动作基于 OCR/图像识别或坐标定位。核心动作：
 - **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`, `ocr_paste`, `ocr_move`, `ocr_exist`
 - **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`, `image_exist`
-- **坐标动作**：`click`, `move`, `swipe`, `input`, `press`
+- **坐标动作**：`click`, `move`, `swipe`, `drag`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`, `switched_page`, `close_page`
 
@@ -109,15 +109,29 @@ PlatformManager (抽象基类)
 | 参数 | 说明 | 适用动作 |
 |------|------|----------|
 | `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page |
-| `x`, `y` | 目标坐标 | click, move, swipe, input |
+| `x`, `y` | 目标坐标（或拖拽起点） | click, move, swipe, drag, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作、move 类动作 |
 | `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
-| `end_x` | 滑动终点 X 或最大搜索距离 | swipe, image_click_near_text |
+| `end_x`, `end_y` | 拖拽终点坐标 | swipe, drag |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
 | `level` | 执行层级：`browser`（Playwright）或 `system`（pyautogui），仅 Web 平台支持 | 所有动作 |
+
+### swipe / drag 动作说明
+
+`swipe` 和 `drag` 功能相同，都是从起点拖拽到终点（按下 → 移动 → 松开）。`drag` 是更语义化的命名，适合桌面端拖拽元素场景。
+
+```json
+{
+  "action_type": "drag",
+  "x": 100,
+  "y": 200,
+  "end_x": 400,
+  "end_y": 600
+}
+```
 
 ### level 执行层级（Web 平台专用）
 

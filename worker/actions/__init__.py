@@ -39,6 +39,7 @@ from worker.actions.coordinate import (
     MoveAction,
     InputAction,
     SwipeAction,
+    DragAction,
     PressAction,
     ScreenshotAction,
     WaitAction,
@@ -80,6 +81,7 @@ def _register_all_actions():
     ActionRegistry.register(MoveAction())
     ActionRegistry.register(InputAction())
     ActionRegistry.register(SwipeAction())
+    ActionRegistry.register(DragAction())
     ActionRegistry.register(PressAction())
     ActionRegistry.register(ScreenshotAction())
     ActionRegistry.register(WaitAction())
@@ -132,6 +134,7 @@ __all__ = [
     "MoveAction",
     "InputAction",
     "SwipeAction",
+    "DragAction",
     "PressAction",
     "ScreenshotAction",
     "WaitAction",

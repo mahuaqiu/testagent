@@ -144,6 +144,36 @@ class InputAction(BaseActionExecutor):
         )
 
 
+class DragAction(BaseActionExecutor):
+    """拖拽（与 swipe 功能相同，语义化命名）。"""
+
+    name = "drag"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="Start coordinates are required",
+            )
+
+        end_x = action.end_x if action.end_x is not None else action.x
+        end_y = action.end_y if action.end_y is not None else action.y
+
+        platform.swipe(action.x, action.y, end_x, end_y, context)
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y})",
+        )
+
+
 class SwipeAction(BaseActionExecutor):
     """滑动/拖拽。"""
 

@@ -174,7 +174,8 @@ end;
 
 function IsUpgradeInstall: Boolean;
 begin
-  Result := RegValueExists(HKEY_LOCAL_MACHINE,
+  // PrivilegesRequired=lowest 时，卸载信息写入 HKCU 而不是 HKLM
+  Result := RegValueExists(HKEY_CURRENT_USER,
     'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1',
     'UninstallString');
 end;

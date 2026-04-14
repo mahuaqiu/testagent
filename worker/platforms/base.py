@@ -37,7 +37,7 @@ class PlatformManager(ABC):
         "image_click", "image_wait", "image_assert", "image_click_near_text",
         "image_move", "image_double_click", "image_exist",
         "image_get_position",
-        "click", "double_click", "swipe", "input", "press", "screenshot", "wait",
+        "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
     }
