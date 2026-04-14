@@ -42,8 +42,8 @@ SetupWindowTitle=Test Worker {#Version} 安装
 ; Worker 主程序和依赖（排除配置文件，配置文件单独处理）
 Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "_internal\config\worker.yaml"
 
-; 配置文件 - 总是覆盖（确保配置文件格式正确）
-Source: "..\dist\windows\test-worker\_internal\config\worker.yaml"; DestDir: "{app}\_internal\config"; Flags: ignoreversion
+; 配置文件 - 只在全新安装时复制，升级时保留现有配置
+Source: "..\dist\windows\test-worker\_internal\config\worker.yaml"; DestDir: "{app}\_internal\config"; Flags: onlyifdoesntexist
 
 
 [Dirs]
@@ -301,98 +301,101 @@ begin
     if WizardSilent then
       ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
 
-    // Write config file with user input values (UTF-8 encoding, English comments)
-    ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
+    // 只有全新安装时才写入配置文件（升级时保留现有配置）
+    if not IsUpgradeInstall then
+    begin
+      ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
 
-    ConfigContent := '# Worker Configuration File' + #13#10 +
+      ConfigContent := '# Worker Configuration File' + #13#10 +
       '# Edit this file after installation based on your environment' + #13#10 +
-      '' + #13#10 +
-      '# Worker Basic Settings' + #13#10 +
-      'worker:' + #13#10 +
-      '  id: null                          # Auto-generated, or specify manually' + #13#10 +
-      '  ip: "' + IpEdit.Text + '"                          # Specify IP address, null means auto-detect' + #13#10 +
-      '  port: ' + PortEdit.Text + '                        # HTTP service port' + #13#10 +
-      '  namespace: ' + NamespaceEdit.Text + '         # Namespace for categorizing Workers' + #13#10 +
-      '  device_check_interval: 300        # Device check interval (seconds), 5 minutes' + #13#10 +
-      '  service_retry_count: 3            # Service startup retry count' + #13#10 +
-      '  service_retry_interval: 10        # Retry interval (seconds)' + #13#10 +
-      '  action_step_delay: 0.5            # Action step delay (seconds)' + #13#10 +
-      '' + #13#10 +
-      '# External Services (Required)' + #13#10 +
-      'external_services:' + #13#10 +
-      '  platform_api: "' + PlatformApiEdit.Text + '"  # Platform API URL' + #13#10 +
-      '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL' + #13#10 +
-      '' + #13#10 +
-      '# Platform Settings' + #13#10 +
-      'platforms:' + #13#10 +
-      '  web:' + #13#10 +
-      '    enabled: null                   # Auto-detect based on system' + #13#10 +
-      '    headless: false                 # Headless mode' + #13#10 +
-      '    browser_type: chromium          # chromium / firefox / webkit' + #13#10 +
-      '    timeout: 30000                  # Timeout (ms)' + #13#10 +
-      '    session_timeout: 300            # Session timeout (seconds)' + #13#10 +
-      '    screenshot_dir: data/screenshots' + #13#10 +
-      '    ignore_https_errors: true       # Ignore HTTPS certificate errors' + #13#10 +
-      '    user_data_dir: data/chrome_profile  # Browser user data directory' + #13#10 +
-      '    permissions:                    # Web permissions' + #13#10 +
-      '      - camera' + #13#10 +
-      '      - microphone' + #13#10 +
-      '    clear_profile_on_start: true' + #13#10 +
-      '    request_blacklist:' + #13#10 +
-      '      - pattern: "uba.js"' + #13#10 +
-      '        action: "404"' + #13#10 +
-      '      - pattern: "tinyReporter.min.js"' + #13#10 +
-      '        action: "404"' + #13#10 +
-      '    token_headers:' + #13#10 +
-      '      - "X-Auth-Token"' + #13#10 +
-      '      - "X-Request-Operator"' + #13#10 +
-      '' + #13#10 +
-      '  android:' + #13#10 +
-      '    enabled: null                   # Only on Windows' + #13#10 +
-      '    u2_port: 7912                   # uiautomator2 port' + #13#10 +
-      '    session_timeout: 300' + #13#10 +
-      '    screenshot_dir: data/screenshots' + #13#10 +
-      '' + #13#10 +
-      '  ios:' + #13#10 +
-      '    enabled: null                   # Only on Windows' + #13#10 +
-      '    wda_base_port: 8100             # WDA base port' + #13#10 +
-      '    wda_ipa_path: wda/WebDriverAgent.ipa' + #13#10 +
-      '    session_timeout: 300' + #13#10 +
-      '    screenshot_dir: data/screenshots' + #13#10 +
-      '' + #13#10 +
-      '  windows:' + #13#10 +
-      '    enabled: null                   # Only on Windows' + #13#10 +
-      '    session_timeout: 300' + #13#10 +
-      '    screenshot_dir: data/screenshots' + #13#10 +
-      '' + #13#10 +
-      '  mac:' + #13#10 +
-      '    enabled: null                   # Only on macOS' + #13#10 +
-      '    session_timeout: 300' + #13#10 +
-      '    screenshot_dir: data/screenshots' + #13#10 +
-      '' + #13#10 +
-      '# Image Matching Settings' + #13#10 +
-      'image_matching:' + #13#10 +
-      '  default_threshold: 0.8            # Default matching threshold' + #13#10 +
-      '  methods:' + #13#10 +
-      '    - template                      # Template matching' + #13#10 +
-      '    - sift                          # Feature point matching' + #13#10 +
-      '' + #13#10 +
-      '# Logging Settings' + #13#10 +
-      'logging:' + #13#10 +
-      '  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR' + #13#10 +
-      '  file: null                        # Log file path' + #13#10 +
-      '  max_size: 52428800                # Max file size, default 50MB' + #13#10 +
-      '  backup_count: 5                   # Number of backup files' + #13#10 +
-      '' + #13#10 +
-      '# Upgrade Settings' + #13#10 +
-      'upgrade:' + #13#10 +
-      '  check_url: ""                     # Upgrade check API URL' + #13#10 +
-      '  check_timeout: 30                 # Check timeout (seconds)' + #13#10 +
-      '  download_timeout: 300             # Download timeout (seconds)' + #13#10 +
-      '' + #13#10;
+        '' + #13#10 +
+        '# Worker Basic Settings' + #13#10 +
+        'worker:' + #13#10 +
+        '  id: null                          # Auto-generated, or specify manually' + #13#10 +
+        '  ip: "' + IpEdit.Text + '"                          # Specify IP address, null means auto-detect' + #13#10 +
+        '  port: ' + PortEdit.Text + '                        # HTTP service port' + #13#10 +
+        '  namespace: ' + NamespaceEdit.Text + '         # Namespace for categorizing Workers' + #13#10 +
+        '  device_check_interval: 300        # Device check interval (seconds), 5 minutes' + #13#10 +
+        '  service_retry_count: 3            # Service startup retry count' + #13#10 +
+        '  service_retry_interval: 10        # Retry interval (seconds)' + #13#10 +
+        '  action_step_delay: 0.5            # Action step delay (seconds)' + #13#10 +
+        '' + #13#10 +
+        '# External Services (Required)' + #13#10 +
+        'external_services:' + #13#10 +
+        '  platform_api: "' + PlatformApiEdit.Text + '"  # Platform API URL' + #13#10 +
+        '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL' + #13#10 +
+        '' + #13#10 +
+        '# Platform Settings' + #13#10 +
+        'platforms:' + #13#10 +
+        '  web:' + #13#10 +
+        '    enabled: null                   # Auto-detect based on system' + #13#10 +
+        '    headless: false                 # Headless mode' + #13#10 +
+        '    browser_type: chromium          # chromium / firefox / webkit' + #13#10 +
+        '    timeout: 30000                  # Timeout (ms)' + #13#10 +
+        '    session_timeout: 300            # Session timeout (seconds)' + #13#10 +
+        '    screenshot_dir: data/screenshots' + #13#10 +
+        '    ignore_https_errors: true       # Ignore HTTPS certificate errors' + #13#10 +
+        '    user_data_dir: data/chrome_profile  # Browser user data directory' + #13#10 +
+        '    permissions:                    # Web permissions' + #13#10 +
+        '      - camera' + #13#10 +
+        '      - microphone' + #13#10 +
+        '    clear_profile_on_start: true' + #13#10 +
+        '    request_blacklist:' + #13#10 +
+        '      - pattern: "uba.js"' + #13#10 +
+        '        action: "404"' + #13#10 +
+        '      - pattern: "tinyReporter.min.js"' + #13#10 +
+        '        action: "404"' + #13#10 +
+        '    token_headers:' + #13#10 +
+        '      - "X-Auth-Token"' + #13#10 +
+        '      - "X-Request-Operator"' + #13#10 +
+        '' + #13#10 +
+        '  android:' + #13#10 +
+        '    enabled: null                   # Only on Windows' + #13#10 +
+        '    u2_port: 7912                   # uiautomator2 port' + #13#10 +
+        '    session_timeout: 300' + #13#10 +
+        '    screenshot_dir: data/screenshots' + #13#10 +
+        '' + #13#10 +
+        '  ios:' + #13#10 +
+        '    enabled: null                   # Only on Windows' + #13#10 +
+        '    wda_base_port: 8100             # WDA base port' + #13#10 +
+        '    wda_ipa_path: wda/WebDriverAgent.ipa' + #13#10 +
+        '    session_timeout: 300' + #13#10 +
+        '    screenshot_dir: data/screenshots' + #13#10 +
+        '' + #13#10 +
+        '  windows:' + #13#10 +
+        '    enabled: null                   # Only on Windows' + #13#10 +
+        '    session_timeout: 300' + #13#10 +
+        '    screenshot_dir: data/screenshots' + #13#10 +
+        '' + #13#10 +
+        '  mac:' + #13#10 +
+        '    enabled: null                   # Only on macOS' + #13#10 +
+        '    session_timeout: 300' + #13#10 +
+        '    screenshot_dir: data/screenshots' + #13#10 +
+        '' + #13#10 +
+        '# Image Matching Settings' + #13#10 +
+        'image_matching:' + #13#10 +
+        '  default_threshold: 0.8            # Default matching threshold' + #13#10 +
+        '  methods:' + #13#10 +
+        '    - template                      # Template matching' + #13#10 +
+        '    - sift                          # Feature point matching' + #13#10 +
+        '' + #13#10 +
+        '# Logging Settings' + #13#10 +
+        'logging:' + #13#10 +
+        '  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR' + #13#10 +
+        '  file: null                        # Log file path' + #13#10 +
+        '  max_size: 52428800                # Max file size, default 50MB' + #13#10 +
+        '  backup_count: 5                   # Number of backup files' + #13#10 +
+        '' + #13#10 +
+        '# Upgrade Settings' + #13#10 +
+        'upgrade:' + #13#10 +
+        '  check_url: ""                     # Upgrade check API URL' + #13#10 +
+        '  check_timeout: 30                 # Check timeout (seconds)' + #13#10 +
+        '  download_timeout: 300             # Download timeout (seconds)' + #13#10 +
+        '' + #13#10;
 
-    // Delete existing file and write new content with UTF-8 encoding
-    DeleteFile(ConfigFile);
-    SaveStringToFile(ConfigFile, ConfigContent, True);
+      // Delete existing file and write new content with UTF-8 encoding
+      DeleteFile(ConfigFile);
+      SaveStringToFile(ConfigFile, ConfigContent, True);
+    end;
   end;
 end;

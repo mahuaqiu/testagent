@@ -5,11 +5,10 @@
 负责启动 Inno Setup 静默安装进程。
 """
 
-import os
-import sys
-import subprocess
 import logging
-from typing import Optional
+import os
+import subprocess
+import sys
 
 from common.utils import SUBPROCESS_HIDE_WINDOW
 
@@ -34,7 +33,7 @@ def get_current_install_dir() -> str:
         return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 
-def run_silent_install(installer_path: str, install_dir: Optional[str] = None) -> None:
+def run_silent_install(installer_path: str, install_dir: str | None = None) -> None:
     """
     执行静默安装。
 

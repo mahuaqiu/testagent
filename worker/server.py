@@ -6,16 +6,13 @@ HTTP Server。
 
 import logging
 import os
-import sys
-import threading
-import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from worker.upgrade import UpgradeError, UpgradeRequest, handle_upgrade
+from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
 
 logger = logging.getLogger(__name__)
@@ -341,9 +338,10 @@ async def get_logs(
 @app.post("/worker/upgrade")
 async def upgrade_worker(request: UpgradeRequest):
     """
-    Worker 升级接口。
+    Worker 升级接口（异步）。
 
-    接收平台下发的升级指令，下载安装包并执行静默安装。
+    立即返回 accepted 状态，升级在后台执行。
+    使用 GET /worker/upgrade/status 查询进度。
 
     Args:
         request: 升级请求
@@ -353,12 +351,10 @@ async def upgrade_worker(request: UpgradeRequest):
 
     Returns:
         Dict: 升级响应
-            - status: skipped/upgrading/failed
+            - status: accepted/skipped/rejected
             - message: 状态描述
             - current_version: 当前版本
             - target_version: 目标版本
-
-    注意：升级成功后 Worker 会立即退出，由安装程序重启。
     """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
@@ -369,28 +365,43 @@ async def upgrade_worker(request: UpgradeRequest):
     )
 
     try:
-        result = await handle_upgrade(request)
-
-        # 如果状态是 upgrading，Worker 立即退出
-        if result.status == "upgrading":
-            logger.info("Worker 即将退出以完成升级...")
-            # 返回响应后退出
-            # 注意：sys.exit() 在子线程中只会终止该线程，不会终止进程
-            # 使用 os._exit() 强制终止整个进程
-            def delayed_exit():
-                time.sleep(0.5)
-                logger.info("Worker 退出中...")
-                os._exit(0)
-            threading.Thread(target=delayed_exit, daemon=True).start()
-
+        result = start_async_upgrade(request)
         return result.to_dict()
 
     except UpgradeError as e:
-        logger.error(f"Upgrade failed: {e}")
+        logger.error(f"Upgrade rejected: {e}")
         return {
-            "status": "failed",
+            "status": "rejected",
             "message": str(e),
         }
+
+
+@app.get("/worker/upgrade/status")
+async def upgrade_status():
+    """
+    查询升级状态。
+
+    Returns:
+        Dict: 升级状态信息
+            - status: accepted/downloading/installing/completed/failed/none
+            - target_version: 目标版本
+            - current_version: 当前版本
+            - download_progress: 下载进度百分比 (0-100)
+            - downloaded_bytes: 已下载字节
+            - total_bytes: 总字节
+            - error: 错误信息（失败时）
+            - started_at: 开始时间
+            - completed_at: 完成时间
+    """
+    state = get_upgrade_status()
+
+    if state is None:
+        return {
+            "status": "none",
+            "message": "当前无升级任务",
+        }
+
+    return state.to_dict()
 
 
 # 异常处理

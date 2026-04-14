@@ -3,7 +3,6 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
 from enum import Enum
 
 
@@ -20,7 +19,7 @@ class UpgradeStatus(Enum):
 class UpgradeRequest:
     """升级请求。"""
     download_url: str                       # 安装包下载地址
-    version: Optional[str] = None           # 目标版本号
+    version: str | None = None           # 目标版本号
     force: bool = True                      # 是否强制升级
 
 
@@ -29,8 +28,8 @@ class UpgradeResponse:
     """升级响应。"""
     status: str
     message: str
-    current_version: Optional[str] = None
-    target_version: Optional[str] = None
+    current_version: str | None = None
+    target_version: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -49,8 +48,12 @@ class UpgradeState:
     current_version: str
     download_url: str
     started_at: str
-    completed_at: Optional[str] = None
-    error: Optional[str] = None
+    completed_at: str | None = None
+    error: str | None = None
+    # 下载进度字段
+    download_progress: int | None = None       # 下载百分比 (0-100)
+    downloaded_bytes: int | None = None       # 已下载字节
+    total_bytes: int | None = None            # 总字节
 
     def to_dict(self) -> dict:
         return {
@@ -61,4 +64,7 @@ class UpgradeState:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "error": self.error,
+            "download_progress": self.download_progress,
+            "downloaded_bytes": self.downloaded_bytes,
+            "total_bytes": self.total_bytes,
         }
