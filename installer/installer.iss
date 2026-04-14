@@ -39,10 +39,12 @@ SetupWindowTitle=Test Worker {#Version} 安装
 
 
 [Files]
-; Worker 主程序和依赖（排除配置文件，配置文件单独处理）
-Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "_internal\config\worker.yaml"
+; Worker 主程序和依赖（排除整个 config 目录，配置文件单独处理）
+; 注意：使用 * 通配符排除整个 config 目录下的所有文件
+Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "_internal\config\*"
 
 ; 配置文件 - 只在全新安装时复制，升级时保留现有配置
+; onlyifdoesntexist: 仅当目标文件不存在时才复制
 Source: "..\dist\windows\test-worker\_internal\config\worker.yaml"; DestDir: "{app}\_internal\config"; Flags: onlyifdoesntexist
 
 
@@ -91,6 +93,7 @@ var
   IpLabel, PortLabel, NamespaceLabel, PlatformApiLabel, OcrServiceLabel: TLabel;
   IpEdit, PortEdit, NamespaceEdit, PlatformApiEdit, OcrServiceEdit: TNewEdit;
   CmdIp, CmdPort, CmdNamespace, CmdPlatformApi, CmdOcrService: String;
+  ConfigBackupFile: String;  // 配置文件备份路径
 
 function GetCmdParam(Name: String): String;
 var
@@ -293,19 +296,38 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigFile: String;
+  ConfigBackupFile: String;
   ConfigContent: AnsiString;
   ResultCode: Integer;
 begin
+  ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
+  ConfigBackupFile := ExpandConstant('{app}\_internal\config\worker.yaml.backup');
+
+  // 安装前：如果是升级安装，备份现有配置文件
+  if CurStep = ssInstall then
+  begin
+    if IsUpgradeInstall and FileExists(ConfigFile) then
+    begin
+      // 备份配置文件到 .backup
+      FileCopy(ConfigFile, ConfigBackupFile, False);
+      Log('Config file backed up: ' + ConfigFile + ' -> ' + ConfigBackupFile);
+    end;
+  end;
+
   if CurStep = ssPostInstall then
   begin
-    // Auto-start in silent mode (no UAC, run as current user for unattended upgrade)
-    if WizardSilent then
-      ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
-
-    // 只有全新安装时才写入配置文件（升级时保留现有配置）
-    if not IsUpgradeInstall then
+    // 升级安装时：恢复备份的配置文件
+    if IsUpgradeInstall and FileExists(ConfigBackupFile) then
     begin
-      ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
+      // 恢复备份的配置文件
+      DeleteFile(ConfigFile);
+      FileCopy(ConfigBackupFile, ConfigFile, False);
+      DeleteFile(ConfigBackupFile);
+      Log('Config file restored from backup: ' + ConfigBackupFile + ' -> ' + ConfigFile);
+    end
+    else if not IsUpgradeInstall then
+    begin
+      // 全新安装时：写入默认配置文件
 
       ConfigContent := '# Worker Configuration File' + #13#10 +
       '# Edit this file after installation based on your environment' + #13#10 +
@@ -398,5 +420,9 @@ begin
       DeleteFile(ConfigFile);
       SaveStringToFile(ConfigFile, ConfigContent, True);
     end;
+
+    // Auto-start in silent mode (no UAC, run as current user for unattended upgrade)
+    if WizardSilent then
+      ShellExec('', ExpandConstant('{app}\test-worker.exe'), '', '', SW_HIDE, ewNoWait, ResultCode);
   end;
 end;

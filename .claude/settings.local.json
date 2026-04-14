@@ -101,7 +101,8 @@
       "Bash(xxd \"D:/code/autotest/config/worker.yaml\")",
       "Bash(xxd \"D:/code/autotest/dist/windows/test-worker/_internal/config/worker.yaml\")",
       "Bash(tasklist)",
-      "Bash(findstr -i installer)"
+      "Bash(findstr -i installer)",
+      "WebFetch(domain:jrsoftware.org)"
     ]
   }
 }
