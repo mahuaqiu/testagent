@@ -6,12 +6,16 @@ HTTP Server。
 
 import logging
 import os
+import re
+import threading
 from typing import Any
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from worker.config import load_config_version, merge_config_with_ip_protection, save_config_with_version
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
 
@@ -104,6 +108,12 @@ class TaskRequest(BaseModel):
     device_id: str | None = Field(None, description="设备 ID（移动端必填）")
 
 
+class ConfigUpdateRequest(BaseModel):
+    """配置更新请求。"""
+    config_content: str = Field(..., description="完整的 YAML 配置文件内容")
+    config_version: str = Field(..., description="配置版本号，格式：YYYYMMDD-HHMMSS")
+
+
 def _format_request_for_log(request: TaskRequest) -> dict[str, Any]:
     """
     格式化原始请求用于日志输出，过滤 base64 数据。
@@ -139,11 +149,23 @@ app = FastAPI(
 # Worker 实例（在 main.py 中初始化）
 worker: Worker | None = None
 
+# 配置更新并发锁
+_config_update_lock = threading.Lock()
+
+# GUIApp 引用（用于触发重启）
+gui_app: Any | None = None
+
 
 def set_worker(w: Worker) -> None:
     """设置 Worker 实例。"""
     global worker
     worker = w
+
+
+def set_gui_app(app: Any) -> None:
+    """设置 GUIApp 实例。"""
+    global gui_app
+    gui_app = app
 
 
 # ========== API 端点 ==========
@@ -402,6 +424,114 @@ async def upgrade_status():
         }
 
     return state.to_dict()
+
+
+@app.post("/worker/config")
+async def update_worker_config(request: ConfigUpdateRequest):
+    """
+    更新 Worker 配置。
+
+    流程：
+    1. 版本格式校验
+    2. 并发保护（获取锁）
+    3. 版本比较（相同则跳过）
+    4. 配置合并（保留本地 IP）
+    5. 保存配置（含版本文件）
+    6. 返回响应
+    7. 触发重启（异步）
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    # 请求接收日志
+    logger.info(f"Config update request: version={request.config_version}")
+
+    # 1. 版本格式校验
+    if not re.match(r"^\d{8}-\d{6}$", request.config_version):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "版本号格式无效，应为 YYYYMMDD-HHMMSS"}
+        )
+
+    # 2. 并发保护（非阻塞）
+    if not _config_update_lock.acquire(blocking=False):
+        return JSONResponse(
+            status_code=409,
+            content={"status": "error", "message": "配置更新正在进行中，请稍后重试"}
+        )
+
+    try:
+        # 3. 版本比较
+        local_version = load_config_version()
+        if local_version == request.config_version:
+            logger.info(f"Config version unchanged: {request.config_version}")
+            return {
+                "status": "success",
+                "message": "配置版本相同，无需更新",
+                "updated": False,
+                "config_version": request.config_version,
+                "restart_triggered": False
+            }
+
+        # 4. 配置合并（保留本地 IP）
+        try:
+            merged_config = merge_config_with_ip_protection(request.config_content)
+        except yaml.YAMLError as e:
+            logger.warning(f"Config YAML parse failed: {e}")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": f"配置内容无效: YAML 解析失败 - {e}"}
+            )
+
+        # 5. 保存配置（含版本文件）
+        try:
+            save_config_with_version(merged_config, request.config_version)
+        except Exception as e:
+            logger.error(f"Config save failed: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": f"配置保存失败: {e}"}
+            )
+
+        # 6. 返回响应
+        response = {
+            "status": "success",
+            "message": "配置更新成功",
+            "updated": True,
+            "config_version": request.config_version,
+            "restart_triggered": True
+        }
+
+        # 配置更新成功日志
+        logger.info(f"Config updated successfully: version={request.config_version}, triggering restart")
+
+        # 7. 触发重启（响应返回后执行）
+        _trigger_restart_after_response()
+
+        return response
+
+    finally:
+        _config_update_lock.release()
+
+
+def _trigger_restart_after_response():
+    """在响应返回后触发重启。"""
+    import time
+
+    def _do_restart_async():
+        # 等待一小段时间确保响应已返回
+        time.sleep(0.5)
+
+        if gui_app and hasattr(gui_app, 'ui_signals') and gui_app.ui_signals:
+            # GUI 模式：通过信号触发重启
+            gui_app.ui_signals.show_config_restart.emit()
+        else:
+            # CLI 模式：通过子进程重启
+            from worker.config import cli_restart
+            cli_restart()
+
+    # 启动后台线程执行重启
+    threading.Thread(target=_do_restart_async, daemon=True).start()
 
 
 # 异常处理
