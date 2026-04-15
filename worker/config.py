@@ -2,7 +2,9 @@
 Worker 配置管理模块。
 """
 
+import logging
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
@@ -10,6 +12,8 @@ from typing import Dict, Any, Optional, List
 import yaml
 
 from worker.discovery.host import HostDiscoverer
+
+logger = logging.getLogger(__name__)
 
 
 def _generate_worker_id() -> str:
@@ -181,22 +185,20 @@ class PlatformConfig:
         )
 
 
-def get_default_config_path() -> str:
-    """获取默认配置文件路径。
+def get_user_config_path() -> str:
+    """获取用户配置文件路径（安装目录根目录的 config/worker.yaml）。
 
-    在打包环境下（目录模式），配置文件位于 exe 同级的 _internal/config 目录。
-    在开发环境下，配置文件位于项目根目录的 config 目录。
+    此路径用于：
+    - 安装时写入用户配置
+    - 设置界面保存配置
+    - Worker 启动时读取配置
     """
-    # 检查是否在 PyInstaller 打包环境下运行
     if getattr(sys, 'frozen', False):
-        # PyInstaller 打包模式（目录模式）
-        # sys.executable 是 exe 文件路径
-        # 配置文件在 exe 同级的 _internal/config 目录
+        # PyInstaller 打包模式
         exe_dir = os.path.dirname(sys.executable)
-        return os.path.join(exe_dir, "_internal", "config", "worker.yaml")
+        return os.path.join(exe_dir, "config", "worker.yaml")
     else:
         # 开发模式
-        # 使用 __file__ 计算相对路径
         return os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "config",
@@ -204,18 +206,68 @@ def get_default_config_path() -> str:
         )
 
 
-def load_config() -> WorkerConfig:
-    """
-    加载 Worker 配置。
+def get_default_template_path() -> str:
+    """获取默认配置模板路径（_internal/config/worker.yaml）。
 
-    从 config/worker.yaml 加载配置，若文件不存在则使用默认配置。
+    此路径用于：
+    - 作为用户配置的备份来源
+    - 用户配置不存在时自动复制
+    """
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        return os.path.join(exe_dir, "_internal", "config", "worker.yaml")
+    else:
+        return os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "config",
+            "worker.yaml"
+        )
+
+
+def _copy_default_to_user_config(src: str, dst: str) -> None:
+    """复制默认配置模板到用户配置路径。
+
+    Args:
+        src: 默认配置模板路径
+        dst: 用户配置文件路径
+    """
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+    logger.info(f"Default config copied to user config: {dst}")
+
+
+def get_default_config_path() -> str:
+    """获取配置文件路径（向后兼容别名）。
+
+    注意：此函数现在返回用户配置路径，而非默认模板路径。
+    若需要获取默认模板路径，请使用 get_default_template_path()。
+    """
+    return get_user_config_path()
+
+
+def load_config() -> WorkerConfig:
+    """加载 Worker 配置。
+
+    优先级：根目录 config/worker.yaml → _internal/config/worker.yaml
+    若用户配置不存在，自动从默认模板复制一份。
 
     Returns:
         WorkerConfig: 配置对象
     """
-    config_path = get_default_config_path()
+    user_config_path = get_user_config_path()
+    default_template_path = get_default_template_path()
 
-    if os.path.exists(config_path):
-        return WorkerConfig.from_yaml(config_path)
-    else:
-        return WorkerConfig()
+    # 优先读取用户配置
+    if os.path.exists(user_config_path):
+        logger.info(f"Loading user config: {user_config_path}")
+        return WorkerConfig.from_yaml(user_config_path)
+
+    # 用户配置不存在，检查默认模板
+    if os.path.exists(default_template_path):
+        logger.info(f"User config not found, copying default template to: {user_config_path}")
+        _copy_default_to_user_config(default_template_path, user_config_path)
+        return WorkerConfig.from_yaml(user_config_path)
+
+    # 都不存在，使用默认配置
+    logger.warning("No config file found, using default WorkerConfig")
+    return WorkerConfig()
