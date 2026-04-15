@@ -185,6 +185,22 @@ class PlatformConfig:
         )
 
 
+def _get_base_dir() -> str:
+    """获取基础目录路径。
+
+    返回打包环境下的 exe 所在目录，或开发环境下的项目根目录。
+
+    Returns:
+        str: 基础目录路径
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包模式
+        return os.path.dirname(sys.executable)
+    else:
+        # 开发模式
+        return os.path.dirname(os.path.dirname(__file__))
+
+
 def get_user_config_path() -> str:
     """获取用户配置文件路径（安装目录根目录的 config/worker.yaml）。
 
@@ -193,17 +209,7 @@ def get_user_config_path() -> str:
     - 设置界面保存配置
     - Worker 启动时读取配置
     """
-    if getattr(sys, 'frozen', False):
-        # PyInstaller 打包模式
-        exe_dir = os.path.dirname(sys.executable)
-        return os.path.join(exe_dir, "config", "worker.yaml")
-    else:
-        # 开发模式
-        return os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "config",
-            "worker.yaml"
-        )
+    return os.path.join(_get_base_dir(), "config", "worker.yaml")
 
 
 def get_default_template_path() -> str:
@@ -214,14 +220,11 @@ def get_default_template_path() -> str:
     - 用户配置不存在时自动复制
     """
     if getattr(sys, 'frozen', False):
-        exe_dir = os.path.dirname(sys.executable)
-        return os.path.join(exe_dir, "_internal", "config", "worker.yaml")
+        # 打包模式：模板在 _internal 目录下
+        return os.path.join(_get_base_dir(), "_internal", "config", "worker.yaml")
     else:
-        return os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "config",
-            "worker.yaml"
-        )
+        # 开发模式：用户配置和模板路径相同
+        return os.path.join(_get_base_dir(), "config", "worker.yaml")
 
 
 def _copy_default_to_user_config(src: str, dst: str) -> None:
@@ -230,10 +233,17 @@ def _copy_default_to_user_config(src: str, dst: str) -> None:
     Args:
         src: 默认配置模板路径
         dst: 用户配置文件路径
+
+    Raises:
+        OSError: 文件复制失败时抛出
     """
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(src, dst)
-    logger.info(f"Default config copied to user config: {dst}")
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        logger.info(f"Default config copied to user config: {dst}")
+    except OSError as e:
+        logger.error(f"Failed to copy default config from {src} to {dst}: {e}")
+        raise
 
 
 def get_default_config_path() -> str:
