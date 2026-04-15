@@ -34,7 +34,7 @@ from PyQt5.QtGui import QIcon, QFont
 from worker.config import load_config, WorkerConfig
 from worker.logger import setup_logging
 from worker.worker import Worker
-from worker.server import app, set_worker
+from worker.server import app, set_worker, set_gui_app
 from worker.single_instance import check_single_instance, release_instance_lock
 from worker.tray_manager import TrayManager
 from worker.upgrade_manager import UpgradeManager, UpgradeInfo, DownloadError, InstallError
@@ -114,6 +114,7 @@ class UISignals(QObject):
 
     show_settings = pyqtSignal()
     show_restart_confirm = pyqtSignal()
+    show_config_restart = pyqtSignal()    # 配置更新后的重启信号
     show_upgrade = pyqtSignal()
     show_exit_confirm = pyqtSignal()
 
@@ -153,6 +154,7 @@ class GUIApp:
         self.ui_signals = UISignals()
         self.ui_signals.show_settings.connect(self._show_settings_dialog)
         self.ui_signals.show_restart_confirm.connect(self._show_restart_dialog)
+        self.ui_signals.show_config_restart.connect(self._do_restart)
         self.ui_signals.show_upgrade.connect(self._on_upgrade_internal)
         self.ui_signals.show_exit_confirm.connect(self._show_exit_dialog)
 
@@ -248,6 +250,7 @@ class GUIApp:
             return
 
         set_worker(self.worker)
+        set_gui_app(self)
 
         self._server_thread = threading.Thread(target=self._run_server, daemon=True)
         self._server_thread.start()
