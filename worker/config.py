@@ -5,6 +5,7 @@ Worker 配置管理模块。
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
@@ -70,6 +71,9 @@ class WorkerConfig:
     upgrade_check_url: str = ""       # 升级检查 URL（对应 YAML 的 upgrade.check_url）
     upgrade_check_timeout: int = 30   # 升级检查超时（秒）
     upgrade_download_timeout: int = 300  # 升级下载超时（秒）
+
+    # 配置版本号
+    config_version: Optional[str] = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
@@ -256,28 +260,163 @@ def get_default_config_path() -> str:
 
 
 def load_config() -> WorkerConfig:
-    """加载 Worker 配置。
-
-    优先级：根目录 config/worker.yaml → _internal/config/worker.yaml
-    若用户配置不存在，自动从默认模板复制一份。
-
-    Returns:
-        WorkerConfig: 配置对象
-    """
+    """加载 Worker 配置（含版本号）。"""
     user_config_path = get_user_config_path()
     default_template_path = get_default_template_path()
 
     # 优先读取用户配置
     if os.path.exists(user_config_path):
         logger.info(f"Loading user config: {user_config_path}")
-        return WorkerConfig.from_yaml(user_config_path)
-
-    # 用户配置不存在，检查默认模板
-    if os.path.exists(default_template_path):
+        config = WorkerConfig.from_yaml(user_config_path)
+    elif os.path.exists(default_template_path):
         logger.info(f"User config not found, copying default template to: {user_config_path}")
         _copy_default_to_user_config(default_template_path, user_config_path)
-        return WorkerConfig.from_yaml(user_config_path)
+        config = WorkerConfig.from_yaml(user_config_path)
+    else:
+        logger.warning("No config file found, using default WorkerConfig")
+        config = WorkerConfig()
 
-    # 都不存在，使用默认配置
-    logger.warning("No config file found, using default WorkerConfig")
-    return WorkerConfig()
+    # 从单独文件读取版本号
+    config.config_version = load_config_version()
+
+    return config
+
+
+def get_config_version_path() -> str:
+    """获取配置版本文件路径。"""
+    return os.path.join(_get_base_dir(), "config", ".config_version")
+
+
+def load_config_version() -> Optional[str]:
+    """
+    从单独文件读取配置版本号。
+
+    Returns:
+        Optional[str]: 版本号字符串，文件不存在时返回 None
+    """
+    version_path = get_config_version_path()
+    if os.path.exists(version_path):
+        with open(version_path, encoding="utf-8") as f:
+            return f.read().strip()
+    return None
+
+
+def save_config_version(version: str) -> None:
+    """
+    保存配置版本号到单独文件（原子写入）。
+
+    Args:
+        version: 版本号字符串，格式 YYYYMMDD-HHMMSS
+    """
+    version_path = get_config_version_path()
+    os.makedirs(os.path.dirname(version_path), exist_ok=True)
+
+    # 原子写入：先写临时文件，再重命名
+    temp_path = version_path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        f.write(version)
+
+    # 重命名（原子操作）
+    os.replace(temp_path, version_path)
+
+
+def merge_config_with_ip_protection(
+    new_config_yaml: str,
+    existing_config_path: str = get_user_config_path()
+) -> dict:
+    """
+    合并配置：保留本地 IP 地址。
+
+    Args:
+        new_config_yaml: 新配置的 YAML 字符串
+        existing_config_path: 现有配置文件路径
+
+    Returns:
+        dict: 合并后的配置数据
+    """
+    # 解析新配置
+    new_data = yaml.safe_load(new_config_yaml) or {}
+
+    # 读取现有配置的 IP
+    if os.path.exists(existing_config_path):
+        with open(existing_config_path, encoding="utf-8") as f:
+            existing_data = yaml.safe_load(f) or {}
+        existing_ip = existing_data.get("worker", {}).get("ip")
+    else:
+        existing_ip = None
+
+    # 合并：保留本地 IP
+    if existing_ip is not None and "worker" in new_data:
+        new_data["worker"]["ip"] = existing_ip
+
+    return new_data
+
+
+def save_config_with_version(
+    config_data: dict,
+    version: str,
+    config_path: str = get_user_config_path(),
+    version_path: str = get_config_version_path()
+) -> None:
+    """
+    安全保存配置和版本（带备份和回滚）。
+
+    Args:
+        config_data: 合并后的配置数据
+        version: 新版本号
+        config_path: 配置文件路径
+        version_path: 版本文件路径
+
+    Raises:
+        OSError: 文件写入失败时抛出，自动回滚
+    """
+    config_yaml = yaml.dump(config_data, default_flow_style=False, allow_unicode=True)
+
+    # 确保 config 目录存在
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    os.makedirs(os.path.dirname(version_path), exist_ok=True)
+
+    # 1. 备份现有配置
+    backup_path = config_path + ".bak"
+    if os.path.exists(config_path):
+        shutil.copy2(config_path, backup_path)
+
+    # 2. 写入新配置
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(config_yaml)
+
+        # 3. 写入版本文件
+        with open(version_path, "w", encoding="utf-8") as f:
+            f.write(version)
+
+        # 4. 删除备份（成功后清理）
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+
+        logger.info(f"Config saved: version={version}")
+
+    except Exception as e:
+        # 5. 回滚：恢复备份
+        if os.path.exists(backup_path):
+            shutil.copy2(backup_path, config_path)
+            os.remove(backup_path)
+        logger.error(f"Config save failed, rolled back: {e}")
+        raise
+
+
+def cli_restart():
+    """CLI 模式重启：启动新进程并退出当前进程。"""
+    executable = sys.executable
+    args = sys.argv
+
+    logger.info(f"CLI mode: restarting with args={args}")
+
+    try:
+        # 启动新进程（分离运行）
+        subprocess.Popen([executable] + args)
+        # 退出当前进程
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"CLI restart failed: {e}")
+        sys.exit(1)
