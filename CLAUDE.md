@@ -118,7 +118,6 @@ PlatformManager (抽象基类)
 | `end_x`, `end_y` | 拖拽终点坐标 | swipe, drag |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
 | `level` | 执行层级：`browser`（Playwright）或 `system`（pyautogui），仅 Web 平台支持 | 所有动作 |
-| `new_page` | 无额外参数，仅 `action_type`，用于创建新的浏览器页面 | Web 平台专用 |
 
 ### swipe / drag 动作说明
 
