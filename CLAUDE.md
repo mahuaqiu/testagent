@@ -98,7 +98,7 @@ PlatformManager (抽象基类)
 - **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`, `image_exist`
 - **坐标动作**：`click`, `move`, `swipe`, `drag`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
-- **Web 特有**：`navigate`, `switched_page`, `close_page`
+- **Web 特有**：`navigate`, `new_page`, `switched_page`, `close_page`
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
@@ -118,6 +118,7 @@ PlatformManager (抽象基类)
 | `end_x`, `end_y` | 拖拽终点坐标 | swipe, drag |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
 | `level` | 执行层级：`browser`（Playwright）或 `system`（pyautogui），仅 Web 平台支持 | 所有动作 |
+| `new_page` | 无额外参数，仅 `action_type`，用于创建新的浏览器页面 | Web 平台专用 |
 
 ### swipe / drag 动作说明
 
