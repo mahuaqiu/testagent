@@ -676,6 +676,8 @@ class WebPlatformManager(PlatformManager):
                 result = self._action_stop_app(action)
             elif action.action_type == "navigate":
                 result = self._action_navigate(action, context)
+            elif action.action_type == "new_page":
+                result = self._action_new_page(action)
             elif action.action_type == "switched_page":
                 result = self._action_switched_page(action)
             elif action.action_type == "close_page":
