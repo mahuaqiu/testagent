@@ -929,6 +929,52 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 页面管理动作 ==========
 
+    def _action_new_page(self, action: Action) -> ActionResult:
+        """创建新空白标签页并切换焦点。
+
+        Returns:
+            ActionResult: 包含新页面索引和上下文
+        """
+        # 验证浏览器上下文
+        if not self._browser_context:
+            return ActionResult(
+                number=0,
+                action_type="new_page",
+                status=ActionStatus.FAILED,
+                error="Browser context not available",
+            )
+
+        try:
+            # 创建新空白页面
+            new_page = _run_async(self._browser_context.new_page())
+            new_page.set_default_timeout(self.timeout)
+
+            # 更新当前页面引用
+            self._current_page = new_page
+            self._sessions["default"] = {
+                "context": self._browser_context,
+                "page": new_page,
+            }
+
+            # 获取新页面索引
+            index = self._get_page_index(new_page)
+            logger.info(f"Created new page {index}")
+
+            return ActionResult(
+                number=0,
+                action_type="new_page",
+                status=ActionStatus.SUCCESS,
+                output=f"Created new page {index}",
+                context=new_page,
+            )
+        except Exception as e:
+            return ActionResult(
+                number=0,
+                action_type="new_page",
+                status=ActionStatus.FAILED,
+                error=f"Failed to create new page: {e}",
+            )
+
     def _get_page_index(self, page: Page) -> int:
         """获取页面在有效页面列表中的索引（从 1 开始）。
 
