@@ -154,7 +154,7 @@ class GUIApp:
         self.ui_signals = UISignals()
         self.ui_signals.show_settings.connect(self._show_settings_dialog)
         self.ui_signals.show_restart_confirm.connect(self._show_restart_dialog)
-        self.ui_signals.show_config_restart.connect(self._do_restart)
+        self.ui_signals.show_config_restart.connect(lambda: self._do_restart(show_dialog=False))
         self.ui_signals.show_upgrade.connect(self._on_upgrade_internal)
         self.ui_signals.show_exit_confirm.connect(self._show_exit_dialog)
 
@@ -328,7 +328,7 @@ class GUIApp:
 
             if result == QDialog.Accepted:
                 logger.info("Settings saved, restarting Worker...")
-                self._do_restart()
+                self._do_restart(show_dialog=False)
         except Exception as e:
             logger.error(f"Settings dialog error: {e}")
 
@@ -341,12 +341,17 @@ class GUIApp:
 
             if result == QDialog.Accepted:
                 logger.info("User confirmed restart")
-                self._do_restart()
+                self._do_restart(show_dialog=True)
         except Exception as e:
             logger.error(f"Restart dialog error: {e}")
 
-    def _do_restart(self) -> None:
-        """执行重启操作。"""
+    def _do_restart(self, show_dialog: bool = True) -> None:
+        """
+        执行重启操作。
+
+        Args:
+            show_dialog: 是否显示成功弹窗（默认 True，配置更新后的静默重启为 False）
+        """
         logger.info("Restarting Worker...")
         self._stop_worker()
 
@@ -355,7 +360,8 @@ class GUIApp:
             logger.info(f"Config reloaded: port={self.config.port}")
         except Exception as e:
             logger.error(f"重新加载配置失败: {e}")
-            self._show_error_dialog("重新加载配置失败", str(e))
+            if show_dialog:
+                self._show_error_dialog("重新加载配置失败", str(e))
             return
 
         self._log_path = setup_logging(
@@ -366,7 +372,10 @@ class GUIApp:
         )
 
         self._start_worker()
-        self._show_success_dialog("重启成功", "Worker 已重启")
+        if show_dialog:
+            self._show_success_dialog("重启成功", "Worker 已重启")
+        else:
+            logger.info("Restart completed (silent mode, no dialog)")
 
     def _on_upgrade_internal(self) -> None:
         """升级操作（在 Qt 主线程中）。"""
@@ -625,9 +634,29 @@ class ModernDialog(QDialog):
 
 def main():
     """GUI 主函数。"""
-    gui_app = GUIApp()
-    exit_code = gui_app.run()
-    sys.exit(exit_code)
+    try:
+        gui_app = GUIApp()
+        exit_code = gui_app.run()
+        sys.exit(exit_code)
+    except Exception as e:
+        # 启动失败时显示错误提示
+        import traceback
+        error_msg = f"启动失败:\n{e}\n\n详细信息:\n{traceback.format_exc()[:500]}"
+        logger.error(f"Startup failed: {e}\n{traceback.format_exc()}")
+
+        # 尝试显示错误对话框
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            msg = QMessageBox()
+            msg.setWindowTitle("启动失败")
+            msg.setText(error_msg)
+            msg.setIcon(QMessageBox.Critical)
+            msg.exec_()
+        except Exception:
+            # 如果对话框也失败了，打印到控制台
+            print(error_msg)
+
+        sys.exit(1)
 
 
 if __name__ == "__main__":

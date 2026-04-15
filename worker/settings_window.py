@@ -438,7 +438,7 @@ class SettingsWindow(QDialog):
 
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
-                    yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False)
+                    yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
                 logger.info(f"Configuration saved: {self.config_path}")
                 QMessageBox.information(self, "保存成功", "配置已保存，程序将重启以应用新配置。")
                 self.accept()

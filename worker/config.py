@@ -370,7 +370,7 @@ def save_config_with_version(
     Raises:
         OSError: 文件写入失败时抛出，自动回滚
     """
-    config_yaml = yaml.dump(config_data, default_flow_style=False, allow_unicode=True)
+    config_yaml = yaml.dump(config_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     # 确保 config 目录存在
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
