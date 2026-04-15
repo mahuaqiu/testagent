@@ -31,9 +31,11 @@ logger = logging.getLogger(__name__)
 class SettingsWindow(QDialog):
     """设置窗口。"""
 
-    def __init__(self, config_path: str, icon_path: str = None, parent=None):
+    def __init__(self, icon_path: str = None, parent=None):
         super().__init__(parent)
-        self.config_path = config_path
+        # 内部自动获取用户配置路径
+        from worker.config import get_user_config_path
+        self.config_path = get_user_config_path()
         self._config = self._load_config()
 
         # 设置窗口图标
@@ -47,10 +49,20 @@ class SettingsWindow(QDialog):
     def _load_config(self) -> dict:
         """加载配置文件。
 
-        尝试多种编码读取，兼容不同来源的配置文件：
-        - UTF-8：标准编码
-        - GBK/GB18030：Windows 中文系统默认编码（如 Inno Setup 生成的配置）
+        优先从根目录 config/worker.yaml 读取，
+        若不存在则从 _internal/config/worker.yaml 复制一份。
         """
+        from worker.config import get_user_config_path, get_default_template_path
+
+        config_path = get_user_config_path()
+
+        # 用户配置不存在，从默认模板复制
+        if not os.path.exists(config_path):
+            default_template = get_default_template_path()
+            if os.path.exists(default_template):
+                self._copy_default_config(default_template, config_path)
+                logger.info(f"Default config copied to: {config_path}")
+
         if not os.path.exists(self.config_path):
             return {}
 
@@ -87,6 +99,18 @@ class SettingsWindow(QDialog):
             )
 
         return {}
+
+    def _copy_default_config(self, src: str, dst: str) -> None:
+        """复制默认配置模板到用户配置路径。
+
+        Args:
+            src: 默认配置模板路径
+            dst: 用户配置文件路径
+        """
+        import shutil
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        logger.info(f"Default config copied from {src} to {dst}")
 
     def _setup_ui(self):
         """设置界面。"""
