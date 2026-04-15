@@ -49,6 +49,7 @@ class Reporter:
         port: int,
         devices: Dict[str, List[str]],
         version: Optional[str] = None,
+        config_version: Optional[str] = None,
     ) -> bool:
         """
         调用设备注册接口（新格式）。
@@ -58,6 +59,7 @@ class Reporter:
             port: 机器端口
             devices: 设备列表，key 为 device_type，value 为 device_sn 列表
             version: 机器版本（可选）
+            config_version: 配置版本（可选）
 
         Returns:
             bool: 注册是否成功
@@ -74,6 +76,7 @@ class Reporter:
                 "namespace": self.namespace,
                 "version": version,
                 "devices": devices,
+                "config_version": config_version,
             }
 
             response = self._client.post(
