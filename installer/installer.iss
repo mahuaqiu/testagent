@@ -39,20 +39,16 @@ SetupWindowTitle=Test Worker {#Version} 安装
 
 
 [Files]
-; Worker 主程序和依赖（完全排除 config 目录，配置文件由 Pascal 代码处理）
-; 注意：Excludes 使用通配符排除整个目录
-Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "_internal\config\*,config\*"
+; 只排除用户配置目录 config\，不排除默认模板 _internal\config
+; 这样默认模板可以正常安装，用户配置升级时保留
+Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "config\*"
 
 
 [Dirs]
+Name: "{app}\config"; Permissions: users-modify
 Name: "{app}\_internal\config"; Permissions: users-modify
 Name: "{app}\temp"; Permissions: users-modify
 Name: "{app}\data"; Permissions: users-modify
-
-
-[Registry]
-; 使用 HKCU 代替 HKLM，因为 PrivilegesRequired=lowest 不需要管理员权限
-Root: HKCU; Subkey: "Software\Test Worker"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"
 
 
 [Icons]
@@ -89,8 +85,6 @@ var
   IpLabel, PortLabel, NamespaceLabel, PlatformApiLabel, OcrServiceLabel: TLabel;
   IpEdit, PortEdit, NamespaceEdit, PlatformApiEdit, OcrServiceEdit: TNewEdit;
   CmdIp, CmdPort, CmdNamespace, CmdPlatformApi, CmdOcrService: String;
-  SavedConfigContent: AnsiString;  // 保存在内存中的配置内容
-  HasSavedConfig: Boolean;         // 是否已保存配置
 
 function GetCmdParam(Name: String): String;
 var
@@ -174,10 +168,8 @@ end;
 
 function IsUpgradeInstall: Boolean;
 begin
-  // PrivilegesRequired=lowest 时，卸载信息写入 HKCU 而不是 HKLM
-  Result := RegValueExists(HKEY_CURRENT_USER,
-    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1',
-    'UninstallString');
+  // 检测根目录 config/worker.yaml 是否存在
+  Result := FileExists(ExpandConstant('{app}\config\worker.yaml'));
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -296,36 +288,13 @@ var
   ConfigContent: AnsiString;
   ResultCode: Integer;
 begin
-  ConfigFile := ExpandConstant('{app}\_internal\config\worker.yaml');
-
-  // 初始化
-  HasSavedConfig := False;
-  SavedConfigContent := '';
-
-  // 安装前：如果是升级安装，将配置内容保存到内存变量
-  if CurStep = ssInstall then
-  begin
-    if IsUpgradeInstall and FileExists(ConfigFile) then
-    begin
-      // 直接读取配置内容到内存变量
-      LoadStringFromFile(ConfigFile, SavedConfigContent);
-      HasSavedConfig := True;
-      Log('Config saved to memory: ' + ConfigFile + ' (length: ' + IntToStr(Length(SavedConfigContent)) + ')');
-    end;
-  end;
+  ConfigFile := ExpandConstant('{app}\config\worker.yaml');
 
   if CurStep = ssPostInstall then
   begin
-    // 升级安装时：从内存恢复配置内容
-    if IsUpgradeInstall and HasSavedConfig then
+    // 全新安装时：写入默认配置文件（升级时通过 Excludes 保留用户配置）
+    if not IsUpgradeInstall then
     begin
-      // 直接从内存变量写入配置文件
-      SaveStringToFile(ConfigFile, SavedConfigContent, False);
-      Log('Config restored from memory: ' + ConfigFile);
-    end
-    else if not IsUpgradeInstall then
-    begin
-      // 全新安装时：写入默认配置文件
 
       ConfigContent := '# Worker Configuration File' + #13#10 +
       '# Edit this file after installation based on your environment' + #13#10 +
