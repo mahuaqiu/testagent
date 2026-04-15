@@ -379,6 +379,7 @@ class Worker:
             port=devices_data["port"],
             devices=devices_data["devices"],
             version=self._get_version(),
+            config_version=self.config.config_version,
         )
 
     def _start_device_monitor(self) -> None:
