@@ -84,7 +84,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token", "switched_page", "close_page"}
+    SUPPORTED_ACTIONS: Set[str] = {"navigate", "start_app", "stop_app", "get_token", "new_page", "switched_page", "close_page"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
