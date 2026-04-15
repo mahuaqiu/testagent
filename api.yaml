@@ -315,6 +315,7 @@ components:
             - start_app
             - stop_app
             - navigate
+            - new_page
             - switched_page
             - close_page
             - ocr_get_position
@@ -363,6 +364,7 @@ components:
             - start_app: 启动应用/浏览器
             - stop_app: 关闭应用/浏览器
             - navigate: 跳转 URL（Web 专用）
+            - new_page: 创建新空白标签页（Web 专用）
             - switched_page: 切换到指定页面（Web 专用）
             - close_page: 关闭当前页面（Web 专用）
             - cmd_exec: 在宿主机执行 shell/cmd 命令
@@ -853,6 +855,14 @@ components:
 
   # navigate - 跳转 URL（仅 Web 平台）
   # 示例: 跳转到示例网站
+  # {"action_type": "navigate", "value": "https://example.com"}
+
+  # new_page - 创建新空白标签页（仅 Web 平台）
+  # 创建空白新标签页，自动切换焦点到新页面
+  # 示例 1: 创建新空白标签页
+  # {"action_type": "new_page"}
+  # 示例 2: 创建新页面后跳转 URL
+  # {"action_type": "new_page"}
   # {"action_type": "navigate", "value": "https://example.com"}
 
   # switched_page - 切换到指定页面（仅 Web 平台）
