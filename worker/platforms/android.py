@@ -76,16 +76,20 @@ class AndroidPlatformManager(PlatformManager):
         """确保设备服务可用（由 DeviceMonitor 调用）。"""
         try:
             device = self._device_clients.get(udid)
-            if device and device.ping():
-                return ("online", "OK")
+            if device:
+                # uiautomator2 3.x 移除了 ping()，用 info 属性检查连接
+                try:
+                    device.info  # noqa: F841
+                    return ("online", "OK")
+                except Exception:
+                    pass  # 连接失效，重新连接
 
             device = u2.connect(udid)
-            if device.ping():
-                self._device_clients[udid] = device
-                logger.info(f"Android device service ready: {udid}")
-                return ("online", "OK")
-            else:
-                return ("faulty", "Service not responding")
+            # uiautomator2 3.x: info 属性可获取设备信息，失败则抛异常
+            device.info  # noqa: F841
+            self._device_clients[udid] = device
+            logger.info(f"Android device service ready: {udid}")
+            return ("online", "OK")
         except Exception as e:
             logger.error(f"Failed to ensure device service: {udid}, {e}")
             return ("faulty", str(e))

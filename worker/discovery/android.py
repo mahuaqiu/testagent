@@ -281,6 +281,8 @@ class AndroidDiscoverer:
         try:
             import uiautomator2 as u2
             device = u2.connect(udid)
-            return device.ping()
+            # uiautomator2 3.x 移除了 ping()，用 info 属性检查连接
+            device.info  # noqa: F841
+            return True
         except Exception:
             return False
