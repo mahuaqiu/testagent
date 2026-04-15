@@ -16,6 +16,15 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def _get_version() -> str:
+    """获取当前版本号。"""
+    try:
+        from worker._version import VERSION
+        return VERSION
+    except ImportError:
+        return "未知"
+
+
 class TrayManager:
     """托盘管理器。"""
 
@@ -69,6 +78,8 @@ class TrayManager:
     def _create_menu(self) -> pystray.Menu:
         """创建托盘菜单。"""
         return pystray.Menu(
+            pystray.MenuItem(f"版本: {_get_version()}", None, default=False),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("升级", self._on_upgrade_click),
             pystray.MenuItem("重启", self._on_restart_click),
             pystray.MenuItem("日志", self._on_log_click),

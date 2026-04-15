@@ -859,7 +859,7 @@ class WebPlatformManager(PlatformManager):
         )
 
     def _action_stop_app(self, action: Action) -> ActionResult:
-        """关闭浏览器。"""
+        """关闭浏览器（幂等操作）。"""
         if self.has_active_session():
             try:
                 self.close_session()
@@ -877,11 +877,12 @@ class WebPlatformManager(PlatformManager):
                     error=f"Failed to stop app: {e}",
                 )
         else:
+            # 幂等操作：无活跃会话时也返回成功（目标已达成）
             return ActionResult(
                 number=0,
                 action_type="stop_app",
-                status=ActionStatus.FAILED,
-                error="No session to close",
+                status=ActionStatus.SUCCESS,
+                output="No active session (already closed)",
             )
 
     def _action_navigate(self, action: Action, context: Any = None) -> ActionResult:
