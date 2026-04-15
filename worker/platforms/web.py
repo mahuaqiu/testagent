@@ -949,6 +949,9 @@ class WebPlatformManager(PlatformManager):
             new_page = _run_async(self._browser_context.new_page())
             new_page.set_default_timeout(self.timeout)
 
+            # 激活新页面（确保它在浏览器中实际可见）
+            _run_async(new_page.bring_to_front())
+
             # 更新当前页面引用
             self._current_page = new_page
             self._sessions["default"] = {
@@ -1050,6 +1053,11 @@ class WebPlatformManager(PlatformManager):
 
         # 切换页面
         target_page = pages[index - 1]
+
+        # 激活目标页面（让它在浏览器中实际可见）
+        _run_async(target_page.bring_to_front())
+
+        # 更新当前页面引用
         self._current_page = target_page
         self._sessions["default"] = {
             "context": self._browser_context,
