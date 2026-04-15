@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QFont
 
-from worker.config import load_config, get_default_config_path, WorkerConfig
+from worker.config import load_config, WorkerConfig
 from worker.logger import setup_logging
 from worker.worker import Worker
 from worker.server import app, set_worker
@@ -319,8 +319,8 @@ class GUIApp:
         """显示设置对话框（在 Qt 主线程中）。"""
         try:
             logger.info("Showing settings dialog")
-            config_path = get_default_config_path()
-            dialog = SettingsWindow(config_path, self._icon_path)
+            # 不再传入 config_path，让 SettingsWindow 内部获取
+            dialog = SettingsWindow(icon_path=self._icon_path)
             result = dialog.exec_()
 
             if result == QDialog.Accepted:
