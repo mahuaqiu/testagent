@@ -632,27 +632,28 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
         target_index = action.target_index if action.target_index is not None else 0
         target_position = self._find_text_with_fallback(platform, cropped_bytes, action.value, target_index, action.match_mode)
 
-        if not target_position:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error=f"Target text not found in row of \"{action.anchor_text}\"",
-            )
+        # 返回结果（始终 SUCCESS，通过 output 返回存在性）
+        import json
+        exists = target_position is not None
+        output_data = {"exists": exists}
 
-        # 计算目标在 region 裁剪图中的坐标（加上 row 裁剪偏移）
-        target_x = target_position[0]
-        target_y = target_position[1] + top
+        # 如果找到目标，计算坐标并返回
+        if exists:
+            # 计算目标在 region 裁剪图中的坐标（加上 row 裁剪偏移）
+            target_x = target_position[0]
+            target_y = target_position[1] + top
 
-        # 将相对坐标转换为全局坐标
-        if action.region:
-            target_x, target_y = self._offset_position((target_x, target_y), action.region)
+            # 将相对坐标转换为全局坐标
+            if action.region:
+                target_x, target_y = self._offset_position((target_x, target_y), action.region)
+
+            output_data["position"] = [target_x, target_y]
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Found at ({target_x}, {target_y})",
+            output=json.dumps(output_data),
         )
 
 

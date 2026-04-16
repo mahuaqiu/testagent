@@ -333,11 +333,11 @@ components:
             - ocr_paste: OCR 定位后粘贴剪贴板内容
             - ocr_move: 移动鼠标到识别到的文字位置（仅桌面端）
             - ocr_double_click: 双击屏幕上识别到的文字
-            - ocr_exist: 检查文字是否存在，返回 {"exists": true/false}
+            - ocr_exist: 检查文字是否存在，返回 {"exists": true/false}，始终返回 SUCCESS 状态
             - ocr_click_same_row_text: 点击锚点文本同一行的目标文本
             - ocr_click_same_row_image: 点击锚点文本同一行的目标图片
-            - ocr_check_same_row_text: 检查锚点文本同一行的目标文本是否存在
-            - ocr_check_same_row_image: 检查锚点文本同一行的目标图片是否存在
+            - ocr_check_same_row_text: 检查锚点文本同一行的目标文本是否存在，返回 {"exists": true, "position": [x,y]} 或 {"exists": false}，始终返回 SUCCESS 状态
+            - ocr_check_same_row_image: 检查锚点文本同一行的目标图片是否存在，返回 {"exists": true, "position": [x,y]} 或 {"exists": false}，始终返回 SUCCESS 状态
             - ocr_get_position: 获取文字坐标列表，返回 {"positions": [[x1,y1], [x2,y2], ...]}
 
             【图像识别动作】
@@ -347,7 +347,7 @@ components:
             - image_click_near_text: 点击文本附近最近的图像
             - image_move: 移动鼠标到匹配的图像位置（仅桌面端）
             - image_double_click: 双击匹配到的图像位置
-            - image_exist: 检查图像是否存在，返回 {"exists": true/false}
+            - image_exist: 检查图像是否存在，返回 {"exists": true/false}，始终返回 SUCCESS 状态
             - image_get_position: 获取图片坐标列表，返回 {"positions": [[x1,y1], [x2,y2], ...]}
 
             【坐标动作】
@@ -635,8 +635,8 @@ components:
             - image_get_position: {"positions": [[x1,y1], [x2,y2], ...]}
             - ocr_exist: {"exists": true} 或 {"exists": false}
             - image_exist: {"exists": true} 或 {"exists": false}
-            - ocr_check_same_row_text: {"exists": true} 或 {"exists": false}
-            - ocr_check_same_row_image: {"exists": true} 或 {"exists": false}
+            - ocr_check_same_row_text: {"exists": true, "position": [x,y]} 或 {"exists": false}
+            - ocr_check_same_row_image: {"exists": true, "position": [x,y]} 或 {"exists": false}
             - 其他动作: null 或空对象
         error:
           type: string
@@ -732,12 +732,14 @@ components:
   # {"action_type": "ocr_click_same_row_image", "anchor_text": "功能名称", "anchor_index": 1, "image_base64": "<base64_encoded_image>", "row_tolerance": 30}
 
   # ocr_check_same_row_text - 检查锚点文本同一行的目标文本是否存在
+  # 返回格式: {"exists": true, "position": [x,y]} 或 {"exists": false}，始终返回 SUCCESS 状态（即使目标不存在）
   # 示例 1: 检查"功能名称B"同一行是否有"开关"文字
   # {"action_type": "ocr_check_same_row_text", "anchor_text": "功能名称B", "value": "开关"}
   # 示例 2: 检查第二个锚点文本同一行的目标，水平带范围 30 像素
   # {"action_type": "ocr_check_same_row_text", "anchor_text": "功能名称", "anchor_index": 1, "value": "开关", "row_tolerance": 30}
 
   # ocr_check_same_row_image - 检查锚点文本同一行的目标图片是否存在
+  # 返回格式: {"exists": true, "position": [x,y]} 或 {"exists": false}，始终返回 SUCCESS 状态（即使目标不存在）
   # 示例 1: 检查"功能名称B"同一行是否有开关图标
   # {"action_type": "ocr_check_same_row_image", "anchor_text": "功能名称B", "image_base64": "<base64_encoded_image>", "threshold": 0.8}
   # 示例 2: 检查第二个锚点文本同一行的图片
