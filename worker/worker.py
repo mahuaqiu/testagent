@@ -495,6 +495,8 @@ class Worker:
                 "android": devices.get("faulty_android", []),
                 "ios": devices.get("faulty_ios", []),
             },
+            "namespace": self.reporter.namespace if self.reporter else "",
+            "config_version": self.config.config_version,
         }
 
     def get_devices(self) -> dict[str, Any]:
