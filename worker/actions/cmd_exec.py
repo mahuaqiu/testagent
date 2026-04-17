@@ -9,6 +9,7 @@ import logging
 from typing import Optional, TYPE_CHECKING
 
 from common.utils import run_cmd
+from worker.tools import get_tools_dir
 from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
 
@@ -35,6 +36,10 @@ class CmdExecAction(BaseActionExecutor):
                 error="command is required (use 'value' field)",
             )
 
+        # 替换 @tools/ 占位符为完整路径
+        tools_dir = get_tools_dir()
+        cmd = cmd.replace('@tools/', tools_dir + '/')
+
         # 超时时间，默认 30 秒
         timeout_ms = action.timeout or 30000
         timeout_sec = timeout_ms / 1000
@@ -51,6 +56,16 @@ class CmdExecAction(BaseActionExecutor):
             status = ActionStatus.SUCCESS if result.returncode == 0 else ActionStatus.FAILED
 
             logger.info(f"Command completed: exit_code={result.returncode}")
+
+            # 日志增强：输出 stdout/stderr 后 500 字符
+            if result.stdout:
+                stdout_preview = result.stdout[-500:] if len(result.stdout) > 500 else result.stdout
+                logger.info(f"Script output: {stdout_preview}")
+
+            if result.stderr:
+                stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+                if result.returncode != 0:
+                    logger.error(f"Script error: {stderr_preview}")
 
             # 输出信息截断（避免过长）
             output_preview = cmd[:50] if len(cmd) > 50 else cmd
