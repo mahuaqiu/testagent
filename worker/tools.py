@@ -102,7 +102,7 @@ def update_script_version(name: str, version: str) -> None:
         try:
             with open(versions_file, 'r', encoding='utf-8') as f:
                 versions = json.load(f)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, IOError):
             versions = {}
 
     # 更新版本
@@ -123,7 +123,13 @@ def save_script(name: str, content: str) -> str:
 
     Returns:
         str: 脚本完整路径
+
+    Raises:
+        ValueError: 脚本名称不合法
     """
+    if not validate_script_name(name):
+        raise ValueError(f"非法脚本名称: {name}")
+
     tools_dir = get_tools_dir()
     os.makedirs(tools_dir, exist_ok=True)
     script_path = os.path.join(tools_dir, name)
