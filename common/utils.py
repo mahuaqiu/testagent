@@ -9,7 +9,13 @@ import platform
 import subprocess
 import time
 import functools
+import io
+import logging
 from typing import Callable, Optional, Union, List, Any
+
+from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 # Windows 上隐藏子进程窗口的标志
@@ -168,3 +174,43 @@ def wait_until(condition: Callable[[], bool], timeout: float = 10, interval: flo
             return True
         time.sleep(interval)
     return False
+
+
+def compress_image_to_jpeg(image_bytes: bytes, quality: int = 80) -> bytes:
+    """
+    将图片压缩为 JPEG 格式。
+
+    用于返回给调用方的截图压缩，减少传输体积。
+    OCR/图像匹配场景应使用原始 PNG 数据。
+
+    Args:
+        image_bytes: 原始图片字节数据（PNG/JPEG等）
+        quality: JPEG 压缩质量（1-100），默认 80
+                 - 80: 压缩率高，肉眼几乎无损，适合查看
+                 - 90: 高质量，细节更清晰
+
+    Returns:
+        bytes: JPEG 格式的压缩图片数据
+
+    Usage:
+        compressed = compress_image_to_jpeg(screenshot_bytes, quality=80)
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        # 如果是 RGBA 模式，转换为 RGB（JPEG不支持透明通道）
+        if img.mode == "RGBA":
+            img = img.convert("RGB")
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=quality)
+        compressed_bytes = buffer.getvalue()
+        # 记录压缩效果
+        original_size = len(image_bytes)
+        compressed_size = len(compressed_bytes)
+        ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
+        logger.debug(
+            f"图片压缩: {original_size} -> {compressed_size} bytes, 减少 {ratio:.1f}%"
+        )
+        return compressed_bytes
+    except Exception as e:
+        logger.warning(f"图片压缩失败，返回原始数据: {e}")
+        return image_bytes

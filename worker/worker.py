@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from common.ocr_client import OCRClient
+from common.utils import compress_image_to_jpeg
 from worker.config import PlatformConfig, WorkerConfig
 from worker.device_monitor import DeviceMonitor
 from worker.discovery.android import AndroidDeviceInfo, AndroidDiscoverer
@@ -857,7 +858,9 @@ class Worker:
                 error_screenshot = None
                 try:
                     screenshot_bytes = manager.get_screenshot(context)
-                    error_screenshot = base64.b64encode(screenshot_bytes).decode("utf-8")
+                    # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
+                    compressed = compress_image_to_jpeg(screenshot_bytes, quality=80)
+                    error_screenshot = base64.b64encode(compressed).decode("utf-8")
                 except Exception as e:
                     logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
 

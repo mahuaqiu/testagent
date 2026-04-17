@@ -33,6 +33,7 @@ from typing import Optional
 import httpx
 
 from common.config import Config
+from common.utils import compress_image_to_jpeg
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,9 @@ class OCRClient:
         Returns:
             list[TextBlock]: 识别到的文字块列表。
         """
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        # 压缩为 JPEG q=90，减少传输体积（OCR 服务端支持 JPEG）
+        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_ocr_infos", {
             "image": image_base64,
@@ -175,8 +178,9 @@ class OCRClient:
         Returns:
             TextBlock | None: 找到的文字块，未找到返回 None。
         """
-        # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        # 压缩为 JPEG q=90，减少传输体积
+        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_coord_by_text", {
             "image": image_base64,
@@ -245,7 +249,9 @@ class OCRClient:
         Returns:
             str: 拼接后的文本字符串。
         """
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        # 压缩为 JPEG q=90，减少传输体积
+        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_ocr_texts", {
             "image": image_base64,
@@ -285,8 +291,11 @@ class OCRClient:
         Returns:
             list[MatchResult]: 匹配结果列表。
         """
-        source_base64 = base64.b64encode(source_bytes).decode("utf-8")
-        template_base64 = base64.b64encode(template_bytes).decode("utf-8")
+        # 压缩为 JPEG q=90，减少传输体积
+        source_compressed = compress_image_to_jpeg(source_bytes, quality=90)
+        template_compressed = compress_image_to_jpeg(template_bytes, quality=90)
+        source_base64 = base64.b64encode(source_compressed).decode("utf-8")
+        template_base64 = base64.b64encode(template_compressed).decode("utf-8")
 
         response = self._post("/image/match", {
             "source_image": source_base64,
@@ -369,8 +378,11 @@ class OCRClient:
         Returns:
             MatchResult | None: 匹配结果，未找到返回 None。
         """
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        target_image_base64 = base64.b64encode(target_image_bytes).decode("utf-8")
+        # 压缩为 JPEG q=90，减少传输体积
+        image_compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        target_compressed = compress_image_to_jpeg(target_image_bytes, quality=90)
+        image_base64 = base64.b64encode(image_compressed).decode("utf-8")
+        target_image_base64 = base64.b64encode(target_compressed).decode("utf-8")
 
         response = self._post("/image/match_near_text", {
             "image": image_base64,

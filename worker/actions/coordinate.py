@@ -9,6 +9,7 @@ import time
 import logging
 from typing import Optional, TYPE_CHECKING
 
+from common.utils import compress_image_to_jpeg
 from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
 
@@ -241,7 +242,9 @@ class ScreenshotAction(BaseActionExecutor):
         self._set_level(platform, action)
 
         screenshot = platform.take_screenshot(context)
-        screenshot_base64 = base64.b64encode(screenshot).decode("utf-8")
+        # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
+        compressed = compress_image_to_jpeg(screenshot, quality=80)
+        screenshot_base64 = base64.b64encode(compressed).decode("utf-8")
 
         name = action.value or "screenshot"
 
