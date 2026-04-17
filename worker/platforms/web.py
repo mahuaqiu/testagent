@@ -209,6 +209,13 @@ class WebPlatformManager(PlatformManager):
             context_options["channel"] = "msedge"
             logger.info("Using system Edge browser")
 
+        # Chromium 系浏览器添加启动参数，禁用恢复提示弹窗
+        if self.browser_type in ("chromium", "chrome", "msedge", "edge"):
+            context_options["args"] = [
+                "--disable-session-crashed-bubble",  # 禁用"上次不正常关闭"恢复弹窗
+                "--disable-infobars",  # 禁用信息栏（包括各种提示条）
+            ]
+
         if self.ignore_https_errors:
             context_options["ignore_https_errors"] = True
         if self.permissions:
