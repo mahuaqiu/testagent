@@ -17,6 +17,13 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from worker.config import load_config_version, merge_config_with_ip_protection, save_config_with_version
+from worker.tools import (
+    get_script_version,
+    save_script,
+    script_exists,
+    update_script_version,
+    validate_script_name,
+)
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
 
@@ -115,6 +122,14 @@ class ConfigUpdateRequest(BaseModel):
     config_version: str = Field(..., description="配置版本号，格式：YYYYMMDD-HHMMSS")
 
 
+class ScriptUpdateRequest(BaseModel):
+    """脚本更新请求。"""
+    name: str = Field(..., description="脚本名称，如 play_ppt.ps1")
+    content: str = Field(..., description="脚本内容")
+    version: str = Field(..., description="脚本版本号，格式：YYYYMMDD-HHMMSS")
+    overwrite: bool = Field(True, description="是否覆盖已有脚本")
+
+
 def _format_request_for_log(request: TaskRequest) -> dict[str, Any]:
     """
     格式化原始请求用于日志输出，过滤 base64 数据。
@@ -155,6 +170,9 @@ worker: Worker | None = None
 
 # 配置更新并发锁
 _config_update_lock = threading.Lock()
+
+# 脚本更新并发锁
+_script_update_lock = threading.Lock()
 
 # GUIApp 引用（用于触发重启）
 gui_app: Any | None = None
@@ -516,6 +534,93 @@ async def update_worker_config(request: ConfigUpdateRequest):
 
     finally:
         _config_update_lock.release()
+
+
+@app.post("/worker/scripts")
+async def update_worker_script(request: ScriptUpdateRequest):
+    """
+    更新 Worker 脚本。
+
+    流程：
+    1. 版本格式校验
+    2. 脚本名称校验（扩展名 + 路径穿越）
+    3. 并发保护
+    4. 版本比较（相同则跳过）
+    5. 覆盖检查
+    6. 保存脚本
+    7. 更新版本记录
+    8. 返回响应（不重启）
+
+    Returns:
+        Dict: 更新结果
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    logger.info(f"Script update request: name={request.name}, version={request.version}")
+
+    # 1. 版本格式校验
+    if not re.match(r"^\d{8}-\d{6}$", request.version):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "版本号格式无效，应为 YYYYMMDD-HHMMSS"}
+        )
+
+    # 2. 脚本名称校验
+    if not validate_script_name(request.name):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "脚本名称不合法，只允许 .ps1/.sh/.bat 扩展名，禁止路径穿越"}
+        )
+
+    # 3. 并发保护（非阻塞）
+    if not _script_update_lock.acquire(blocking=False):
+        return JSONResponse(
+            status_code=409,
+            content={"status": "error", "message": "脚本更新正在进行中，请稍后重试"}
+        )
+
+    try:
+        # 4. 版本比较
+        local_version = get_script_version(request.name)
+        if local_version == request.version:
+            logger.info(f"Script version unchanged: {request.name} -> {request.version}")
+            return {
+                "status": "success",
+                "message": "脚本版本相同，无需更新",
+                "name": request.name,
+                "version": request.version,
+                "updated": False,
+            }
+
+        # 5. 覆盖检查
+        if not request.overwrite and script_exists(request.name):
+            return JSONResponse(
+                status_code=409,
+                content={"status": "error", "message": f"脚本已存在且 overwrite=false: {request.name}"}
+            )
+
+        # 6. 保存脚本
+        script_path = save_script(request.name, request.content)
+        logger.info(f"Script saved: {script_path}")
+
+        # 7. 更新版本记录
+        update_script_version(request.name, request.version)
+
+        # 8. 返回响应（不重启）
+        logger.info(f"Script updated successfully: {request.name} -> {request.version}")
+
+        return {
+            "status": "success",
+            "message": "脚本更新成功",
+            "name": request.name,
+            "version": request.version,
+            "path": script_path,
+            "updated": True,
+        }
+
+    finally:
+        _script_update_lock.release()
 
 
 def _trigger_restart_after_response():
