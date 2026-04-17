@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -145,6 +146,9 @@ app = FastAPI(
     description="多端自动化测试执行基建 API",
     version="3.0.0",
 )
+
+# 启用 GZip 压缩（超过 1KB 的响应自动压缩）
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Worker 实例（在 main.py 中初始化）
 worker: Worker | None = None
