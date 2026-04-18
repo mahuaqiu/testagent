@@ -1,17 +1,19 @@
 <#
 .SYNOPSIS
-    播放 PowerPoint 文件。
+    启动 PowerPoint 文件。
 
 .PARAMETER FilePath
     PPT 文件路径。
 
-.PARAMETER Duration
-    播放时长(秒),默认 60。
+.PARAMETER AutoPlay
+    是否开启幻灯片放映模式，默认 true。
+    - true: 启动后进入放映模式
+    - false: 仅打开PPT编辑模式
 #>
 
 param(
     [string]$FilePath,
-    [int]$Duration = 60
+    [bool]$AutoPlay = $true
 )
 
 # 检查文件存在
@@ -20,27 +22,24 @@ if (-not (Test-Path $FilePath)) {
     exit 1
 }
 
-Write-Output "开始播放: $FilePath"
+Write-Output "开始打开: $FilePath, AutoPlay: $AutoPlay"
 
-# 使用 PowerPoint COM 对象播放
+# 使用 PowerPoint COM 对象
 try {
     $ppt = New-Object -ComObject PowerPoint.Application
     $presentation = $ppt.Presentations.Open($FilePath)
 
-    # 开始幻灯片放映
-    $presentation.SlideShowSettings.Run()
+    if ($AutoPlay) {
+        # 开始幻灯片放映，启动后立即返回
+        $presentation.SlideShowSettings.Run()
+        Write-Output "幻灯片放映已启动: $FilePath"
+    } else {
+        Write-Output "PPT 已打开（编辑模式）: $FilePath"
+    }
 
-    # 等待指定时长
-    Start-Sleep -Seconds $Duration
-
-    # 关闭
-    $presentation.Close()
-    $ppt.Quit()
-
-    Write-Output "播放完成: $FilePath, 时长: $Duration秒"
     exit 0
 }
 catch {
-    Write-Error "播放失败: $_"
+    Write-Error "操作失败: $_"
     exit 1
 }

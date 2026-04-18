@@ -940,3 +940,8 @@ components:
   # {"action_type": "cmd_exec", "value": "dir C:\\Users"}
   # 示例 4: Mac/Linux 查看文件
   # {"action_type": "cmd_exec", "value": "ls -la /tmp"}
+  # 示例 5: 使用 @tools 占位符调用脚本（路径自动替换）
+  # {"action_type": "cmd_exec", "value": "powershell -ExecutionPolicy Bypass -File \"@tools/play_ppt.ps1\" -FilePath \"C:\\demo.pptx\" -AutoPlay true"}
+  # 启动PPT幻灯片放映，启动成功后立即返回（不等待播放完成）
+  # 示例 6: 仅打开PPT编辑模式（不进入放映）
+  # {"action_type": "cmd_exec", "value": "powershell -ExecutionPolicy Bypass -File \"@tools/play_ppt.ps1\" -FilePath \"C:\\demo.pptx\" -AutoPlay false"}
