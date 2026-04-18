@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPEC)))
 datas = [
     (os.path.join(PROJECT_ROOT, 'config'), 'config'),
     (os.path.join(PROJECT_ROOT, 'assets'), 'assets'),  # 图标文件
+    (os.path.join(PROJECT_ROOT, 'tools'), 'tools'),  # 新增：脚本目录
 ]
 
 # 收集 cv2 (OpenCV) 数据文件
