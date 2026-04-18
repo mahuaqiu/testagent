@@ -98,6 +98,7 @@ class Action:
 
     # 应用操作
     app_path: str | None = None           # 应用路径
+    restart: bool = False                 # 是否强制重启（Windows 平台专用）
     bundle_id: str | None = None          # iOS Bundle ID
     package_name: str | None = None       # Android 包名
     permissions: Any | None = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
@@ -135,6 +136,7 @@ class Action:
             end_y=data.get("end_y"),
             direction=data.get("direction"),
             app_path=data.get("app_path"),
+            restart=data.get("restart", False),
             bundle_id=data.get("bundle_id"),
             package_name=data.get("package_name"),
             permissions=data.get("permissions"),
@@ -184,6 +186,8 @@ class Action:
             result["direction"] = self.direction
         if self.app_path is not None:
             result["app_path"] = self.app_path
+        if self.restart:
+            result["restart"] = self.restart
         if self.bundle_id is not None:
             result["bundle_id"] = self.bundle_id
         if self.package_name is not None:

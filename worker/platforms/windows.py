@@ -17,6 +17,7 @@ from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 from worker.actions import ActionRegistry
+from worker.tools import get_tools_dir
 
 logger = logging.getLogger(__name__)
 
@@ -169,15 +170,43 @@ class WindowsPlatformManager(PlatformManager):
                 error="app_path is required",
             )
 
-        popen_cmd(app_path)
-        time.sleep(2)  # 等待应用启动
+        # 构建 PowerShell 脚本路径
+        tools_dir = get_tools_dir()
+        script_path = f"{tools_dir}/start_app.ps1"
 
-        return ActionResult(
-            number=0,
-            action_type="start_app",
-            status=ActionStatus.SUCCESS,
-            output=f"Started: {app_path}",
-        )
+        # 构建 PowerShell 命令
+        restart_param = "$true" if action.restart else "$false"
+        # 转义路径中的特殊字符（如空格）
+        escaped_path = app_path.replace("'", "''")
+        cmd = f"powershell -ExecutionPolicy Bypass -File \"{script_path}\" -AppPath \"{escaped_path}\" -Restart {restart_param}"
+
+        try:
+            result = run_cmd(cmd, shell=True, timeout=10)
+
+            if result.returncode == 0:
+                output_msg = result.stdout.strip() if result.stdout else f"Started: {app_path}"
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.SUCCESS,
+                    output=output_msg,
+                )
+            else:
+                error_msg = result.stderr.strip() if result.stderr else f"Script failed with exit code {result.returncode}"
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.FAILED,
+                    error=error_msg,
+                )
+
+        except Exception as e:
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
 
     def _action_stop_app(self, action: Action) -> ActionResult:
         """关闭应用。"""

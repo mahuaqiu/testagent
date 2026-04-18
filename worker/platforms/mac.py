@@ -17,6 +17,7 @@ from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
 from worker.actions import ActionRegistry
+from worker.tools import get_tools_dir
 
 logger = logging.getLogger(__name__)
 
@@ -160,25 +161,52 @@ class MacPlatformManager(PlatformManager):
 
     def _action_start_app(self, action: Action) -> ActionResult:
         """启动应用。"""
-        app_name = action.app_path or action.value
-        if not app_name:
+        app_path = action.app_path or action.value
+        if not app_path:
             return ActionResult(
                 number=0,
                 action_type="start_app",
                 status=ActionStatus.FAILED,
-                error="app_name is required",
+                error="app_path is required",
             )
 
-        # macOS 使用 open 命令启动应用
-        run_cmd(["open", "-a", app_name])
-        time.sleep(2)  # 等待应用启动
+        # 构建 Shell 脚本路径
+        tools_dir = get_tools_dir()
+        script_path = f"{tools_dir}/start_app.sh"
 
-        return ActionResult(
-            number=0,
-            action_type="start_app",
-            status=ActionStatus.SUCCESS,
-            output=f"Started: {app_name}",
-        )
+        # 构建 Shell 命令
+        restart_flag = "-r" if action.restart else ""
+        # 转义路径中的特殊字符
+        escaped_path = app_path.replace("'", "'\"'\"'")
+        cmd = f"bash \"{script_path}\" -a \"{escaped_path}\" {restart_flag}"
+
+        try:
+            result = run_cmd(cmd, shell=True, timeout=10)
+
+            if result.returncode == 0:
+                output_msg = result.stdout.strip() if result.stdout else f"Started: {app_path}"
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.SUCCESS,
+                    output=output_msg,
+                )
+            else:
+                error_msg = result.stderr.strip() if result.stderr else f"Script failed with exit code {result.returncode}"
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.FAILED,
+                    error=error_msg,
+                )
+
+        except Exception as e:
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
 
     def _action_stop_app(self, action: Action) -> ActionResult:
         """关闭应用。"""
