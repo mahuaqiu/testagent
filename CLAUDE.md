@@ -99,6 +99,7 @@ PlatformManager (抽象基类)
 - **坐标动作**：`click`, `move`, `swipe`, `drag`, `input`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`, `new_page`, `switched_page`, `close_page`
+- **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
@@ -108,7 +109,8 @@ PlatformManager (抽象基类)
 
 | 参数 | 说明 | 适用动作 |
 |------|------|----------|
-| `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page |
+| `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page、cmd_exec |
+| `value` | 命令字符串，`@tools/脚本名` 自动替换为完整脚本路径 | cmd_exec |
 | `x`, `y` | 目标坐标（或拖拽起点） | click, move, swipe, drag, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
@@ -198,3 +200,38 @@ PlatformManager (抽象基类)
 - **设备监控**：移动设备检测间隔 300 秒（5 分钟），支持设备服务自动启动和恢复
 - **直连模式**：Android 使用 uiautomator2 直连，iOS 使用 tidevice3 + WDA 直连，无需 Appium Server
 - **无状态设计**：Worker 不维护会话状态，每次任务独立执行
+
+## 脚本执行机制
+
+Worker 支持通过 `cmd_exec` action 执行外部脚本（PowerShell/Shell），用于复杂任务如播放媒体、软件安装等。
+
+### tools 目录
+
+脚本存放在 `tools/` 目录，打包时带入 exe 目录：
+- `play_ppt.ps1` - 播放 PowerPoint
+- `download_install.ps1` - 下载解压安装
+
+### 调用方式
+
+使用 `@tools/` 占位符，自动替换为完整路径：
+
+```json
+{
+  "action_type": "cmd_exec",
+  "value": "powershell -ExecutionPolicy Bypass -File \"@tools/play_ppt.ps1\" -FilePath \"C:\\demo.pptx\" -Duration 60",
+  "timeout": 120000
+}
+```
+
+### 远程下发接口
+
+POST `/worker/scripts` 可远程下发脚本，无需重启 Worker：
+
+```json
+{
+  "name": "play_ppt.ps1",
+  "content": "param([string]$FilePath)...",
+  "version": "20260418-120000",
+  "overwrite": true
+}
+```
