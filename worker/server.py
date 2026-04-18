@@ -601,11 +601,24 @@ async def update_worker_script(request: ScriptUpdateRequest):
             )
 
         # 6. 保存脚本
-        script_path = save_script(request.name, request.content)
-        logger.info(f"Script saved: {script_path}")
+        try:
+            script_path = save_script(request.name, request.content)
+            logger.info(f"Script saved: {script_path}")
 
-        # 7. 更新版本记录
-        update_script_version(request.name, request.version)
+            # 7. 更新版本记录
+            update_script_version(request.name, request.version)
+        except ValueError as e:
+            logger.warning(f"Script save validation failed: {e}")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": f"脚本保存失败: {e}"}
+            )
+        except IOError as e:
+            logger.error(f"Script save IO failed: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": f"脚本保存失败: {e}"}
+            )
 
         # 8. 返回响应（不重启）
         logger.info(f"Script updated successfully: {request.name} -> {request.version}")
