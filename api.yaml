@@ -559,11 +559,29 @@ components:
         key:
           type: string
           description: |
-            按键名称，仅 press 动作必填。常用按键：
+            按键名称，仅 press 动作必填。不同平台支持的按键不同：
+
+            【Web/Windows/Mac 桌面端】支持所有标准键盘按键：
             - 功能键: Enter、Escape、Tab、Backspace、Delete
             - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight
             - 修饰键: Control、Alt、Shift、Meta
             - 组合键示例: Control+A、Control+C、Alt+F4
+
+            【Android 移动端】支持的按键：
+            - 导航键: Home（主屏幕）、Back（返回）、Menu（菜单）、Search（搜索）
+            - 功能键: Enter、Escape、Tab、Backspace、Delete
+            - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight
+            - 音量键: Volume_Up、Volume_Down
+            - 电源键: Power、Lock（锁屏）
+            - 媒体键: Media_Play_Pause、Media_Stop、Media_Next、Media_Previous
+            - 数字 KeyCode: 直接传入数字，如 "26" 表示电源键
+
+            【iOS 移动端】支持的按键（取决于设备型号）：
+            - iPhone 8 (Touch ID): Home、Volume_Up、Volume_Down
+            - iPhone X+ (Face ID): 可能支持更多按键
+            - 不支持的按键: Back、Enter、Escape、Lock 等（iOS 无物理键）
+              → Back: 请使用 OCR 点击导航栏返回按钮
+              → Enter: 请使用 OCR 点击键盘上的完成/搜索按钮
       example:
         action_type: "ocr_wait"
         value: "加载完成"
@@ -825,14 +843,31 @@ components:
 
   # ---------- 其他动作 ----------
   # press - 按键操作
-  # 示例 1: 按回车键
+  # 示例 1: 按回车键（桌面端）
   # {"action_type": "press", "key": "Enter"}
-  # 示例 2: 按 Escape 键
+  # 示例 2: 按 Escape 键（桌面端）
   # {"action_type": "press", "key": "Escape"}
-  # 示例 3: 按下箭头键
+  # 示例 3: 按下箭头键（桌面端）
   # {"action_type": "press", "key": "ArrowDown"}
-  # 示例 4: Ctrl+A 全选（组合键）
+  # 示例 4: Ctrl+A 全选（桌面端组合键）
   # {"action_type": "press", "key": "Control+A"}
+
+  # 移动端按键示例（Android）:
+  # 示例 5: 返回键
+  # {"action_type": "press", "key": "Back"}
+  # 示例 6: 主屏幕键
+  # {"action_type": "press", "key": "Home"}
+  # 示例 7: 音量增加
+  # {"action_type": "press", "key": "Volume_Up"}
+  # 示例 8: 电源键/锁屏
+  # {"action_type": "press", "key": "Power"}
+
+  # 移动端按键示例（iOS）:
+  # 示例 9: 主屏幕键
+  # {"action_type": "press", "key": "Home"}
+  # 示例 10: 音量增加
+  # {"action_type": "press", "key": "Volume_Up"}
+  # 注意: iOS 不支持 Back、Enter、Lock 等按键
 
   # screenshot - 截图
   # 示例: 截取当前屏幕，命名为 "result"

@@ -27,6 +27,30 @@ class iOSPlatformManager(PlatformManager):
 
     SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
 
+    # iOS 按键映射：标准按键名 → WDA 按键名
+    # WDA 支持的按键取决于设备型号，iPhone 8 (Touch ID) 只支持 home, volumeup, volumedown
+    KEY_MAP = {
+        "HOME": "home",
+        "VOLUME_UP": "volumeup",
+        "VOLUMEUP": "volumeup",
+        "VOLUME_DOWN": "volumedown",
+        "VOLUMEDOWN": "volumedown",
+    }
+
+    # WDA 不支持的按键（用于错误提示）
+    UNSUPPORTED_KEYS = {
+        "BACK": "iOS 无物理返回键，请使用 OCR 点击导航栏返回按钮",
+        "ENTER": "iOS 无物理回车键，请使用 OCR 点击键盘上的完成/搜索按钮",
+        "LOCK": "iPhone 8 不支持 LOCK 按键，Face ID 机型可能支持",
+        "POWER": "iPhone 8 不支持 POWER 按键，Face ID 机型可能支持",
+        "ESCAPE": "iOS 无 ESC 键",
+        "TAB": "iOS 无 Tab 键",
+        "ARROWUP": "iOS 无方向键",
+        "ARROWDOWN": "iOS 无方向键",
+        "ARROWLEFT": "iOS 无方向键",
+        "ARROWRIGHT": "iOS 无方向键",
+    }
+
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
         self.wda_base_port = config.wda_base_port or 8100
@@ -279,12 +303,29 @@ class iOSPlatformManager(PlatformManager):
                 raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")
 
     def press(self, key: str, context: Any = None) -> None:
-        """按键。"""
+        """按键。
+
+        iOS 支持的按键取决于设备型号：
+        - iPhone 8 (Touch ID): HOME, VOLUME_UP, VOLUME_DOWN
+        - iPhone X+ (Face ID): 可能支持更多按键
+        """
         client = context or self._device_clients.get(self._current_device)
         if client:
-            success = client.press_button(key.upper())
-            if not success:
-                raise RuntimeError(f"Press button failed: {key}")
+            key_upper = key.upper()
+
+            # 检查是否在不支持的按键列表中
+            if key_upper in self.UNSUPPORTED_KEYS:
+                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
+
+            # 按键名映射
+            wda_key = self.KEY_MAP.get(key_upper)
+            if wda_key:
+                success = client.press_button(wda_key)
+                if not success:
+                    raise RuntimeError(f"Press button failed: {key}")
+            else:
+                supported = ", ".join(sorted(self.KEY_MAP.keys()))
+                raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图。"""

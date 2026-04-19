@@ -28,12 +28,40 @@ class AndroidPlatformManager(PlatformManager):
 
     SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
 
+    # Android 按键映射：标准按键名 → KeyCode
+    # 参考：https://developer.android.com/reference/android/view/KeyEvent
     KEY_MAP = {
-        "HOME": 3,
-        "BACK": 4,
-        "MENU": 82,
-        "ENTER": 66,
-        "SEARCH": 84,
+        # 导航键
+        "HOME": 3,      # 主屏幕键
+        "BACK": 4,      # 返回键
+        "MENU": 82,     # 菜单键
+        "SEARCH": 84,   # 搜索键
+        # 功能键
+        "ENTER": 66,    # 回车键
+        "ESCAPE": 111,  # ESC 键
+        "TAB": 61,      # Tab 键
+        "BACKSPACE": 67, # 退格键
+        "DELETE": 67,   # 删除键（同退格）
+        # 方向键
+        "ARROWUP": 19,
+        "ARROWDOWN": 20,
+        "ARROWLEFT": 21,
+        "ARROWRIGHT": 22,
+        # 音量键
+        "VOLUME_UP": 24,
+        "VOLUMEUP": 24,
+        "VOLUME_DOWN": 25,
+        "VOLUMEDOWN": 25,
+        # 电源键
+        "POWER": 26,
+        "LOCK": 26,
+        # 相机键
+        "CAMERA": 27,
+        # 媒体控制
+        "MEDIA_PLAY_PAUSE": 85,
+        "MEDIA_STOP": 86,
+        "MEDIA_NEXT": 87,
+        "MEDIA_PREVIOUS": 88,
     }
 
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
@@ -195,7 +223,11 @@ class AndroidPlatformManager(PlatformManager):
             device.swipe(start_x, start_y, end_x, end_y, duration=duration_sec)
 
     def press(self, key: str, context: Any = None) -> None:
-        """按键。"""
+        """按键。
+
+        Android 支持的按键：HOME, BACK, MENU, ENTER, SEARCH, VOLUME_UP, VOLUME_DOWN, POWER 等
+        详见 KEY_MAP 定义。
+        """
         device = context or self._device_clients.get(self._current_device)
         if device:
             key_name = key.upper() if key else ""
@@ -204,9 +236,11 @@ class AndroidPlatformManager(PlatformManager):
             if key_code:
                 device.press(key_code)
             elif key and key.isdigit():
+                # 支持直接传入 KeyCode 数字
                 device.press(int(key))
             else:
-                raise ValueError(f"Unknown key: {key}")
+                supported = ", ".join(sorted(self.KEY_MAP.keys()))
+                raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图。"""
