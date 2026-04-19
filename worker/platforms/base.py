@@ -195,7 +195,7 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
         """
         滑动/拖拽。
 
@@ -204,6 +204,7 @@ class PlatformManager(ABC):
             start_y: 起始 Y 坐标
             end_x: 结束 X 坐标
             end_y: 结束 Y 坐标
+            duration: 滑动持续时间（毫秒），默认 500ms
             context: 执行上下文（可选）
         """
         pass

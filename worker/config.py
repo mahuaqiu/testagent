@@ -163,6 +163,7 @@ class PlatformConfig:
     # iOS 专用
     wda_base_port: int = 8100
     wda_ipa_path: str = "wda/WebDriverAgent.ipa"
+    wda_bundle_id: str = "com.facebook.WebDriverAgentRunner"
 
     # Android 专用
     u2_port: int = 7912
@@ -185,6 +186,7 @@ class PlatformConfig:
             token_headers=data.get("token_headers", []),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
+            wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),
             u2_port=data.get("u2_port", 7912),
         )
 

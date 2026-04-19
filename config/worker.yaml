@@ -56,6 +56,7 @@ platforms:
     enabled: null                   # Only on Windows
     wda_base_port: 8100             # WDA base port
     wda_ipa_path: wda/WebDriverAgent.ipa
+    wda_bundle_id: com.facebook.WebDriverAgentRunner.majy.xctrunner  # WDA bundle ID
     session_timeout: 300
     screenshot_dir: data/screenshots
 

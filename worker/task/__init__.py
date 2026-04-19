@@ -8,7 +8,6 @@ from worker.task.result import (
     TaskStatus,
     ActionResult,
     ActionStatus,
-    ScreenshotInfo,
 )
 from worker.task.task import Task, TaskConfig
 
@@ -21,7 +20,6 @@ __all__ = [
     "TaskStatus",
     "ActionResult",
     "ActionStatus",
-    "ScreenshotInfo",
     "Task",
     "TaskConfig",
 ]

@@ -15,6 +15,7 @@ dependencies = [
     # 移动端平台
     "uiautomator2>=3.0",
     "tidevice3",
+    "wda>=0.3.0",  # iOS WDA Python 客户端
 
     # 桌面平台 (Windows/Mac)
     "pyautogui>=0.9.54",

@@ -88,32 +88,8 @@ class ActionResult:
 
 
 @dataclass
-class ScreenshotInfo:
-    """截图信息。"""
-
-    name: str
-    action_number: int  # 对应的动作序号
-    data: Optional[str] = None  # base64 数据
-    path: Optional[str] = None  # 文件路径
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典。"""
-        result = {
-            "name": self.name,
-            "action_number": self.action_number,
-        }
-        if self.data is not None:
-            result["data"] = self.data
-        if self.path is not None:
-            result["path"] = self.path
-        return result
-
-
-@dataclass
 class TaskResult:
-    """
-    任务执行结果。
-    """
+    """任务执行结果。"""
 
     task_id: Optional[str] = None  # 可选，同步执行不生成 task_id
     status: TaskStatus = TaskStatus.PENDING
@@ -124,7 +100,6 @@ class TaskResult:
     duration_ms: int = 0
 
     actions: List[ActionResult] = field(default_factory=list)
-    screenshots: List[ScreenshotInfo] = field(default_factory=list)
 
     error: Optional[str] = None
     error_screenshot: Optional[str] = None  # 失败截图（base64 编码）
@@ -146,7 +121,6 @@ class TaskResult:
             finished_at=datetime.fromisoformat(data["finished_at"]) if data.get("finished_at") else None,
             duration_ms=data.get("duration_ms", 0),
             actions=[ActionResult.from_dict(a) for a in data.get("actions", [])],
-            screenshots=[ScreenshotInfo(**s) for s in data.get("screenshots", [])],
             error=data.get("error"),
             error_screenshot=data.get("error_screenshot"),
             metadata=data.get("metadata", {}),
@@ -163,7 +137,6 @@ class TaskResult:
             "platform": self.platform,
             "duration_ms": self.duration_ms,
             "actions": [a.to_dict() for a in self.actions],
-            "screenshots": [s.to_dict() for s in self.screenshots],
             "metadata": self.metadata,
         }
 

@@ -185,11 +185,13 @@ class AndroidPlatformManager(PlatformManager):
         if device:
             device.send_keys(text)
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
         """滑动。"""
         device = context or self._device_clients.get(self._current_device)
         if device:
-            device.swipe(start_x, start_y, end_x, end_y, duration=0.5)
+            # duration 单位转换：毫秒 → 秒
+            duration_sec = duration / 1000.0
+            device.swipe(start_x, start_y, end_x, end_y, duration=duration_sec)
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。"""

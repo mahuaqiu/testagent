@@ -164,14 +164,15 @@ class DragAction(BaseActionExecutor):
 
         end_x = action.end_x if action.end_x is not None else action.x
         end_y = action.end_y if action.end_y is not None else action.y
+        duration = action.duration or 500  # 默认 500ms
 
-        platform.swipe(action.x, action.y, end_x, end_y, context)
+        platform.swipe(action.x, action.y, end_x, end_y, duration, context)
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y})",
+            output=f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms",
         )
 
 
@@ -194,14 +195,15 @@ class SwipeAction(BaseActionExecutor):
 
         end_x = action.end_x if action.end_x is not None else action.x
         end_y = action.end_y if action.end_y is not None else action.y
+        duration = action.duration or 500  # 默认 500ms
 
-        platform.swipe(action.x, action.y, end_x, end_y, context)
+        platform.swipe(action.x, action.y, end_x, end_y, duration, context)
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y})",
+            output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms",
         )
 
 

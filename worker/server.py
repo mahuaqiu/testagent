@@ -93,11 +93,6 @@ def _format_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
     if log_result.get("error_screenshot"):
         log_result["error_screenshot"] = "<base64_data>"
 
-    # 处理 screenshots 列表
-    if log_result.get("screenshots"):
-        screenshot_count = len(log_result["screenshots"])
-        log_result["screenshots"] = f"<{screenshot_count} screenshot(s)>"
-
     # 处理 actions 中的截图字段
     if log_result.get("actions"):
         log_result["actions"] = _format_action_results(log_result["actions"])

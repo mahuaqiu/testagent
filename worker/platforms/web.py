@@ -523,26 +523,29 @@ class WebPlatformManager(PlatformManager):
         pyautogui.write(text)
         logger.debug(f"System-level input: {text}")
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None, level: str = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None, level: str = None) -> None:
         """滑动/拖拽。"""
         effective_level = level or self._current_level
         if effective_level == "system":
-            self._system_drag(start_x, start_y, end_x, end_y)
+            self._system_drag(start_x, start_y, end_x, end_y, duration)
             return
         page = context or self._current_page
         if page:
+            # Playwright mouse 不支持 duration，需要手动控制
+            duration_sec = duration / 1000.0
             _run_async(page.mouse.move(start_x, start_y))
             _run_async(page.mouse.down())
-            _run_async(page.mouse.move(end_x, end_y))
+            _run_async(page.mouse.move(end_x, end_y, steps=int(duration_sec * 60)))  # 60 steps/sec 模拟平滑移动
             _run_async(page.mouse.up())
 
-    def _system_drag(self, start_x: int, start_y: int, end_x: int, end_y: int) -> None:
+    def _system_drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500) -> None:
         """系统级拖拽（使用 pyautogui）。"""
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
+        duration_sec = duration / 1000.0
         pyautogui.moveTo(start_x, start_y)
-        pyautogui.drag(end_x - start_x, end_y - start_y)
-        logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y})")
+        pyautogui.drag(end_x - start_x, end_y - start_y, duration=duration_sec)
+        logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y}) in {duration}ms")
 
     def press(self, key: str, context: Any = None, level: str = None) -> None:
         """按键。"""

@@ -92,11 +92,12 @@ class MacPlatformManager(PlatformManager):
         """输入文本。"""
         pyautogui.write(text)
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
         """滑动/拖拽。"""
+        duration_sec = duration / 1000.0
         pyautogui.moveTo(start_x, start_y)
         pyautogui.mouseDown()
-        pyautogui.moveTo(end_x, end_y, duration=0.5)
+        pyautogui.moveTo(end_x, end_y, duration=duration_sec)
         pyautogui.mouseUp()
 
     def press(self, key: str, context: Any = None) -> None:

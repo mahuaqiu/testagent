@@ -95,6 +95,7 @@ class Action:
     end_x: int | None = None              # 终点 X 坐标（滑动）
     end_y: int | None = None              # 终点 Y 坐标（滑动）
     direction: str | None = None          # 滑动方向
+    duration: int | None = None           # 滑动持续时间（毫秒）
 
     # 应用操作
     app_path: str | None = None           # 应用路径
@@ -118,6 +119,22 @@ class Action:
         if value is None and data.get("key"):
             value = data.get("key")
 
+        # 处理 swipe/drag 的 from/to 格式
+        x = data.get("x")
+        y = data.get("y")
+        end_x = data.get("end_x")
+        end_y = data.get("end_y")
+
+        # 兼容 from: {x, y} / to: {x, y} 格式
+        from_coord = data.get("from")
+        to_coord = data.get("to")
+        if from_coord:
+            x = from_coord.get("x", x)
+            y = from_coord.get("y", y)
+        if to_coord:
+            end_x = to_coord.get("x", end_x)
+            end_y = to_coord.get("y", end_y)
+
         return cls(
             action_type=data.get("action_type", ""),
             value=value,
@@ -130,11 +147,12 @@ class Action:
             wait=data.get("wait"),
             level=data.get("level", "browser"),
             monitor=data.get("monitor", 1),
-            x=data.get("x"),
-            y=data.get("y"),
-            end_x=data.get("end_x"),
-            end_y=data.get("end_y"),
+            x=x,
+            y=y,
+            end_x=end_x,
+            end_y=end_y,
             direction=data.get("direction"),
+            duration=data.get("duration"),
             app_path=data.get("app_path"),
             restart=data.get("restart", False),
             bundle_id=data.get("bundle_id"),
@@ -184,6 +202,8 @@ class Action:
             result["end_y"] = self.end_y
         if self.direction is not None:
             result["direction"] = self.direction
+        if self.duration is not None:
+            result["duration"] = self.duration
         if self.app_path is not None:
             result["app_path"] = self.app_path
         if self.restart:

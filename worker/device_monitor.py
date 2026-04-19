@@ -224,3 +224,24 @@ class DeviceMonitor:
     def is_device_online(self, platform: str, udid: str) -> bool:
         """检查设备是否在线。"""
         return udid in self.get_online_devices(platform)
+
+    def mark_device_online(self, platform: str, udid: str) -> None:
+        """将设备标记为在线（从 faulty 列表移动到正常列表）。"""
+        if platform == "android":
+            # 从 faulty 列表移除
+            self._faulty_android_devices = [
+                d for d in self._faulty_android_devices if d["udid"] != udid
+            ]
+            # 添加到正常列表（避免重复）
+            if udid not in [d["udid"] for d in self._android_devices]:
+                self._android_devices.append({"udid": udid})
+                logger.info(f"Device marked online: {udid}")
+        else:
+            # 从 faulty 列表移除
+            self._faulty_ios_devices = [
+                d for d in self._faulty_ios_devices if d["udid"] != udid
+            ]
+            # 添加到正常列表（避免重复）
+            if udid not in [d["udid"] for d in self._ios_devices]:
+                self._ios_devices.append({"udid": udid})
+                logger.info(f"Device marked online: {udid}")

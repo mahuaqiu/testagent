@@ -27,16 +27,15 @@ class iOSPlatformManager(PlatformManager):
     """
 
     SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
-    WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner"
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
         self.wda_base_port = config.wda_base_port or 8100
         self.wda_ipa_path = config.wda_ipa_path or "wda/WebDriverAgent.ipa"
+        self.wda_bundle_id = config.wda_bundle_id or "com.facebook.WebDriverAgentRunner"
         self._device_wda: Dict[str, dict] = {}
         self._device_clients: Dict[str, WDAClient] = {}
         self._current_device: Optional[str] = None
-        self._port_counter = 0
 
     @property
     def platform(self) -> str:
@@ -75,10 +74,21 @@ class iOSPlatformManager(PlatformManager):
     def ensure_device_service(self, udid: str) -> tuple[str, str]:
         """确保 WDA 服务可用。"""
         try:
+            # 1. 检查已有的 client 是否可用
             client = self._device_clients.get(udid)
             if client and client.health_check():
+                logger.info(f"WDA already running: {udid}")
                 return ("online", "OK")
 
+            # 2. 探测配置端口是否有 WDA 运行（可能是手动启动的）
+            probe_client = WDAClient(f"http://127.0.0.1:{self.wda_base_port}")
+            if probe_client.health_check():
+                logger.info(f"Found existing WDA on port {self.wda_base_port}, reusing")
+                self._device_clients[udid] = probe_client
+                self._device_wda[udid] = {"port": self.wda_base_port, "process": None}
+                return ("online", "OK")
+
+            # 3. 没有现成的 WDA，启动新的
             return self._start_wda(udid)
         except Exception as e:
             logger.error(f"Failed to ensure WDA service: {udid}, {e}")
@@ -96,9 +106,8 @@ class iOSPlatformManager(PlatformManager):
         return list(self._device_clients.keys())
 
     def _allocate_port(self) -> int:
-        """分配 WDA 端口。"""
-        self._port_counter += 1
-        return self.wda_base_port + self._port_counter
+        """分配 WDA 端口（固定使用配置的端口）。"""
+        return self.wda_base_port
 
     def _stop_wda(self, udid: str) -> None:
         """停止 WDA 进程。"""
@@ -121,28 +130,31 @@ class iOSPlatformManager(PlatformManager):
 
             port = self._allocate_port()
 
-            # t3 runwda 命令格式
-            process = popen_cmd(
+            # t3 runwda 命令 - 不设置 stdin/stdout/stderr，让它们继承父进程
+            # DEVNULL 可能导致 t3 无法正常维持运行
+            import subprocess
+            process = subprocess.Popen(
                 [
                     "t3",
                     "-u", udid,
                     "runwda",
-                    "--bundle-id", self.WDA_BUNDLE_ID,
+                    "--bundle-id", self.wda_bundle_id,
                     "--dst-port", str(port)
                 ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                # 不设置 stdin/stdout/stderr，保持连接
             )
 
             base_url = f"http://127.0.0.1:{port}"
             client = WDAClient(base_url)
 
+            logger.info(f"WDA process started on port {port}, waiting for ready...")
             if client.wait_ready(timeout=30):
                 self._device_wda[udid] = {"port": port, "process": process}
                 self._device_clients[udid] = client
                 logger.info(f"WDA started: {udid} on port {port}")
                 return ("online", "OK")
             else:
+                logger.warning(f"WDA failed to become ready on port {port}")
                 process.terminate()
                 return ("faulty", "WDA failed to start")
 
@@ -209,21 +221,38 @@ class iOSPlatformManager(PlatformManager):
 
     # ========== 基础能力实现 ==========
 
+    def _convert_coords(self, x: int, y: int) -> tuple[int, int]:
+        """转换物理像素坐标到 WDA 逻辑坐标。"""
+        # iPhone 8 及多数 iPhone 的缩放因子是 2x
+        # 如果坐标超过逻辑分辨率范围，说明是物理坐标，需要转换
+        # iPhone 8 逻辑分辨率: 375x667，物理分辨率: 750x1334
+        if x > 400 or y > 700:  # 明显超过逻辑分辨率
+            return (x // 2, y // 2)
+        return (x, y)
+
     def click(self, x: int, y: int, context: Any = None) -> None:
         """点击指定坐标。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            client.tap(x, y)
+            # 转换坐标
+            wx, wy = self._convert_coords(x, y)
+            success = client.tap(wx, wy)
+            if not success:
+                raise RuntimeError(f"Tap failed at ({wx}, {wy})")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标（模拟两次快速点击）。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            # 模拟双击：快速两次点击，间隔100ms
-            client.tap(x, y)
+            wx, wy = self._convert_coords(x, y)
+            success = client.tap(wx, wy)
+            if not success:
+                raise RuntimeError(f"First tap failed at ({wx}, {wy})")
             import time
             time.sleep(0.1)
-            client.tap(x, y)
+            success = client.tap(wx, wy)
+            if not success:
+                raise RuntimeError(f"Second tap failed at ({wx}, {wy})")
 
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标（移动端不支持）。"""
@@ -233,25 +262,38 @@ class iOSPlatformManager(PlatformManager):
         """输入文本。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            client.send_keys(text)
+            success = client.send_keys(text)
+            if not success:
+                raise RuntimeError(f"Send keys failed: {text}")
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, context: Any = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
         """滑动。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            client.swipe(start_x, start_y, end_x, end_y)
+            wx1, wy1 = self._convert_coords(start_x, start_y)
+            wx2, wy2 = self._convert_coords(end_x, end_y)
+            # duration 单位转换：毫秒 → 秒
+            duration_sec = duration / 1000.0
+            success = client.swipe(wx1, wy1, wx2, wy2, duration=duration_sec)
+            if not success:
+                raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            client.press_button(key.upper())
+            success = client.press_button(key.upper())
+            if not success:
+                raise RuntimeError(f"Press button failed: {key}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图。"""
         client = context or self._device_clients.get(self._current_device)
         if client:
-            return client.screenshot()
+            data = client.screenshot()
+            if not data:
+                raise RuntimeError("Screenshot failed")
+            return data
         return b""
 
     def get_screenshot(self, context: Any) -> bytes:

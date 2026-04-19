@@ -747,6 +747,20 @@ class Worker:
             # 创建执行上下文
             if needs_context:
                 try:
+                    # 移动端：确保设备服务可用（启动 WDA/u2）
+                    if platform in ("ios", "android") and task.device_id:
+                        status, message = manager.ensure_device_service(task.device_id)
+                        if status != "online":
+                            return TaskResult(
+                                task_id=task.task_id,
+                                status=TaskStatus.FAILED,
+                                platform=platform,
+                                error=f"Device service not available: {message}",
+                            )
+                        # 服务启动成功，通知 device_monitor 更新设备状态
+                        if self.device_monitor:
+                            self.device_monitor.mark_device_online(platform, task.device_id)
+
                     context = manager.create_context(device_id=task.device_id, options=task.metadata)
                 except Exception as e:
                     exc_type, exc_value, exc_tb = sys.exc_info()
@@ -1060,6 +1074,22 @@ class Worker:
 
             context = None
             try:
+                # 移动端：确保设备服务可用（启动 WDA/u2）
+                if platform in ("ios", "android") and task.device_id:
+                    status, message = manager.ensure_device_service(task.device_id)
+                    if status != "online":
+                        entry.status = TaskStatus.FAILED
+                        entry.result = TaskResult(
+                            task_id=task.task_id,
+                            status=TaskStatus.FAILED,
+                            platform=platform,
+                            error=f"Device service not available: {message}",
+                        )
+                        return
+                    # 服务启动成功，通知 device_monitor 更新设备状态
+                    if self.device_monitor:
+                        self.device_monitor.mark_device_online(platform, task.device_id)
+
                 # 创建执行上下文
                 context = manager.create_context(device_id=task.device_id, options=task.metadata)
 

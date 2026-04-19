@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 # iOS 设备型号映射
 IOS_DEVICE_MODELS = {
+    "iPhone10,1": "iPhone 8",
+    "iPhone10,2": "iPhone 8 Plus",
+    "iPhone10,3": "iPhone X",
+    "iPhone10,4": "iPhone 8",
+    "iPhone10,5": "iPhone 8 Plus",
+    "iPhone10,6": "iPhone X",
     "iPhone14,2": "iPhone 13 Pro",
     "iPhone14,3": "iPhone 13 Pro Max",
     "iPhone14,4": "iPhone 13 mini",
@@ -29,6 +35,12 @@ IOS_DEVICE_MODELS = {
 
 # 设备分辨率映射
 IOS_RESOLUTION_MAP = {
+    "iPhone10,1": "750x1334",   # iPhone 8
+    "iPhone10,2": "1080x1920",  # iPhone 8 Plus
+    "iPhone10,3": "1125x2436",  # iPhone X
+    "iPhone10,4": "750x1334",   # iPhone 8 (GSM)
+    "iPhone10,5": "1080x1920",  # iPhone 8 Plus (GSM)
+    "iPhone10,6": "1125x2436",  # iPhone X (GSM)
     "iPhone14,2": "1170x2532",
     "iPhone14,3": "1284x2778",
     "iPhone14,4": "1080x2340",
