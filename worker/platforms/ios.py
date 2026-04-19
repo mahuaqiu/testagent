@@ -374,7 +374,7 @@ class iOSPlatformManager(PlatformManager):
     # ========== 平台特有动作实现 ==========
 
     def _action_start_app(self, client, action: Action) -> ActionResult:
-        """启动应用。"""
+        """启动应用（含锁屏检测）。"""
         bundle_id = action.bundle_id or action.value
         if not bundle_id:
             return ActionResult(
@@ -383,6 +383,24 @@ class iOSPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 error="bundle_id is required",
             )
+
+        # 检测锁屏状态，如果锁屏则先解锁
+        if client and hasattr(client, "is_locked"):
+            try:
+                is_locked = client.is_locked()
+                if is_locked:
+                    logger.info("Screen is locked, performing auto unlock before start_app")
+                    unlock_result = self._auto_unlock(client)
+                    if unlock_result.status != ActionStatus.SUCCESS:
+                        return ActionResult(
+                            number=0,
+                            action_type="start_app",
+                            status=ActionStatus.FAILED,
+                            error=f"Auto unlock failed: {unlock_result.error}",
+                        )
+                    logger.info("Auto unlock completed, proceeding with start_app")
+            except Exception as e:
+                logger.warning(f"Failed to check lock status: {e}")
 
         if client and self._current_device:
             try:
@@ -400,6 +418,30 @@ class iOSPlatformManager(PlatformManager):
             status=ActionStatus.SUCCESS,
             output=f"Started: {bundle_id}",
         )
+
+    def _auto_unlock(self, client) -> ActionResult:
+        """自动解锁屏幕（使用配置密码）。"""
+        from worker.actions import ActionRegistry
+        from worker.task import Action
+
+        # 从配置读取密码
+        password = self._unlock_config.get("password", "123456")
+
+        unlock_action = Action(
+            action_type="unlock_screen",
+            value=password,
+        )
+
+        executor = ActionRegistry.get("unlock_screen")
+        if executor:
+            return executor.execute(self, unlock_action, client)
+        else:
+            return ActionResult(
+                number=0,
+                action_type="unlock_screen",
+                status=ActionStatus.FAILED,
+                error="unlock_screen executor not found",
+            )
 
     def _action_stop_app(self, client, action: Action) -> ActionResult:
         """关闭应用。"""

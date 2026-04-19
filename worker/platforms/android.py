@@ -6,15 +6,15 @@ Android 平台执行引擎。
 
 import logging
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 import uiautomator2 as u2
 
 from common.utils import run_cmd
+from worker.actions import ActionRegistry
+from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class AndroidPlatformManager(PlatformManager):
     使用 uiautomator2 直连控制 Android 设备。
     """
 
-    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app", "unlock_screen"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
 
     KEY_MAP = {
         "HOME": 3,
@@ -38,8 +38,8 @@ class AndroidPlatformManager(PlatformManager):
 
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
-        self._device_clients: Dict[str, u2.Device] = {}
-        self._current_device: Optional[str] = None
+        self._device_clients: dict[str, u2.Device] = {}
+        self._current_device: str | None = None
         self._unlock_config = unlock_config or {}  # 解锁配置
 
     @property
@@ -107,7 +107,7 @@ class AndroidPlatformManager(PlatformManager):
 
     # ========== 上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> u2.Device:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> u2.Device:
         """获取已有的设备连接。"""
         if not self.is_available():
             raise RuntimeError("Android platform not started")
@@ -134,13 +134,13 @@ class AndroidPlatformManager(PlatformManager):
 
     # ========== 会话管理（兼容旧接口） ==========
 
-    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+    def has_active_session(self, device_id: str | None = None) -> bool:
         """检查是否有活跃的会话。"""
         if device_id:
             return device_id in self._device_clients
         return len(self._device_clients) > 0
 
-    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+    def get_session_context(self, device_id: str | None = None) -> Any:
         """获取当前会话的上下文。"""
         if device_id:
             return self._device_clients.get(device_id)
@@ -148,7 +148,7 @@ class AndroidPlatformManager(PlatformManager):
             return self._device_clients.get(self._current_device)
         return None
 
-    def close_session(self, device_id: Optional[str] = None) -> None:
+    def close_session(self, device_id: str | None = None) -> None:
         """关闭会话。"""
         if device_id:
             if device_id in self._device_clients:
@@ -289,7 +289,7 @@ class AndroidPlatformManager(PlatformManager):
     # ========== 平台特有动作实现 ==========
 
     def _action_start_app(self, device, action: Action) -> ActionResult:
-        """启动应用。"""
+        """启动应用（含锁屏检测）。"""
         package = action.package_name or action.value
         if not package:
             return ActionResult(
@@ -298,6 +298,25 @@ class AndroidPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 error="package_name is required",
             )
+
+        # 检测锁屏状态，如果锁屏则先解锁
+        if device:
+            try:
+                info = device.info
+                is_screen_on = info.get("screenOn", True)
+                if not is_screen_on:
+                    logger.info("Screen is off, performing auto unlock before start_app")
+                    unlock_result = self._auto_unlock(device)
+                    if unlock_result.status != ActionStatus.SUCCESS:
+                        return ActionResult(
+                            number=0,
+                            action_type="start_app",
+                            status=ActionStatus.FAILED,
+                            error=f"Auto unlock failed: {unlock_result.error}",
+                        )
+                    logger.info("Auto unlock completed, proceeding with start_app")
+            except Exception as e:
+                logger.warning(f"Failed to check screen status: {e}")
 
         if device:
             device.app_start(package)
@@ -309,6 +328,30 @@ class AndroidPlatformManager(PlatformManager):
             output=f"Started: {package}",
         )
 
+    def _auto_unlock(self, device) -> ActionResult:
+        """自动解锁屏幕（使用配置密码）。"""
+        from worker.actions import ActionRegistry
+        from worker.task import Action
+
+        # 从配置读取密码
+        password = self._unlock_config.get("password", "123456")
+
+        unlock_action = Action(
+            action_type="unlock_screen",
+            value=password,
+        )
+
+        executor = ActionRegistry.get("unlock_screen")
+        if executor:
+            return executor.execute(self, unlock_action, device)
+        else:
+            return ActionResult(
+                number=0,
+                action_type="unlock_screen",
+                status=ActionStatus.FAILED,
+                error="unlock_screen executor not found",
+            )
+
     def _action_stop_app(self, device, action: Action) -> ActionResult:
         """关闭应用。"""
         if device and self._current_device:
@@ -319,7 +362,7 @@ class AndroidPlatformManager(PlatformManager):
                 number=0,
                 action_type="stop_app",
                 status=ActionStatus.SUCCESS,
-                output=f"Stopped app",
+                output="Stopped app",
             )
         else:
             return ActionResult(

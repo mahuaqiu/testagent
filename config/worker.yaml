@@ -92,7 +92,11 @@ upgrade:
 
 # Unlock Screen Settings (iOS/Android only)
 unlock:
-  click_interval: 150               # Click interval (milliseconds) between password digits
+  # 默认解锁密码
+  password: "123456"
+
+  # 点击间隔（毫秒）
+  click_interval: 150
 
   # iOS unlock method per device (物理分辨率)
   # 解锁方式：home_key（按HOME键出现密码界面）或 swipe_up（向上滑动）
