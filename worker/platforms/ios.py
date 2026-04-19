@@ -4,6 +4,7 @@ iOS 平台执行引擎。
 基于 tidevice3 + WDA 直连实现，支持 OCR/图像识别定位。
 """
 
+import json
 import logging
 import time
 from typing import Any
@@ -425,8 +426,16 @@ class iOSPlatformManager(PlatformManager):
                 error="bundle_id is required",
             )
 
+        if not client or not self._current_device:
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error="No device context",
+            )
+
         # 检测锁屏状态，如果锁屏则先解锁
-        if client and hasattr(client, "is_locked"):
+        if hasattr(client, "is_locked"):
             try:
                 is_locked = client.is_locked()
                 if is_locked:
@@ -443,22 +452,26 @@ class iOSPlatformManager(PlatformManager):
             except Exception as e:
                 logger.warning(f"Failed to check lock status: {e}")
 
-        if client and self._current_device:
-            try:
-                # t3 app launch 命令格式
-                run_cmd(
-                    ["t3", "-u", self._current_device, "app", "launch", bundle_id],
-                    check=True, timeout=30
-                )
-            except Exception as e:
-                logger.warning(f"Failed to launch app via t3: {e}")
-
-        return ActionResult(
-            number=0,
-            action_type="start_app",
-            status=ActionStatus.SUCCESS,
-            output=f"Started: {bundle_id}",
-        )
+        try:
+            # t3 app launch 命令格式
+            run_cmd(
+                ["t3", "-u", self._current_device, "app", "launch", bundle_id],
+                check=True, timeout=30
+            )
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.SUCCESS,
+                output=f"Started: {bundle_id}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to launch app via t3: {e}")
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error=str(e),
+            )
 
     def _auto_unlock(self, client) -> ActionResult:
         """自动解锁屏幕（使用配置密码）。"""
@@ -486,17 +499,68 @@ class iOSPlatformManager(PlatformManager):
 
     def _action_stop_app(self, client, action: Action) -> ActionResult:
         """关闭应用。"""
-        if self._current_device:
-            return ActionResult(
-                number=0,
-                action_type="stop_app",
-                status=ActionStatus.SUCCESS,
-                output="Stopped app session",
-            )
-        else:
+        bundle_id = action.bundle_id or action.value
+
+        if not client or not self._current_device:
             return ActionResult(
                 number=0,
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error="No device context",
+            )
+
+        try:
+            # 如果指定了 bundle_id，先获取 PID 再 kill
+            if bundle_id:
+                # 获取进程列表
+                result = run_cmd(
+                    ["t3", "-u", self._current_device, "app", "ps", "--json"],
+                    check=True, timeout=30
+                )
+                processes = json.loads(result.stdout)
+
+                # 查找目标应用的 PID
+                target_pid = None
+                for proc in processes:
+                    if proc.get("bundleIdentifier") == bundle_id:
+                        target_pid = proc.get("pid")
+                        break
+
+                if target_pid:
+                    # 使用 PID 关闭应用
+                    run_cmd(
+                        ["t3", "-u", self._current_device, "app", "kill", str(target_pid)],
+                        check=True, timeout=30
+                    )
+                    return ActionResult(
+                        number=0,
+                        action_type="stop_app",
+                        status=ActionStatus.SUCCESS,
+                        output=f"Stopped: {bundle_id}",
+                    )
+                else:
+                    # 应用未运行，也算成功
+                    return ActionResult(
+                        number=0,
+                        action_type="stop_app",
+                        status=ActionStatus.SUCCESS,
+                        output=f"App not running: {bundle_id}",
+                    )
+            else:
+                # 未指定 bundle_id，按 HOME 键回到主屏幕
+                if hasattr(client, "press_button"):
+                    client.press_button("home")
+                return ActionResult(
+                    number=0,
+                    action_type="stop_app",
+                    status=ActionStatus.SUCCESS,
+                    output="Pressed HOME key",
+                )
+        except Exception as e:
+            logger.error(f"Failed to stop app: {e}")
+            return ActionResult(
+                number=0,
+                action_type="stop_app",
+                status=ActionStatus.FAILED,
+                error=str(e),
             )

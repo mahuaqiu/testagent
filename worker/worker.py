@@ -713,9 +713,16 @@ class Worker:
         if validation_result:
             return validation_result
 
+        # 移动端 start_app/stop_app 需要确保设备服务可用，即使 needs_context=False
+        # 因为这些动作依赖 _current_device 和 client 来执行命令
+        needs_device_service = (
+            platform in ("ios", "android")
+            and task.device_id
+            and any(a.action_type in ("start_app", "stop_app") for a in task.actions)
+        )
+
         # 启动平台（如果未启动）
-        # 如果任务包含 start_app，则不自动启动，由 start_app 自己控制
-        needs_auto_start = self._needs_auto_start(task)
+        needs_auto_start = self._needs_auto_start(task) or needs_device_service
         if needs_auto_start and not manager.is_available():
             try:
                 manager.start()
@@ -747,7 +754,7 @@ class Worker:
             needs_context = self._needs_context(task)
 
             # 创建执行上下文
-            if needs_context:
+            if needs_context or needs_device_service:
                 try:
                     # 移动端：确保设备服务可用（启动 WDA/u2）
                     if platform in ("ios", "android") and task.device_id:

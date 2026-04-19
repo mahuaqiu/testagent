@@ -333,27 +333,33 @@ class AndroidPlatformManager(PlatformManager):
                 error="package_name is required",
             )
 
-        # 检测锁屏状态，如果锁屏则先解锁
-        if device:
-            try:
-                info = device.info
-                is_screen_on = info.get("screenOn", True)
-                if not is_screen_on:
-                    logger.info("Screen is off, performing auto unlock before start_app")
-                    unlock_result = self._auto_unlock(device)
-                    if unlock_result.status != ActionStatus.SUCCESS:
-                        return ActionResult(
-                            number=0,
-                            action_type="start_app",
-                            status=ActionStatus.FAILED,
-                            error=f"Auto unlock failed: {unlock_result.error}",
-                        )
-                    logger.info("Auto unlock completed, proceeding with start_app")
-            except Exception as e:
-                logger.warning(f"Failed to check screen status: {e}")
+        if not device or not self._current_device:
+            return ActionResult(
+                number=0,
+                action_type="start_app",
+                status=ActionStatus.FAILED,
+                error="No device context",
+            )
 
-        if device:
-            device.app_start(package)
+        # 检测锁屏状态，如果锁屏则先解锁
+        try:
+            info = device.info
+            is_screen_on = info.get("screenOn", True)
+            if not is_screen_on:
+                logger.info("Screen is off, performing auto unlock before start_app")
+                unlock_result = self._auto_unlock(device)
+                if unlock_result.status != ActionStatus.SUCCESS:
+                    return ActionResult(
+                        number=0,
+                        action_type="start_app",
+                        status=ActionStatus.FAILED,
+                        error=f"Auto unlock failed: {unlock_result.error}",
+                    )
+                logger.info("Auto unlock completed, proceeding with start_app")
+        except Exception as e:
+            logger.warning(f"Failed to check screen status: {e}")
+
+        device.app_start(package)
 
         return ActionResult(
             number=0,
