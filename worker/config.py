@@ -72,6 +72,9 @@ class WorkerConfig:
     upgrade_check_timeout: int = 30   # 升级检查超时（秒）
     upgrade_download_timeout: int = 300  # 升级下载超时（秒）
 
+    # 解锁屏幕配置
+    unlock: Dict[str, Any] = field(default_factory=dict)
+
     # 配置版本号
     config_version: Optional[str] = None
 
@@ -105,6 +108,7 @@ class WorkerConfig:
         logging_cfg = data.get("logging", {})
         image_matching = data.get("image_matching", {})
         upgrade_cfg = data.get("upgrade", {})
+        unlock_cfg = data.get("unlock", {})
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -126,6 +130,7 @@ class WorkerConfig:
             upgrade_check_url=upgrade_cfg.get("check_url", ""),
             upgrade_check_timeout=upgrade_cfg.get("check_timeout", 30),
             upgrade_download_timeout=upgrade_cfg.get("download_timeout", 300),
+            unlock=unlock_cfg,
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:

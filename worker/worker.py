@@ -272,6 +272,8 @@ class Worker:
 
     def _init_platform_managers(self) -> None:
         """初始化平台管理器。"""
+        unlock_config = self.config.unlock  # 获取解锁配置
+
         for platform in self.supported_platforms:
             platform_config = PlatformConfig.from_dict(
                 self.config.get_platform_config(platform)
@@ -281,10 +283,10 @@ class Worker:
                 if platform == "web":
                     manager = WebPlatformManager(platform_config, self.ocr_client)
                 elif platform == "android":
-                    manager = AndroidPlatformManager(platform_config, self.ocr_client)
+                    manager = AndroidPlatformManager(platform_config, self.ocr_client, unlock_config)
                     self.android_manager = manager
                 elif platform == "ios":
-                    manager = iOSPlatformManager(platform_config, self.ocr_client)
+                    manager = iOSPlatformManager(platform_config, self.ocr_client, unlock_config)
                     self.ios_manager = manager
                 elif platform == "windows":
                     manager = WindowsPlatformManager(platform_config, self.ocr_client)

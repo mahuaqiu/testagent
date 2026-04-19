@@ -260,7 +260,7 @@ components:
         screenshot_on_error:
           type: boolean
           default: true
-          description: "任务失败时是否自动截图，截图将以 base64 编码返回"ss
+          description: "任务失败时是否自动截图，截图将以 base64 编码返回"
         slow_motion:
           type: integer
           default: 0
@@ -321,6 +321,7 @@ components:
             - ocr_get_position
             - image_get_position
             - cmd_exec
+            - unlock_screen
           description: |
             动作类型，分为以下几类：
 
@@ -368,6 +369,7 @@ components:
             - switched_page: 切换到指定页面（Web 专用）
             - close_page: 关闭当前页面（Web 专用）
             - cmd_exec: 在宿主机执行 shell/cmd 命令
+            - unlock_screen: 解锁屏幕（iOS/Android 专用）
         level:
           type: string
           enum: [browser, system]
@@ -421,6 +423,7 @@ components:
             - close_page: 此字段不使用
             - ocr_get_position: 要查找的文字内容（支持 reg_ 前缀正则匹配）
             - cmd_exec: 要执行的命令字符串，如 "echo hello" 或 "dir C:\\Users"
+            - unlock_screen: 解锁密码（数字密码，如 "123456"）
         text:
           type: string
           description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
@@ -945,3 +948,15 @@ components:
   # 启动PPT幻灯片放映，启动成功后立即返回（不等待播放完成）
   # 示例 6: 仅打开PPT编辑模式（不进入放映）
   # {"action_type": "cmd_exec", "value": "powershell -ExecutionPolicy Bypass -File \"@tools/play_ppt.ps1\" -FilePath \"C:\\demo.pptx\" -AutoPlay false"}
+
+  # ---------- 移动端解锁动作 ----------
+  # unlock_screen - 解锁屏幕（仅 iOS/Android 平台）
+  # 检测设备锁屏状态并自动解锁，使用固定坐标点击密码键盘
+  # 配置：密码键盘坐标在 config/worker.yaml 的 unlock 配置中设置
+  # iOS 锁屏检测：GET /wda/locked
+  # Android 锁屏检测：device.info['screenOn']
+  # 执行流程：检测锁屏 → 唤醒屏幕 → 滑动解锁 → 输入密码 → 验证解锁
+  # 示例 1: 解锁 iOS 设备，密码 123456
+  # {"action_type": "unlock_screen", "value": "123456"}
+  # 示例 2: 解锁 Android 设备，密码 123456
+  # {"action_type": "unlock_screen", "value": "123456"}

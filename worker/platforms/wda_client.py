@@ -7,7 +7,6 @@ WDA (WebDriverAgent) HTTP 客户端。
 import base64
 import logging
 import time
-from typing import Optional
 
 import httpx
 
@@ -21,7 +20,7 @@ class WDAClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = httpx.Client(timeout=timeout)
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
 
     def health_check(self) -> bool:
         """检查服务状态。"""
@@ -137,6 +136,51 @@ class WDAClient:
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Press button failed: {e}")
+            return False
+
+    def is_locked(self) -> bool:
+        """检测屏幕是否锁定（GET /wda/locked）。"""
+        try:
+            session_id = self._get_session()
+            response = self.session.get(
+                f"{self.base_url}/session/{session_id}/wda/locked"
+            )
+            if response.status_code == 200:
+                data = response.json()
+                # WDA 返回 {"value": true/false}
+                return data.get("value", False)
+            return False
+        except Exception as e:
+            logger.error(f"Is locked check failed: {e}")
+            # 检测失败时假设已锁定，安全起见
+            return True
+
+    def wake_screen(self) -> bool:
+        """唤醒屏幕（按 HOME 键）。"""
+        return self.press_button("home")
+
+    def swipe_up_for_unlock(self) -> bool:
+        """从底部向上滑动解锁（iOS 锁屏界面）。"""
+        try:
+            session_id = self._get_session()
+            # 获取屏幕尺寸
+            response = self.session.get(f"{self.base_url}/session/{session_id}/window/size")
+            if response.status_code == 200:
+                data = response.json()
+                size = data.get("value", {})
+                width = size.get("width", 375)
+                height = size.get("height", 667)
+            else:
+                # 默认尺寸（iPhone 8）
+                width, height = 187, 333  # WDA 逻辑坐标
+
+            # 从底部中间向上滑动（避开底部边缘）
+            center_x = width // 2
+            start_y = int(height * 0.9)
+            end_y = int(height * 0.3)
+            return self.swipe(center_x, start_y, center_x, end_y, duration=0.3)
+        except Exception as e:
+            logger.error(f"Swipe up for unlock failed: {e}")
             return False
 
     def close(self) -> None:

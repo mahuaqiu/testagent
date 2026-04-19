@@ -26,7 +26,7 @@ class AndroidPlatformManager(PlatformManager):
     使用 uiautomator2 直连控制 Android 设备。
     """
 
-    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
+    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app", "unlock_screen"}
 
     KEY_MAP = {
         "HOME": 3,
@@ -36,10 +36,11 @@ class AndroidPlatformManager(PlatformManager):
         "SEARCH": 84,
     }
 
-    def __init__(self, config: PlatformConfig, ocr_client=None):
+    def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
         self._device_clients: Dict[str, u2.Device] = {}
         self._current_device: Optional[str] = None
+        self._unlock_config = unlock_config or {}  # 解锁配置
 
     @property
     def platform(self) -> str:
@@ -248,6 +249,17 @@ class AndroidPlatformManager(PlatformManager):
                 result = self._action_start_app(device, action)
             elif action.action_type == "stop_app":
                 result = self._action_stop_app(device, action)
+            elif action.action_type == "unlock_screen":
+                executor = ActionRegistry.get(action.action_type)
+                if executor:
+                    result = executor.execute(self, action, device)
+                else:
+                    result = ActionResult(
+                        number=0,
+                        action_type=action.action_type,
+                        status=ActionStatus.FAILED,
+                        error=f"Unknown action type: {action.action_type}",
+                    )
             else:
                 executor = ActionRegistry.get(action.action_type)
                 if executor:

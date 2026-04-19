@@ -100,6 +100,7 @@ PlatformManager (抽象基类)
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`, `new_page`, `switched_page`, `close_page`
 - **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
+- **移动端特有**：`unlock_screen` - 解锁屏幕（iOS/Android 专用）
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
@@ -184,6 +185,35 @@ PlatformManager (抽象基类)
 }
 ```
 }
+
+### unlock_screen 解锁屏幕（iOS/Android 专用）
+
+检测设备锁屏状态并自动解锁。使用固定坐标点击密码键盘，不依赖 OCR。
+
+**使用示例**：
+```json
+{
+  "action_type": "unlock_screen",
+  "value": "123456"
+}
+```
+
+**执行流程**：
+1. 检测锁屏状态（iOS: `/wda/locked`，Android: `device.info['screenOn']`）
+2. 唤醒屏幕（如熄屏）
+3. 触发密码界面（根据机型配置选择方式）
+4. 输入密码（固定坐标点击，带间隔）
+5. 验证解锁成功
+
+**iOS 解锁方式**（按机型配置）：
+- `home_key`：唤醒后按 HOME 键出现密码界面（iPhone 8/SE 等 Touch ID 机型）
+- `swipe_up`：向上滑动出现密码界面（iPhone X/11/14 等 Face ID 机型）
+
+**配置项**（`config/worker.yaml`）：
+- `unlock.click_interval`: 点击间隔（毫秒），默认 150
+- `unlock.ios_unlock_method`: iOS 解锁方式配置（按分辨率）
+- `unlock.ios_keypad`: iOS 密码键盘坐标配置（物理分辨率）
+- `unlock.android_keypad`: Android 密码键盘坐标配置（物理分辨率）
 
 ## 任务执行流程
 

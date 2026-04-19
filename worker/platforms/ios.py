@@ -5,16 +5,15 @@ iOS 平台执行引擎。
 """
 
 import logging
-import subprocess  # 用于 CalledProcessError 异常类型
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
-from common.utils import run_cmd, popen_cmd
+from common.utils import run_cmd
+from worker.actions import ActionRegistry
+from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.platforms.wda_client import WDAClient
 from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +25,17 @@ class iOSPlatformManager(PlatformManager):
     使用 tidevice3 + WDA 直连控制 iOS 设备。
     """
 
-    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
 
-    def __init__(self, config: PlatformConfig, ocr_client=None):
+    def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
         self.wda_base_port = config.wda_base_port or 8100
         self.wda_ipa_path = config.wda_ipa_path or "wda/WebDriverAgent.ipa"
         self.wda_bundle_id = config.wda_bundle_id or "com.facebook.WebDriverAgentRunner"
-        self._device_wda: Dict[str, dict] = {}
-        self._device_clients: Dict[str, WDAClient] = {}
-        self._current_device: Optional[str] = None
+        self._device_wda: dict[str, dict] = {}
+        self._device_clients: dict[str, WDAClient] = {}
+        self._current_device: str | None = None
+        self._unlock_config = unlock_config or {}  # 解锁配置
 
     @property
     def platform(self) -> str:
@@ -164,7 +164,7 @@ class iOSPlatformManager(PlatformManager):
 
     # ========== 上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> WDAClient:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> WDAClient:
         """获取已有的 WDA 连接。"""
         if not self.is_available():
             raise RuntimeError("iOS platform not started")
@@ -192,13 +192,13 @@ class iOSPlatformManager(PlatformManager):
 
     # ========== 会话管理（兼容旧接口） ==========
 
-    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+    def has_active_session(self, device_id: str | None = None) -> bool:
         """检查是否有活跃的会话。"""
         if device_id:
             return device_id in self._device_clients
         return len(self._device_clients) > 0
 
-    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+    def get_session_context(self, device_id: str | None = None) -> Any:
         """获取当前会话的上下文。"""
         if device_id:
             return self._device_clients.get(device_id)
@@ -206,7 +206,7 @@ class iOSPlatformManager(PlatformManager):
             return self._device_clients.get(self._current_device)
         return None
 
-    def close_session(self, device_id: Optional[str] = None) -> None:
+    def close_session(self, device_id: str | None = None) -> None:
         """关闭会话。"""
         if device_id:
             self._stop_wda(device_id)
@@ -307,6 +307,7 @@ class iOSPlatformManager(PlatformManager):
         start_time = time.time()
 
         client = context
+        # start_app/stop_app 不需要预先检查 context（会在内部处理）
         if not client and action.action_type not in ("start_app", "stop_app"):
             return ActionResult(
                 number=0,
@@ -326,6 +327,17 @@ class iOSPlatformManager(PlatformManager):
                 result = self._action_start_app(client, action)
             elif action.action_type == "stop_app":
                 result = self._action_stop_app(client, action)
+            elif action.action_type == "unlock_screen":
+                executor = ActionRegistry.get(action.action_type)
+                if executor:
+                    result = executor.execute(self, action, client)
+                else:
+                    result = ActionResult(
+                        number=0,
+                        action_type=action.action_type,
+                        status=ActionStatus.FAILED,
+                        error=f"Unknown action type: {action.action_type}",
+                    )
             elif action.action_type == "ocr_paste":
                 result = ActionResult(
                     number=0,
@@ -396,7 +408,7 @@ class iOSPlatformManager(PlatformManager):
                 number=0,
                 action_type="stop_app",
                 status=ActionStatus.SUCCESS,
-                output=f"Stopped app session",
+                output="Stopped app session",
             )
         else:
             return ActionResult(
