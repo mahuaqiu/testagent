@@ -119,7 +119,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(curl -s -X POST http://127.0.0.1:8100/session -H \"Content-Type: application/json\" -d '{\"capabilities\": {}}')",
       "Bash(curl *)",
-      "WebFetch(domain:appium.github.io)"
+      "WebFetch(domain:appium.github.io)",
+      "Bash(dir \"D:\\\\code\\\\Airtest-master\\\\airtest\\\\core\\\\android\\\\static\\\\stf_libs\" /b)"
     ]
   }
 }

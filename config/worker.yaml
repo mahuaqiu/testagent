@@ -93,7 +93,7 @@ upgrade:
 # Unlock Screen Settings (iOS/Android only)
 unlock:
   # 默认解锁密码
-  password: "123456"
+  password: "3665"
 
   # 点击间隔（毫秒）
   click_interval: 150

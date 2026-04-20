@@ -6,12 +6,10 @@ Minicap 截图工具实现。
 """
 
 import logging
-import os
 import re
 import subprocess
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image
 
@@ -36,9 +34,9 @@ class Minicap:
     def __init__(self, udid: str):
         self.udid = udid
         self._installed = False
-        self._abi: Optional[str] = None
-        self._sdk: Optional[int] = None
-        self._display_info: Optional[dict] = None
+        self._abi: str | None = None
+        self._sdk: int | None = None
+        self._display_info: dict | None = None
 
     def _adb_shell(self, cmd: str, timeout: int = 30) -> str:
         """执行 adb shell 命令"""

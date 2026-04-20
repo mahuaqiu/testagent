@@ -20,6 +20,7 @@ datas = [
     (os.path.join(PROJECT_ROOT, 'config'), 'config'),
     (os.path.join(PROJECT_ROOT, 'assets'), 'assets'),  # 图标文件
     (os.path.join(PROJECT_ROOT, 'tools'), 'tools'),  # 新增：脚本目录
+    (os.path.join(PROJECT_ROOT, 'worker', 'platforms', 'minicap', 'static', 'stf_libs'), 'worker/platforms/minicap/static/stf_libs'),  # minicap 资源
 ]
 
 # 收集 cv2 (OpenCV) 数据文件
