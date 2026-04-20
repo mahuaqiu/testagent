@@ -113,30 +113,34 @@ class UnlockScreenAction(ActionExecutor):
             if not is_screen_on:
                 logger.info("Screen is off, waking up...")
                 self._wake_screen(platform, context)
-                time.sleep(0.5)  # 等待屏幕亮起
+                time.sleep(1.0)  # 等待屏幕亮起
 
-            # 4. 再次检测锁屏状态（唤醒后可能需要解锁）
-            if not is_locked:
-                is_locked = self._check_locked(platform, context)
-                logger.info(f"Screen locked status after wake: {is_locked}")
+                # 3.1 再次检测亮度，验证唤醒成功
+                is_screen_on_after = self._check_screen_brightness(platform, context)
+                logger.info(f"Screen brightness after wake: {'on' if is_screen_on_after else 'off'}")
 
-            if not is_locked:
-                logger.info("Screen unlocked after wake, no password needed")
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    duration_ms=int((time.time() - start_time) * 1000),
-                    output="Screen woke up, already unlocked",
-                )
+                if not is_screen_on_after:
+                    logger.warning("Screen still off after wake attempt")
+                    return ActionResult(
+                        number=0,
+                        action_type=self.name,
+                        status=ActionStatus.FAILED,
+                        duration_ms=int((time.time() - start_time) * 1000),
+                        error="Screen still off after wake attempt",
+                    )
 
-            # 5. 触发密码界面（根据机型配置选择方式）
+                # 3.2 如果提供了密码，直接执行解锁流程（信任用户意图）
+                # 不需要检测是否需要密码，用户传密码就说明需要解锁
+                if password:
+                    logger.info("Password provided, proceeding with unlock flow")
+
+            # 4. 触发密码界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
             self._trigger_password_screen(platform, context, unlock_method)
             time.sleep(1.0)  # 等待密码界面出现
 
-            # 6. 输入密码（固定坐标点击，带间隔）
+            # 5. 输入密码（固定坐标点击，带间隔）
             for digit in password:
                 if digit not in keypad_coords:
                     logger.warning(f"Invalid password digit: {digit}, skipping")
@@ -152,10 +156,10 @@ class UnlockScreenAction(ActionExecutor):
                 # 点击间隔
                 time.sleep(click_interval / 1000.0)
 
-            # 7. 等待解锁完成
+            # 6. 等待解锁完成
             time.sleep(1.0)
 
-            # 8. 验证解锁成功
+            # 7. 验证解锁成功
             is_locked_after = self._check_locked(platform, context)
             duration_ms = int((time.time() - start_time) * 1000)
 
