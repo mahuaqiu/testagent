@@ -82,13 +82,13 @@ class iOSPlatformManager(PlatformManager):
         logger.info("iOS platform started (tidevice3 + WDA mode)")
 
     def stop(self) -> None:
-        """停止 iOS 平台。"""
-        for udid in list(self._device_wda.keys()):
-            self._stop_wda(udid)
+        """停止 iOS 平台（不关闭 WDA 进程，保持复用）。"""
+        # 不主动关闭 WDA，让其继续运行以便下次复用
+        # 只清理内存中的引用
         self._device_clients.clear()
-        self._device_wda.clear()
+        self._device_wda.clear()  # process=None 的不会被终止
         self._started = False
-        logger.info("iOS platform stopped")
+        logger.info("iOS platform stopped (WDA processes preserved for reuse)")
 
     def is_available(self) -> bool:
         """检查平台是否可用。"""
@@ -105,15 +105,26 @@ class iOSPlatformManager(PlatformManager):
                 logger.info(f"WDA already running: {udid}")
                 return ("online", "OK")
 
-            # 2. 探测配置端口是否有 WDA 运行（可能是手动启动的）
-            probe_client = WDAClient(f"http://127.0.0.1:{self.wda_base_port}")
-            if probe_client.health_check():
-                logger.info(f"Found existing WDA on port {self.wda_base_port}, reusing")
-                self._device_clients[udid] = probe_client
-                self._device_wda[udid] = {"port": self.wda_base_port, "process": None}
-                return ("online", "OK")
+            # 2. 检查端口是否被占用
+            port_occupied = self._check_port_occupied(self.wda_base_port)
 
-            # 3. 没有现成的 WDA，启动新的
+            if port_occupied:
+                # 端口被占用，探测是否有可用的 WDA（重试避免误杀）
+                probe_client = WDAClient(f"http://127.0.0.1:{self.wda_base_port}")
+                retry_count = 10
+                for i in range(retry_count):
+                    if probe_client.health_check():
+                        logger.info(f"Found existing WDA on port {self.wda_base_port}, reusing (attempt {i+1})")
+                        self._device_clients[udid] = probe_client
+                        self._device_wda[udid] = {"port": self.wda_base_port, "process": None}
+                        return ("online", "OK")
+                    time.sleep(1)
+
+                # 重试后仍失败，杀掉占用端口的进程
+                logger.warning(f"Port {self.wda_base_port} occupied but WDA not responding after {retry_count} retries, killing process")
+                self._kill_port_process(self.wda_base_port)
+
+            # 3. 启动新的 WDA
             return self._start_wda(udid)
         except Exception as e:
             logger.error(f"Failed to ensure WDA service: {udid}, {e}")
@@ -133,6 +144,42 @@ class iOSPlatformManager(PlatformManager):
     def _allocate_port(self) -> int:
         """分配 WDA 端口（固定使用配置的端口）。"""
         return self.wda_base_port
+
+    def _check_port_occupied(self, port: int) -> bool:
+        """检查端口是否被占用。"""
+        try:
+            result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    return True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check port: {e}")
+            return False
+
+    def _kill_port_process(self, port: int) -> None:
+        """杀掉占用指定端口的进程（Windows）。"""
+        try:
+            # Windows: 使用 netstat 查找占用端口的进程
+            result = run_cmd(
+                ["netstat", "-ano"],
+                check=True, timeout=10
+            )
+
+            # 解析输出找到占用端口的 PID
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        logger.info(f"Killing process {pid} occupying port {port}")
+                        run_cmd(["taskkill", "/F", "/PID", pid], check=True, timeout=10)
+                        time.sleep(1)  # 等待进程完全退出
+                        return
+
+            logger.info(f"No process found occupying port {port}")
+        except Exception as e:
+            logger.warning(f"Failed to kill port process: {e}")
 
     def _stop_wda(self, udid: str) -> None:
         """停止 WDA 进程。"""
@@ -155,9 +202,14 @@ class iOSPlatformManager(PlatformManager):
 
             port = self._allocate_port()
 
-            # t3 runwda 命令 - 不设置 stdin/stdout/stderr，让它们继承父进程
-            # DEVNULL 可能导致 t3 无法正常维持运行
+            # t3 runwda 命令 - 隐藏窗口，stderr 抑制（避免打印垃圾日志）
+            # Windows: 使用 DETACHED_PROCESS 让子进程独立运行，STARTUPINFO 隐藏窗口
             import subprocess
+            creationflags = subprocess.DETACHED_PROCESS if hasattr(subprocess, 'DETACHED_PROCESS') else 0
+            # 隐藏 CMD 窗口
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
             process = subprocess.Popen(
                 [
                     "t3",
@@ -166,7 +218,11 @@ class iOSPlatformManager(PlatformManager):
                     "--bundle-id", self.wda_bundle_id,
                     "--dst-port", str(port)
                 ],
-                # 不设置 stdin/stdout/stderr，保持连接
+                stdin=None,
+                stdout=None,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+                startupinfo=startupinfo,
             )
 
             base_url = f"http://127.0.0.1:{port}"
@@ -232,17 +288,19 @@ class iOSPlatformManager(PlatformManager):
         return None
 
     def close_session(self, device_id: str | None = None) -> None:
-        """关闭会话。"""
+        """关闭会话（不关闭 WDA 进程，保持复用）。"""
         if device_id:
-            self._stop_wda(device_id)
+            # 只清理内存引用，不关闭 WDA
+            if device_id in self._device_wda:
+                del self._device_wda[device_id]
             if device_id in self._device_clients:
                 del self._device_clients[device_id]
-            logger.info(f"iOS session closed (device={device_id})")
+            logger.info(f"iOS session closed (device={device_id}, WDA preserved)")
         else:
-            for udid in list(self._device_wda.keys()):
-                self._stop_wda(udid)
+            # 只清理内存引用
+            self._device_wda.clear()
             self._device_clients.clear()
-            logger.info("All iOS sessions closed")
+            logger.info("All iOS sessions closed (WDA preserved)")
 
     # ========== 基础能力实现 ==========
 
