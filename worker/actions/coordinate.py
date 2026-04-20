@@ -36,13 +36,21 @@ class ClickAction(BaseActionExecutor):
                 error="x and y coordinates are required",
             )
 
-        platform.click(action.x, action.y, context)
+        # 获取点击持续时间（毫秒）
+        click_duration = action.click_duration or 0
+
+        platform.click(action.x, action.y, duration=click_duration, context=context)
+
+        if click_duration > 0:
+            output = f"Long clicked at ({action.x}, {action.y}) for {click_duration}ms"
+        else:
+            output = f"Clicked at ({action.x}, {action.y})"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Clicked at ({action.x}, {action.y})",
+            output=output,
         )
 
 
@@ -130,8 +138,8 @@ class InputAction(BaseActionExecutor):
                 error="x and y coordinates are required",
             )
 
-        # 点击
-        platform.click(action.x, action.y, context)
+        # 点击（普通点击，duration=0）
+        platform.click(action.x, action.y, context=context)
 
         # 输入
         if action.text:
@@ -165,14 +173,20 @@ class DragAction(BaseActionExecutor):
         end_x = action.end_x if action.end_x is not None else action.x
         end_y = action.end_y if action.end_y is not None else action.y
         duration = action.duration or 500  # 默认 500ms
+        steps = action.steps  # 默认由平台决定
 
-        platform.swipe(action.x, action.y, end_x, end_y, duration, context)
+        platform.swipe(action.x, action.y, end_x, end_y, duration=duration, steps=steps, context=context)
+
+        if steps is not None:
+            output = f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y}) with steps={steps}"
+        else:
+            output = f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms",
+            output=output,
         )
 
 
@@ -196,14 +210,20 @@ class SwipeAction(BaseActionExecutor):
         end_x = action.end_x if action.end_x is not None else action.x
         end_y = action.end_y if action.end_y is not None else action.y
         duration = action.duration or 500  # 默认 500ms
+        steps = action.steps  # 默认由平台决定
 
-        platform.swipe(action.x, action.y, end_x, end_y, duration, context)
+        platform.swipe(action.x, action.y, end_x, end_y, duration=duration, steps=steps, context=context)
+
+        if steps is not None:
+            output = f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y}) with steps={steps}"
+        else:
+            output = f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Swiped from ({action.x}, {action.y}) to ({end_x}, {end_y}) in {duration}ms",
+            output=output,
         )
 
 

@@ -7,7 +7,7 @@ Android 平台执行引擎。
 
 import logging
 import time
-from typing import Any
+from typing import Any, Optional
 
 import uiautomator2 as u2
 
@@ -204,11 +204,25 @@ class AndroidPlatformManager(PlatformManager):
 
     # ========== 基础能力实现 ==========
 
-    def click(self, x: int, y: int, context: Any = None) -> None:
-        """点击指定坐标。"""
+    def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
+        """点击指定坐标，支持长按。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 点击持续时间（毫秒），0=普通点击，>0=长按
+            context: 执行上下文
+        """
         device = context or self._device_clients.get(self._current_device)
         if device:
-            device.click(x, y)
+            if duration > 0:
+                # 长按：使用 long_click，单位转换 毫秒 → 秒
+                duration_sec = duration / 1000.0
+                logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
+                device.long_click(x, y, duration=duration_sec)
+            else:
+                logger.debug(f"Click at ({x}, {y})")
+                device.click(x, y)
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标（模拟两次快速点击）。"""
@@ -230,13 +244,25 @@ class AndroidPlatformManager(PlatformManager):
         if device:
             device.send_keys(text)
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
-        """滑动。"""
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
+              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+        """滑动，默认使用 steps=5 平滑滑动。
+
+        Args:
+            start_x: 起始 X 坐标
+            start_y: 起始 Y 坐标
+            end_x: 结束 X 坐标
+            end_y: 结束 Y 坐标
+            duration: 滑动持续时间（毫秒），默认 500ms（steps 为 None 时使用）
+            steps: 滑动步数，控制轨迹平滑度。None 时默认使用 5 实现平滑滑动
+            context: 执行上下文
+        """
         device = context or self._device_clients.get(self._current_device)
         if device:
-            # duration 单位转换：毫秒 → 秒
-            duration_sec = duration / 1000.0
-            device.swipe(start_x, start_y, end_x, end_y, duration=duration_sec)
+            # 默认使用 steps=5 实现平滑滑动
+            actual_steps = steps if steps is not None else 5
+            logger.debug(f"Swipe with steps={actual_steps}")
+            device.swipe(start_x, start_y, end_x, end_y, steps=actual_steps)
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。

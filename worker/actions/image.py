@@ -75,14 +75,20 @@ class ImageClickAction(BaseActionExecutor):
         # 记录图像匹配结果
         logger.debug(f"Image matched: position=({x}, {y}), threshold={threshold}, index={index}")
 
-        # 点击
-        platform.click(x, y, context)
+        # 点击（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
+
+        if click_duration > 0:
+            output = f"Long clicked at ({x}, {y}) for {click_duration}ms"
+        else:
+            output = f"Clicked at ({x}, {y})"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Clicked at ({x}, {y})",
+            output=output,
         )
 
 
@@ -258,8 +264,9 @@ class ImageClickNearTextAction(BaseActionExecutor):
         # 记录匹配结果
         logger.debug(f"Image near text matched: text=\"{action.value}\", position=({x}, {y}), distance<={max_distance}")
 
-        # 点击
-        platform.click(x, y, context)
+        # 点击（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
 
         return ActionResult(
             number=0,
@@ -496,8 +503,9 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
         # 应用偏移
         x, y = self._apply_offset(target_x, target_y, action.offset)
 
-        # 点击
-        platform.click(x, y, context)
+        # 点击（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
 
         return ActionResult(
             number=0,

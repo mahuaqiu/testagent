@@ -138,6 +138,30 @@ class WDAClient:
             logger.error(f"Press button failed: {e}")
             return False
 
+    def touch_and_hold(self, x: int, y: int, duration: float = 1.0) -> bool:
+        """长按指定坐标。
+
+        Args:
+            x: X 坐标（WDA 逻辑坐标）
+            y: Y 坐标（WDA 逻辑坐标）
+            duration: 长按时间（秒）
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            session_id = self._get_session()
+            response = self.session.post(
+                f"{self.base_url}/session/{session_id}/wda/touchAndHold",
+                json={"x": x, "y": y, "duration": duration}
+            )
+            if response.status_code != 200:
+                logger.warning(f"Touch and hold failed: status={response.status_code}, body={response.text}")
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Touch and hold failed: {e}")
+            return False
+
     def is_locked(self) -> bool:
         """检测屏幕是否锁定（GET /wda/locked）。"""
         try:

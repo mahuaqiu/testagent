@@ -148,13 +148,14 @@ class PlatformManager(ABC):
     # ========== 平台基础能力接口 ==========
 
     @abstractmethod
-    def click(self, x: int, y: int, context: Any = None) -> None:
+    def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
         """
-        点击指定坐标。
+        点击指定坐标，支持长按。
 
         Args:
             x: X 坐标
             y: Y 坐标
+            duration: 点击持续时间（毫秒），0=普通点击，>0=长按
             context: 执行上下文（可选）
         """
         pass
@@ -195,7 +196,8 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
+              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
         """
         滑动/拖拽。
 
@@ -204,7 +206,8 @@ class PlatformManager(ABC):
             start_y: 起始 Y 坐标
             end_x: 结束 X 坐标
             end_y: 结束 Y 坐标
-            duration: 滑动持续时间（毫秒），默认 500ms
+            duration: 滑动持续时间（毫秒），默认 500ms（steps 为 None 时使用）
+            steps: 滑动步数，控制轨迹平滑度（设置后 duration 被忽略）
             context: 执行上下文（可选）
         """
         pass

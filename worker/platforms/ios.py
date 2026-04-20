@@ -7,7 +7,7 @@ iOS 平台执行引擎。
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Optional
 
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
@@ -255,15 +255,29 @@ class iOSPlatformManager(PlatformManager):
             return (x // 2, y // 2)
         return (x, y)
 
-    def click(self, x: int, y: int, context: Any = None) -> None:
-        """点击指定坐标。"""
+    def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
+        """点击指定坐标，支持长按。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 点击持续时间（毫秒），0=普通点击，>0=长按
+            context: 执行上下文
+        """
         client = context or self._device_clients.get(self._current_device)
         if client:
             # 转换坐标
             wx, wy = self._convert_coords(x, y)
-            success = client.tap(wx, wy)
+            if duration > 0:
+                # 长按：使用 touch_and_hold，单位转换 毫秒 → 秒
+                duration_sec = duration / 1000.0
+                logger.debug(f"Long click at ({wx}, {wy}) for {duration}ms")
+                success = client.touch_and_hold(wx, wy, duration=duration_sec)
+            else:
+                logger.debug(f"Click at ({wx}, {wy})")
+                success = client.tap(wx, wy)
             if not success:
-                raise RuntimeError(f"Tap failed at ({wx}, {wy})")
+                raise RuntimeError(f"Click failed at ({wx}, {wy})")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标（模拟两次快速点击）。"""
@@ -291,14 +305,29 @@ class iOSPlatformManager(PlatformManager):
             if not success:
                 raise RuntimeError(f"Send keys failed: {text}")
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
-        """滑动。"""
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
+              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+        """滑动，支持 duration 参数。
+
+        Args:
+            start_x: 起始 X 坐标
+            start_y: 起始 Y 坐标
+            end_x: 结束 X 坐标
+            end_y: 结束 Y 坐标
+            duration: 滑动持续时间（毫秒），默认 500ms
+            steps: 滑动步数（iOS WDA 不支持，参数忽略）
+            context: 执行上下文
+
+        Note:
+            iOS WDA 不支持 steps 参数，始终使用 duration 控制滑动时间。
+        """
         client = context or self._device_clients.get(self._current_device)
         if client:
             wx1, wy1 = self._convert_coords(start_x, start_y)
             wx2, wy2 = self._convert_coords(end_x, end_y)
             # duration 单位转换：毫秒 → 秒
             duration_sec = duration / 1000.0
+            logger.debug(f"Swipe from ({wx1}, {wy1}) to ({wx2}, {wy2}) with duration={duration}ms")
             success = client.swipe(wx1, wy1, wx2, wy2, duration=duration_sec)
             if not success:
                 raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")

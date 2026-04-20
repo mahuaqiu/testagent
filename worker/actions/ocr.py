@@ -71,14 +71,20 @@ class OcrClickAction(BaseActionExecutor):
         # 记录 OCR 定位结果
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
-        # 点击
-        platform.click(x, y, context)
+        # 点击（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
+
+        if click_duration > 0:
+            output = f"Long clicked at ({x}, {y}) for {click_duration}ms"
+        else:
+            output = f"Clicked at ({x}, {y})"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Clicked at ({x}, {y})",
+            output=output,
         )
 
 
@@ -128,8 +134,9 @@ class OcrInputAction(BaseActionExecutor):
         # 记录 OCR 定位结果
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
-        # 点击输入框
-        platform.click(x, y, context)
+        # 点击输入框（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
 
         # 输入文本
         if action.text:
@@ -321,8 +328,9 @@ class OcrPasteAction(BaseActionExecutor):
         # 记录 OCR 定位结果
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
-        # 点击坐标
-        platform.click(x, y, context)
+        # 点击坐标（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
 
         # 使用剪贴板粘贴
         import pyperclip
@@ -552,8 +560,9 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
         # 应用偏移
         x, y = self._apply_offset(target_x, target_y, action.offset)
 
-        # 点击
-        platform.click(x, y, context)
+        # 点击（支持长按）
+        click_duration = action.click_duration or 0
+        platform.click(x, y, duration=click_duration, context=context)
 
         return ActionResult(
             number=0,

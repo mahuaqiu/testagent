@@ -96,6 +96,8 @@ class Action:
     end_y: int | None = None              # 终点 Y 坐标（滑动）
     direction: str | None = None          # 滑动方向
     duration: int | None = None           # 滑动持续时间（毫秒）
+    click_duration: int | None = None     # 点击持续时间（毫秒），用于长按
+    steps: int | None = None              # 滑动步数，控制轨迹平滑度
 
     # 应用操作
     app_path: str | None = None           # 应用路径
@@ -153,6 +155,8 @@ class Action:
             end_y=end_y,
             direction=data.get("direction"),
             duration=data.get("duration"),
+            click_duration=data.get("click_duration"),
+            steps=data.get("steps"),
             app_path=data.get("app_path"),
             restart=data.get("restart", False),
             bundle_id=data.get("bundle_id"),
@@ -204,6 +208,10 @@ class Action:
             result["direction"] = self.direction
         if self.duration is not None:
             result["duration"] = self.duration
+        if self.click_duration is not None:
+            result["click_duration"] = self.click_duration
+        if self.steps is not None:
+            result["steps"] = self.steps
         if self.app_path is not None:
             result["app_path"] = self.app_path
         if self.restart:
