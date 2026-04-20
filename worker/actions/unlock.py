@@ -96,26 +96,47 @@ class UnlockScreenAction(ActionExecutor):
             is_locked = self._check_locked(platform, context)
             logger.info(f"Screen locked status: {is_locked}")
 
-            if not is_locked:
-                logger.info("Screen already unlocked, skipping")
+            # 2. 检测屏幕亮度（判断是否熄屏）
+            is_screen_on = self._check_screen_brightness(platform, context)
+            logger.info(f"Screen brightness status: {'on' if is_screen_on else 'off'}")
+
+            if not is_locked and is_screen_on:
+                logger.info("Screen already unlocked and on, skipping")
                 return ActionResult(
                     number=0,
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
-                    output="Screen already unlocked",
+                    output="Screen already unlocked and on",
                 )
 
-            # 2. 唤醒屏幕（如熄屏）
-            self._wake_screen(platform, context)
-            time.sleep(0.5)  # 等待屏幕亮起
+            # 3. 唤醒屏幕（如熄屏）
+            if not is_screen_on:
+                logger.info("Screen is off, waking up...")
+                self._wake_screen(platform, context)
+                time.sleep(0.5)  # 等待屏幕亮起
 
-            # 3. 触发密码界面（根据机型配置选择方式）
+            # 4. 再次检测锁屏状态（唤醒后可能需要解锁）
+            if not is_locked:
+                is_locked = self._check_locked(platform, context)
+                logger.info(f"Screen locked status after wake: {is_locked}")
+
+            if not is_locked:
+                logger.info("Screen unlocked after wake, no password needed")
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    duration_ms=int((time.time() - start_time) * 1000),
+                    output="Screen woke up, already unlocked",
+                )
+
+            # 5. 触发密码界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
             self._trigger_password_screen(platform, context, unlock_method)
             time.sleep(1.0)  # 等待密码界面出现
 
-            # 4. 输入密码（固定坐标点击，带间隔）
+            # 6. 输入密码（固定坐标点击，带间隔）
             for digit in password:
                 if digit not in keypad_coords:
                     logger.warning(f"Invalid password digit: {digit}, skipping")
@@ -131,10 +152,10 @@ class UnlockScreenAction(ActionExecutor):
                 # 点击间隔
                 time.sleep(click_interval / 1000.0)
 
-            # 5. 等待解锁完成
+            # 7. 等待解锁完成
             time.sleep(1.0)
 
-            # 6. 验证解锁成功
+            # 8. 验证解锁成功
             is_locked_after = self._check_locked(platform, context)
             duration_ms = int((time.time() - start_time) * 1000)
 
@@ -289,6 +310,47 @@ class UnlockScreenAction(ActionExecutor):
             return True
 
         return True
+
+    def _check_screen_brightness(self, platform: "PlatformManager", context: object) -> bool:
+        """检测屏幕是否亮着（通过截图亮度判断）。"""
+        platform_type = platform.platform
+
+        if platform_type == "android":
+            # Android: 直接通过 uiautomator2 检测
+            device = context or platform._device_clients.get(platform._current_device)
+            if device:
+                info = device.info
+                return info.get("screenOn", True)
+            return True
+
+        # iOS: 通过截图亮度判断（WDA 没有 screenOn API）
+        try:
+            screenshot_bytes = platform.take_screenshot(context)
+            if not screenshot_bytes:
+                logger.warning("Failed to take screenshot, assuming screen is off")
+                return False
+
+            import io
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(screenshot_bytes))
+            # 转换为灰度图
+            gray_img = img.convert("L")
+            # 计算平均亮度
+            pixels = list(gray_img.getdata())
+            avg_brightness = sum(pixels) / len(pixels)
+            logger.info(f"Screenshot average brightness: {avg_brightness}")
+
+            # 亮度阈值：低于 10 认为屏幕熄灭（全黑）
+            # 熄屏时截图通常是纯黑（亮度接近 0）
+            is_screen_on = avg_brightness > 10
+            logger.info(f"Screen on detected via brightness: {is_screen_on}")
+            return is_screen_on
+
+        except Exception as e:
+            logger.warning(f"Failed to check screen brightness: {e}")
+            # 检测失败时假设屏幕亮着（安全起见）
+            return True
 
     def _wake_screen(self, platform: "PlatformManager", context: object) -> None:
         """唤醒屏幕。"""

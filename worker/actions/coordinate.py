@@ -139,7 +139,7 @@ class InputAction(BaseActionExecutor):
             )
 
         # 点击（普通点击，duration=0）
-        platform.click(action.x, action.y, context=context)
+        platform.click(action.x, action.y, duration=0, context=context)
 
         # 输入
         if action.text:

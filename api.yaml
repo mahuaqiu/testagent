@@ -562,7 +562,7 @@ components:
             点击持续时间（毫秒），用于实现长按效果：
             - 0: 普通点击（默认）
             - >0: 长按指定时间，如 2000 表示长按 2 秒
-            适用动作：ocr_click、image_click、click、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
+            适用动作：ocr_click、image_click、click、ocr_input、ocr_paste、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
             示例：长按 2 秒 {"action_type": "ocr_click", "value": "确认", "click_duration": 2000}
         steps:
           type: integer

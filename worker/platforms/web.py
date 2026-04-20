@@ -455,22 +455,46 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 基础能力实现 ==========
 
-    def click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
-        """点击指定坐标。根据 _current_level 决定使用 Playwright 还是系统级操作。"""
+    def click(self, x: int, y: int, duration: int = 0, context: Any = None, level: str = None) -> None:
+        """点击指定坐标，支持长按。根据 _current_level 决定使用 Playwright 还是系统级操作。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 点击持续时间（毫秒），0=普通点击，>0=长按
+            context: 执行上下文
+            level: 执行层级（browser 或 system）
+        """
         effective_level = level or self._current_level
         if effective_level == "system":
-            self._system_click(x, y)
+            self._system_click(x, y, duration)
             return
         page = context or self._current_page
         if page:
-            _run_async(page.mouse.click(x, y))
+            if duration > 0:
+                # 长按：Playwright 使用 mouse.down + delay + mouse.up
+                duration_sec = duration / 1000.0
+                _run_async(page.mouse.move(x, y))
+                _run_async(page.mouse.down())
+                _run_async(asyncio.sleep(duration_sec))
+                _run_async(page.mouse.up())
+                logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
+            else:
+                _run_async(page.mouse.click(x, y))
 
-    def _system_click(self, x: int, y: int) -> None:
-        """系统级点击（使用 pyautogui）。"""
+    def _system_click(self, x: int, y: int, duration: int = 0) -> None:
+        """系统级点击（使用 pyautogui），支持长按。"""
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
-        pyautogui.click(x, y)
-        logger.debug(f"System-level click at ({x}, {y})")
+        if duration > 0:
+            duration_sec = duration / 1000.0
+            pyautogui.moveTo(x, y)
+            pyautogui.mouseDown()
+            pyautogui.mouseUp(duration=duration_sec)
+            logger.debug(f"System-level long click at ({x}, {y}) for {duration}ms")
+        else:
+            pyautogui.click(x, y)
+            logger.debug(f"System-level click at ({x}, {y})")
 
     def double_click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """双击指定坐标。"""
@@ -523,8 +547,23 @@ class WebPlatformManager(PlatformManager):
         pyautogui.write(text)
         logger.debug(f"System-level input: {text}")
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None, level: str = None) -> None:
-        """滑动/拖拽。"""
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
+              duration: int = 500, steps: Optional[int] = None, context: Any = None, level: str = None) -> None:
+        """滑动/拖拽。
+
+        Args:
+            start_x: 起始 X 坐标
+            start_y: 起始 Y 坐标
+            end_x: 结束 X 坐标
+            end_y: 结束 Y 坐标
+            duration: 滑动持续时间（毫秒），默认 500ms
+            steps: 滑动步数（Playwright 不支持，参数忽略，使用 duration*60 计算）
+            context: 执行上下文
+            level: 执行层级（browser 或 system）
+
+        Note:
+            Playwright mouse 不支持 steps 参数，使用 duration*60 计算步数模拟平滑移动。
+        """
         effective_level = level or self._current_level
         if effective_level == "system":
             self._system_drag(start_x, start_y, end_x, end_y, duration)

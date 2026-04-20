@@ -76,9 +76,23 @@ class MacPlatformManager(PlatformManager):
 
     # ========== 基础能力实现 ==========
 
-    def click(self, x: int, y: int, context: Any = None) -> None:
-        """点击指定坐标。"""
-        pyautogui.click(x, y)
+    def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
+        """点击指定坐标，支持长按。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 点击持续时间（毫秒），0=普通点击，>0=长按
+            context: 执行上下文
+        """
+        if duration > 0:
+            duration_sec = duration / 1000.0
+            pyautogui.moveTo(x, y)
+            pyautogui.mouseDown()
+            pyautogui.mouseUp(duration=duration_sec)
+            logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
+        else:
+            pyautogui.click(x, y)
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标。"""
@@ -92,8 +106,22 @@ class MacPlatformManager(PlatformManager):
         """输入文本。"""
         pyautogui.write(text)
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, context: Any = None) -> None:
-        """滑动/拖拽。"""
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
+              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+        """滑动/拖拽。
+
+        Args:
+            start_x: 走始 X 坐标
+            start_y: 起始 Y 坐标
+            end_x: 结束 X 坐标
+            end_y: 结束 Y 坐标
+            duration: 滑动持续时间（毫秒），默认 500ms
+            steps: 滑动步数（pyautogui 不支持，参数忽略）
+            context: 执行上下文
+
+        Note:
+            pyautogui 不支持 steps 参数，始终使用 duration 控制滑动时间。
+        """
         duration_sec = duration / 1000.0
         pyautogui.moveTo(start_x, start_y)
         pyautogui.mouseDown()
