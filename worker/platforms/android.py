@@ -2,6 +2,7 @@
 Android 平台执行引擎。
 
 基于 uiautomator2 直连实现，支持 OCR/图像识别定位。
+使用 minicap 截图，支持绑过 FLAG_SECURE 防截屏限制。
 """
 
 import logging
@@ -14,6 +15,8 @@ from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
+from worker.platforms.minicap import Minicap
+from worker.platforms.minicap.minicap import MinicapError
 from worker.task import Action, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -69,6 +72,7 @@ class AndroidPlatformManager(PlatformManager):
         self._device_clients: dict[str, u2.Device] = {}
         self._current_device: str | None = None
         self._unlock_config = unlock_config or {}  # 解锁配置
+        self._minicap_instances: dict[str, Minicap] = {}  # minicap 实例
 
     @property
     def platform(self) -> str:
@@ -118,6 +122,16 @@ class AndroidPlatformManager(PlatformManager):
             device.info  # noqa: F841
             self._device_clients[udid] = device
             logger.info(f"Android device service ready: {udid}")
+
+            # 安装 minicap
+            try:
+                minicap = Minicap(udid)
+                minicap.install()
+                self._minicap_instances[udid] = minicap
+                logger.info(f"Minicap installed for device: {udid}")
+            except MinicapError as e:
+                logger.warning(f"Minicap installation failed: {e}, will use fallback")
+
             return ("online", "OK")
         except Exception as e:
             logger.error(f"Failed to ensure device service: {udid}, {e}")
@@ -127,7 +141,9 @@ class AndroidPlatformManager(PlatformManager):
         """标记设备为异常。"""
         if udid in self._device_clients:
             del self._device_clients[udid]
-            logger.info(f"Android device marked faulty: {udid}")
+        if udid in self._minicap_instances:
+            del self._minicap_instances[udid]
+        logger.info(f"Android device marked faulty: {udid}")
 
     def get_online_devices(self) -> list[str]:
         """获取在线设备列表。"""
@@ -244,6 +260,17 @@ class AndroidPlatformManager(PlatformManager):
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图。"""
+        device_id = self._current_device
+
+        # 优先使用 minicap（绑过 FLAG_SECURE）
+        minicap = self._minicap_instances.get(device_id)
+        if minicap:
+            try:
+                return minicap.get_screenshot_png()
+            except MinicapError as e:
+                logger.warning(f"Minicap screenshot failed: {e}, falling back to uiautomator2")
+
+        # 回退到 uiautomator2
         device = context or self._device_clients.get(self._current_device)
         if device:
             from io import BytesIO
