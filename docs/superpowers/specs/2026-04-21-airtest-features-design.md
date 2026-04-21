@@ -82,10 +82,39 @@ def get_screen_manager(device_id: str, platform: PlatformManager) -> ScreenManag
     return _screen_managers[device_id]
 ```
 
-**销毁时机**：
-- 设备断开连接时（DeviceMonitor 检测到设备离线）
-- Worker 服务停止时
-- 显式调用 `close_screen_manager(device_id)` 时
+**销毁时机与触发机制**：
+
+| 销毁触发点 | 调用路径 |
+|-----------|---------|
+| 设备离线 | DeviceMonitor → `close_screen_manager(device_id)` → ScreenManager.stop() |
+| Worker 停止 | `worker.stop()` → `close_all_screen_managers()` → 循环调用 stop() |
+| 显式调用 | 动作处理器或外部直接调用 `close_screen_manager(device_id)` |
+
+```python
+# screen/manager.py
+def close_screen_manager(device_id: str) -> None:
+    """关闭指定设备的 ScreenManager"""
+    if device_id in _screen_managers:
+        manager = _screen_managers[device_id]
+        manager.stop()
+        del _screen_managers[device_id]
+
+def close_all_screen_managers() -> None:
+    """关闭所有 ScreenManager（Worker 停止时调用）"""
+    for device_id in list(_screen_managers.keys()):
+        close_screen_manager(device_id)
+```
+
+```python
+# worker/device_monitor.py
+def _check_device_status(self):
+    for udid in self._tracked_devices:
+        status, _ = platform.ensure_device_service(udid)
+        if status == "faulty" or device_offline:
+            # 设备离线时关闭 ScreenManager
+            close_screen_manager(udid)
+            self.mark_device_faulty(udid)
+```
 
 **Web 平台特殊处理**：
 - WebFrameSource 不需要 device_id，使用固定 key `"web_context"`
@@ -96,6 +125,9 @@ def get_screen_manager(device_id: str, platform: PlatformManager) -> ScreenManag
 ```python
 class FrameSource(ABC):
     """帧获取抽象基类"""
+
+    MAX_RECONNECT_ATTEMPTS = 3
+    RECONNECT_INTERVAL = 1  # 秒
 
     @abstractmethod
     def get_frame(self) -> bytes:
@@ -116,6 +148,26 @@ class FrameSource(ABC):
     def stop(self) -> None:
         """停止帧源"""
         pass
+
+    @abstractmethod
+    def get_blank_frame(self) -> bytes:
+        """获取空白帧（连接失败时返回）"""
+        pass
+
+    def get_frame_with_reconnect(self) -> bytes:
+        """获取帧（带自动重连）"""
+        for attempt in range(self.MAX_RECONNECT_ATTEMPTS + 1):
+            try:
+                return self.get_frame()
+            except ConnectionError:
+                if attempt < self.MAX_RECONNECT_ATTEMPTS:
+                    logger.warning(f"Frame source disconnected, reconnecting (attempt {attempt + 1})")
+                    self.stop()
+                    time.sleep(self.RECONNECT_INTERVAL)
+                    self.start()
+                else:
+                    logger.error("Frame source reconnect failed, returning blank frame")
+                    return self.get_blank_frame()
 
 
 class MinicapFrameSource(FrameSource):
@@ -168,16 +220,24 @@ class ScreenManager:
     _streamer: WebSocketStreamer | None
     _capture_thread: Thread | None
     _frame_queue: Queue
+    _is_recording: bool = False  # 并发录屏保护
+    _recording_lock: Lock        # 录屏互斥锁
 
     def __init__(self, frame_source: FrameSource):
         self._frame_source = frame_source
         self._frame_queue = Queue(maxsize=30)
         self._recorder = None
         self._streamer = None
+        self._is_recording = False
+        self._recording_lock = Lock()
 
     def get_frame(self) -> bytes:
         """获取单帧（供录屏和推流共享）"""
-        return self._frame_queue.get(timeout=1)
+        try:
+            return self._frame_queue.get(timeout=1)
+        except Empty:
+            # 队列空时返回空白帧，避免阻塞
+            return self._frame_source.get_blank_frame()
 
     def start_capture(self) -> None:
         """启动后台截图线程"""
@@ -185,13 +245,19 @@ class ScreenManager:
         self._capture_thread.start()
 
     def _capture_loop(self) -> None:
-        """后台截图循环"""
+        """后台截图循环（队列满时丢弃旧帧）"""
         while self._running:
-            frame = self._frame_source.get_frame()
+            frame = self._frame_source.get_frame_with_reconnect()
+            if self._frame_queue.full():
+                # 队列满时丢弃最旧的帧
+                try:
+                    self._frame_queue.get_nowait()
+                except Empty:
+                    pass
             self._frame_queue.put(frame, timeout=1)
 
     def start_recording(self, output_path: str, fps: int = 10,
-                        timeout_ms: int = 7200000) -> None:
+                        timeout_ms: int = 7200000) -> bool:
         """
         启动录屏
 
@@ -199,16 +265,31 @@ class ScreenManager:
             output_path: 输出文件路径
             fps: 帧率
             timeout_ms: 超时时间（毫秒），默认 2 小时
+
+        Returns:
+            bool: 是否成功启动（False 表示已有录屏进行中）
         """
-        timeout_sec = timeout_ms // 1000  # 内部转换为秒
-        self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec)
-        self._recorder.start()
+        with self._recording_lock:
+            if self._is_recording:
+                logger.warning("Recording already in progress")
+                return False
+
+            timeout_sec = timeout_ms // 1000  # 内部转换为秒
+            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec)
+            self._recorder.start()
+            self._is_recording = True
+            return True
 
     def stop_recording(self) -> str:
         """停止录屏，返回文件路径"""
-        if self._recorder:
-            return self._recorder.stop()
-        return ""
+        with self._recording_lock:
+            if not self._is_recording or not self._recorder:
+                return ""
+
+            output_path = self._recorder.stop()
+            self._recorder = None
+            self._is_recording = False
+            return output_path
 
     def start_streaming(self) -> WebSocketStreamer:
         """启动 WebSocket 推流"""
@@ -352,11 +433,26 @@ websocket_streaming:
 ```python
 # server.py
 from fastapi import WebSocket, WebSocketDisconnect
+from worker.config import Config
+
+# 连接计数器
+_ws_connections: dict[str, int] = {}  # device_id -> count
 
 @app.websocket("/ws/screen/{device_id}")
 async def screen_stream(websocket: WebSocket, device_id: str):
     """实时屏幕推流（10fps）"""
+
+    # 检查连接数限制
+    max_conn = Config().get("websocket_streaming.max_connections_per_device", 3)
+    current_count = _ws_connections.get(device_id, 0)
+
+    if current_count >= max_conn:
+        # 超过限制，拒绝连接（返回 429 Too Many Requests）
+        await websocket.close(code=429, reason="Max connections reached")
+        return
+
     await websocket.accept()
+    _ws_connections[device_id] = current_count + 1
 
     screen_manager = get_screen_manager(device_id)
     streamer = screen_manager.start_streaming()
@@ -368,7 +464,13 @@ async def screen_stream(websocket: WebSocket, device_id: str):
             await websocket.send_bytes(frame)
             await asyncio.sleep(0.1)  # 10fps
     except WebSocketDisconnect:
+        pass
+    finally:
+        # 确保 streamer 停止并减少连接计数
         streamer.stop()
+        _ws_connections[device_id] = _ws_connections.get(device_id, 1) - 1
+        if _ws_connections[device_id] <= 0:
+            del _ws_connections[device_id]
 ```
 
 ### 5.2 WebSocketStreamer 推流器
@@ -557,14 +659,29 @@ def handle_pinch(platform: PlatformManager, action: Action) -> ActionResult:
 # actions/recording.py
 @ActionRegistry.register("start_recording")
 def handle_start_recording(platform: PlatformManager, action: Action) -> ActionResult:
-    output = action.value or f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4"
+    # 文件名处理：相对路径与 output_dir 配置结合
+    output_dir = Config().get("recording.output_dir", "data/recordings")
+    filename = action.value or f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4"
+
+    # 如果是绝对路径，直接使用；否则拼接 output_dir
+    if os.path.isabs(filename):
+        output_path = filename
+    else:
+        output_path = os.path.join(output_dir, filename)
+
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+
     fps = action.params.get("fps", 10)
-    timeout = action.params.get("timeout", 7200000) // 1000  # 转秒
+    timeout_ms = action.params.get("timeout", 7200000)  # 外部接口：毫秒
 
     try:
         screen_manager = get_screen_manager(platform._current_device)
-        screen_manager.start_recording(output, fps, timeout)
-        return ActionResult(status=ActionStatus.SUCCESS, result={"output": output})
+        success = screen_manager.start_recording(output_path, fps, timeout_ms)
+        if success:
+            return ActionResult(status=ActionStatus.SUCCESS, result={"output": output_path})
+        else:
+            return ActionResult(status=ActionStatus.FAILED, error="Recording already in progress")
     except Exception as e:
         return ActionResult(status=ActionStatus.FAILED, error=str(e))
 
@@ -574,7 +691,10 @@ def handle_stop_recording(platform: PlatformManager, action: Action) -> ActionRe
     try:
         screen_manager = get_screen_manager(platform._current_device)
         output_path = screen_manager.stop_recording()
-        return ActionResult(status=ActionStatus.SUCCESS, result={"file": output_path})
+        if output_path:
+            return ActionResult(status=ActionStatus.SUCCESS, result={"file": output_path})
+        else:
+            return ActionResult(status=ActionStatus.FAILED, error="No recording in progress")
     except Exception as e:
         return ActionResult(status=ActionStatus.FAILED, error=str(e))
 ```
@@ -643,34 +763,15 @@ dependencies = [
 
 | 风险 | 影响 | 对策 |
 |------|------|------|
-| FFmpeg 未安装 | 录屏失败 | 打包时带入 ffmpeg.exe，或启动时检查提示 |
+| FFmpeg 未安装 | 录屏失败 | 打包时带入 ffmpeg.exe + 启动时检查 PATH |
 | minicap 连接中断 | Android 帧源失效 | 自动重连（最多 3 次，间隔 1 秒），失败后 fallback 到 u2 截图 |
 | WDA MJPEG 流断开 | iOS 帧源失效 | 自动重连（最多 3 次，间隔 1 秒），失败后返回黑屏帧 |
 | WebSocket 连接过多 | 性能下降 | 限制单设备最大连接数（配置项控制，默认 3） |
 | FFmpeg 进程僵死 | 录屏文件损坏 | stop 时强制 kill 进程（`terminate()` + `kill()`），设置 `wait(timeout=5)` |
-
-**自动重连机制详细设计**：
-
-```python
-class FrameSource(ABC):
-    MAX_RECONNECT_ATTEMPTS = 3
-    RECONNECT_INTERVAL = 1  # 秒
-
-    def get_frame_with_reconnect(self) -> bytes:
-        """获取帧（带自动重连）"""
-        for attempt in range(self.MAX_RECONNECT_ATTEMPTS + 1):
-            try:
-                return self.get_frame()
-            except ConnectionError:
-                if attempt < self.MAX_RECONNECT_ATTEMPTS:
-                    logger.warning(f"Frame source disconnected, reconnecting (attempt {attempt + 1})")
-                    self.stop()
-                    time.sleep(self.RECONNECT_INTERVAL)
-                    self.start()
-                else:
-                    logger.error("Frame source reconnect failed, returning blank frame")
-                    return self.get_blank_frame()
-```
+| 并发录屏 | 文件损坏/资源泄漏 | ScreenManager 使用 `_is_recording` 标志 + `_recording_lock` 互斥锁保护 |
+| 帧队列满 | 截图阻塞 | `_capture_loop` 队列满时丢弃旧帧（`get_nowait()` + `put`） |
+| WebSocket 无认证 | 安全风险 | 后续版本增加 Token 认证或 IP 白名单（当前版本标记为已知风险） |
+| 内存泄漏（长时间运行） | 队列积压 | 帧队列限制 maxsize=30，丢弃策略防止无限增长 |
 
 ---
 
