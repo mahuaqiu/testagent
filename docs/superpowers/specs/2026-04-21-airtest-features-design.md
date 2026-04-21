@@ -15,6 +15,10 @@
 | 录屏功能 | Android, iOS, Windows | 高 |
 | WebSocket 屏幕推流 | Android, iOS, Windows, Web | 高 |
 
+**平台支持说明**：
+- **Mac 平台**：不支持录屏/推流（Worker 仅在 Windows 宿主机运行，Mac 宿主机不连接移动设备）
+- **Web 平台录屏**：不支持，通过 Windows 录屏覆盖（调用 Windows 录屏时指定 system level）
+
 **跳过功能**：多尺度图像匹配（暂不实现）
 
 ---
@@ -52,10 +56,40 @@ worker/
 2. **异步设计**：WebSocket 推流使用 asyncio，不阻塞主线程
 3. **超时保护**：录屏自动超时停止，防止忘记 stop_recording
 4. **平台隔离**：pinch 和录屏的具体实现由各平台独立处理
+5. **参数单位统一**：外部接口统一使用毫秒，内部按需转换
 
 ---
 
 ## 三、截图/录屏/推流统一模块
+
+### 3.0 ScreenManager 生命周期管理
+
+**创建时机**：
+- 首次调用 `start_recording` 或首次 WebSocket 连接时创建
+- 按 `device_id` 缓存，同一设备复用同一 ScreenManager
+
+**缓存策略**：
+```python
+# screen/manager.py
+_screen_managers: dict[str, ScreenManager] = {}  # 全局缓存
+
+def get_screen_manager(device_id: str, platform: PlatformManager) -> ScreenManager:
+    """获取或创建 ScreenManager（按设备 ID 缓存）"""
+    if device_id not in _screen_managers:
+        frame_source = create_frame_source(platform, device_id)
+        _screen_managers[device_id] = ScreenManager(frame_source)
+        _screen_managers[device_id].start_capture()
+    return _screen_managers[device_id]
+```
+
+**销毁时机**：
+- 设备断开连接时（DeviceMonitor 检测到设备离线）
+- Worker 服务停止时
+- 显式调用 `close_screen_manager(device_id)` 时
+
+**Web 平台特殊处理**：
+- WebFrameSource 不需要 device_id，使用固定 key `"web_context"`
+- 创建时机：首次 WebSocket 连接或 `start_recording`（通过 Windows 覆盖）
 
 ### 3.1 FrameSource 帧获取抽象层
 
@@ -112,11 +146,15 @@ class WindowsFrameSource(FrameSource):
 
 
 class WebFrameSource(FrameSource):
-    """Web: Playwright screenshot（仅用于推流）"""
+    """Web: Playwright screenshot（仅用于推流，不支持录屏）"""
+
+    def __init__(self, page):
+        self.page = page  # Playwright Page 对象
 
     def get_frame(self) -> bytes:
-        # Playwright page.screenshot()
-        pass
+        # Playwright page.screenshot(type='jpeg', quality=80)
+        screenshot = self.page.screenshot(type="jpeg", quality=80)
+        return screenshot
 ```
 
 ### 3.2 ScreenManager 统一管理器
@@ -153,9 +191,17 @@ class ScreenManager:
             self._frame_queue.put(frame, timeout=1)
 
     def start_recording(self, output_path: str, fps: int = 10,
-                        timeout: int = 7200) -> None:
-        """启动录屏"""
-        self._recorder = ScreenRecorder(self, output_path, fps, timeout)
+                        timeout_ms: int = 7200000) -> None:
+        """
+        启动录屏
+
+        Args:
+            output_path: 输出文件路径
+            fps: 帧率
+            timeout_ms: 超时时间（毫秒），默认 2 小时
+        """
+        timeout_sec = timeout_ms // 1000  # 内部转换为秒
+        self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec)
         self._recorder.start()
 
     def stop_recording(self) -> str:
@@ -201,11 +247,18 @@ class ScreenRecorder:
     """FFmpeg 录屏器（队列缓冲 + 双线程）"""
 
     def __init__(self, screen_manager: ScreenManager,
-                 output_path: str, fps: int = 10, timeout: int = 7200):
+                 output_path: str, fps: int = 10, timeout_sec: int = 7200):
+        """
+        Args:
+            screen_manager: ScreenManager 实例
+            output_path: 输出文件路径
+            fps: 帧率
+            timeout_sec: 超时时间（秒），由 ScreenManager.start_recording 转换
+        """
         self.screen_manager = screen_manager
         self.output_path = output_path
         self.fps = fps
-        self.timeout = timeout  # 秒
+        self.timeout_sec = timeout_sec  # 秒（已从毫秒转换）
         self._stop_event = threading.Event()
         self._timeout_timer: Timer | None = None
         self._ffmpeg_process: subprocess.Popen | None = None
@@ -213,7 +266,7 @@ class ScreenRecorder:
     def start(self) -> None:
         """启动录屏"""
         # 启动超时定时器（忘记 stop 时自动停止）
-        self._timeout_timer = Timer(self.timeout, self.stop)
+        self._timeout_timer = Timer(self.timeout_sec, self.stop)
         self._timeout_timer.start()
 
         # 启动 FFmpeg 写入线程
@@ -224,15 +277,17 @@ class ScreenRecorder:
         """FFmpeg 编码写入线程"""
         width, height = self.screen_manager._frame_source.get_screen_size()
 
-        # FFmpeg 命令
+        # FFmpeg 命令：使用 image2pipe 输入 JPEG 序列，避免解码开销
         ffmpeg_cmd = [
             'ffmpeg', '-y',
-            '-f', 'rawvideo', '-vcodec', 'rawvideo',
-            '-s', f'{width}x{height}',
-            '-pix_fmt', 'bgr24', '-r', str(self.fps),
-            '-i', '-',
-            '-c:v', 'libx264', '-preset', 'ultrafast',
+            '-f', 'image2pipe',           # 输入格式：JPEG 序列
+            '-vcodec', 'mjpeg',           # 输入编码：JPEG
+            '-r', str(self.fps),          # 输入帧率
+            '-i', '-',                    # 从 stdin 读取
+            '-c:v', 'libx264',            # 输出编码：H.264
+            '-preset', 'ultrafast',
             '-pix_fmt', 'yuv420p',
+            '-s', f'{width}x{height}',    # 输出尺寸
             self.output_path
         ]
         self._ffmpeg_process = subprocess.Popen(
@@ -243,9 +298,8 @@ class ScreenRecorder:
             try:
                 frame = self.screen_manager.get_frame()
                 if frame and self._ffmpeg_process:
-                    # 将 JPEG 转为 rawvideo 格式写入
-                    img = Image.open(BytesIO(frame))
-                    self._ffmpeg_process.stdin.write(img.tobytes())
+                    # 直接写入 JPEG 数据，无需解码
+                    self._ffmpeg_process.stdin.write(frame)
             except Empty:
                 continue
 
@@ -280,8 +334,13 @@ class ScreenRecorder:
 # 录屏配置
 recording:
   default_fps: 10           # 默认帧率
-  max_timeout: 7200000      # 最大超时（毫秒），2小时
+  max_timeout_ms: 7200000   # 最大超时（毫秒），2小时
   output_dir: data/recordings  # 输出目录
+
+# WebSocket 推流配置
+websocket_streaming:
+  default_fps: 10           # 默认推流帧率
+  max_connections_per_device: 3  # 单设备最大 WebSocket 连接数
 ```
 
 ---
@@ -585,9 +644,33 @@ dependencies = [
 | 风险 | 影响 | 对策 |
 |------|------|------|
 | FFmpeg 未安装 | 录屏失败 | 打包时带入 ffmpeg.exe，或启动时检查提示 |
-| minicap 连接中断 | Android 帧源失效 | 自动重连机制，超时后 fallback 到 u2 截图 |
-| WDA MJPEG 流断开 | iOS 帧源失效 | 自动重连机制 |
-| WebSocket 连接过多 | 性能下降 | 限制单设备最大连接数 |
+| minicap 连接中断 | Android 帧源失效 | 自动重连（最多 3 次，间隔 1 秒），失败后 fallback 到 u2 截图 |
+| WDA MJPEG 流断开 | iOS 帧源失效 | 自动重连（最多 3 次，间隔 1 秒），失败后返回黑屏帧 |
+| WebSocket 连接过多 | 性能下降 | 限制单设备最大连接数（配置项控制，默认 3） |
+| FFmpeg 进程僵死 | 录屏文件损坏 | stop 时强制 kill 进程（`terminate()` + `kill()`），设置 `wait(timeout=5)` |
+
+**自动重连机制详细设计**：
+
+```python
+class FrameSource(ABC):
+    MAX_RECONNECT_ATTEMPTS = 3
+    RECONNECT_INTERVAL = 1  # 秒
+
+    def get_frame_with_reconnect(self) -> bytes:
+        """获取帧（带自动重连）"""
+        for attempt in range(self.MAX_RECONNECT_ATTEMPTS + 1):
+            try:
+                return self.get_frame()
+            except ConnectionError:
+                if attempt < self.MAX_RECONNECT_ATTEMPTS:
+                    logger.warning(f"Frame source disconnected, reconnecting (attempt {attempt + 1})")
+                    self.stop()
+                    time.sleep(self.RECONNECT_INTERVAL)
+                    self.start()
+                else:
+                    logger.error("Frame source reconnect failed, returning blank frame")
+                    return self.get_blank_frame()
+```
 
 ---
 
