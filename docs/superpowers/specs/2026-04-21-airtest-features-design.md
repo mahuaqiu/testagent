@@ -177,6 +177,12 @@ class MinicapFrameSource(FrameSource):
         # 从 minicap socket 读取 JPEG 帧
         pass
 
+    def get_blank_frame(self) -> bytes:
+        """返回黑屏 JPEG 帧"""
+        width, height = self.get_screen_size()
+        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
+
 
 class MJPEGFrameSource(FrameSource):
     """iOS: WDA 9100 MJPEG 流"""
@@ -184,6 +190,12 @@ class MJPEGFrameSource(FrameSource):
     def get_frame(self) -> bytes:
         # 从 WDA MJPEG HTTP 流读取帧
         pass
+
+    def get_blank_frame(self) -> bytes:
+        """返回黑屏 JPEG 帧"""
+        width, height = self.get_screen_size()
+        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
 
 
 class WindowsFrameSource(FrameSource):
@@ -196,6 +208,12 @@ class WindowsFrameSource(FrameSource):
         # 使用 mss 截屏，转为 JPEG
         pass
 
+    def get_blank_frame(self) -> bytes:
+        """返回黑屏 JPEG 帧"""
+        width, height = self.get_screen_size()
+        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
+
 
 class WebFrameSource(FrameSource):
     """Web: Playwright screenshot（仅用于推流，不支持录屏）"""
@@ -207,6 +225,11 @@ class WebFrameSource(FrameSource):
         # Playwright page.screenshot(type='jpeg', quality=80)
         screenshot = self.page.screenshot(type="jpeg", quality=80)
         return screenshot
+
+    def get_blank_frame(self) -> bytes:
+        """返回黑屏 JPEG 帧（固定尺寸 1280x720）"""
+        img = numpy.zeros((720, 1280, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
 ```
 
 ### 3.2 ScreenManager 统一管理器
@@ -222,6 +245,26 @@ class ScreenManager:
     _frame_queue: Queue
     _is_recording: bool = False  # 并发录屏保护
     _recording_lock: Lock        # 录屏互斥锁
+    _running: bool = False       # 截图线程运行标志
+
+    def __init__(self, frame_source: FrameSource):
+        self._frame_source = frame_source
+        self._frame_queue = Queue(maxsize=30)
+        self._recorder = None
+        self._streamer = None
+        self._is_recording = False
+        self._recording_lock = Lock()
+        self._running = False
+
+    def stop(self) -> None:
+        """停止所有资源（截图线程、录屏、推流）"""
+        self._running = False
+        if self._capture_thread:
+            self._capture_thread.join(timeout=5)
+        self.stop_recording()
+        if self._streamer:
+            self._streamer.stop()
+        self._frame_source.stop()
 
     def __init__(self, frame_source: FrameSource):
         self._frame_source = frame_source
@@ -241,6 +284,7 @@ class ScreenManager:
 
     def start_capture(self) -> None:
         """启动后台截图线程"""
+        self._running = True
         self._capture_thread = Thread(target=self._capture_loop)
         self._capture_thread.start()
 
@@ -447,8 +491,8 @@ async def screen_stream(websocket: WebSocket, device_id: str):
     current_count = _ws_connections.get(device_id, 0)
 
     if current_count >= max_conn:
-        # 超过限制，拒绝连接（返回 429 Too Many Requests）
-        await websocket.close(code=429, reason="Max connections reached")
+        # 超过限制，拒绝连接（WebSocket 标准关闭码 1008: Policy Violation）
+        await websocket.close(code=1008, reason="Max connections reached")
         return
 
     await websocket.accept()
