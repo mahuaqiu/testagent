@@ -759,9 +759,69 @@ dependencies = [
 ]
 ```
 
-### 8.2 外部依赖
+### 8.2 外部依赖（打包带入）
 
-- **FFmpeg**: 录屏编码，需要系统安装或打包带入
+**tools 目录结构**：
+
+```
+tools/
+├── adb/
+│   └ adb.exe              # Android Debug Bridge（用户手动放入）
+├── ffmpeg/
+│   └ ffmpeg.exe           # FFmpeg 录屏编码（用户手动放入）
+├── play_ppt.ps1           # 已有脚本
+├── download_install.ps1   # 已有脚本
+└── start_app.ps1          # 已有脚本
+```
+
+**打包配置**：
+
+```python
+# 打包时将 tools 目录整体带入
+# PyInstaller spec 文件示例：
+a = Analysis(
+    ...,
+    datas=[
+        ('tools', 'tools'),  # 整个 tools 目录（含子目录）
+    ],
+)
+```
+
+**运行时 PATH 设置**：
+
+```python
+# worker/main.py 或 worker/__init__.py
+import os
+from pathlib import Path
+
+def setup_tools_path():
+    """将 tools 子目录下的工具加入 PATH"""
+    tools_dir = Path(__file__).parent.parent / "tools"
+
+    # 添加 adb 和 ffmpeg 子目录到 PATH
+    adb_dir = tools_dir / "adb"
+    ffmpeg_dir = tools_dir / "ffmpeg"
+
+    paths_to_add = []
+    if adb_dir.exists():
+        paths_to_add.append(str(adb_dir))
+    if ffmpeg_dir.exists():
+        paths_to_add.append(str(ffmpeg_dir))
+
+    if paths_to_add:
+        current_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = os.pathsep.join(paths_to_add) + os.pathsep + current_path
+
+# Worker 启动时调用
+setup_tools_path()
+```
+
+**FFmpeg 和 adb 获取方式**：
+
+| 工具 | 获取方式 | 版本建议 |
+|------|---------|---------|
+| adb.exe | Android SDK platform-tools | 最新版（兼容各 Android 版本） |
+| ffmpeg.exe | https://ffmpeg.org/download.html | 5.0+（static build） |
 
 ---
 
