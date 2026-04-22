@@ -234,3 +234,4 @@ recording:
 # WebSocket 推流配置
 websocket_streaming:
   max_connections_per_device: 3  # 单设备最大连接数
+  send_timeout_seconds: 30       # 发送超时（秒），超时后自动断开连接

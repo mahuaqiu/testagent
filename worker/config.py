@@ -82,6 +82,7 @@ class WorkerConfig:
 
     # WebSocket 推流配置
     websocket_max_connections_per_device: int = 3
+    websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
 
     # 配置版本号
     config_version: Optional[str] = None
@@ -145,6 +146,7 @@ class WorkerConfig:
             recording_default_fps=recording_cfg.get("default_fps", 10),
             recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
             websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
+            websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:

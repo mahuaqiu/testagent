@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 # WebSocket 连接计数器
 _ws_connections: dict[str, int] = {}
 
-# 最大 WebSocket 连接数（每设备）
-MAX_WS_CONNECTIONS_PER_DEVICE = 3
+# 默认 WebSocket 配置（会被 worker.config 覆盖）
+DEFAULT_WS_MAX_CONNECTIONS = 3
+DEFAULT_WS_SEND_TIMEOUT = 30
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -665,10 +666,17 @@ def _trigger_restart_after_response():
 async def screen_stream(websocket: WebSocket, device_id: str):
     """实时屏幕推流（10fps）。"""
 
+    # 从配置读取参数（使用默认值作为 fallback）
+    max_connections = DEFAULT_WS_MAX_CONNECTIONS
+    send_timeout = DEFAULT_WS_SEND_TIMEOUT
+    if worker and worker.config:
+        max_connections = worker.config.websocket_max_connections_per_device
+        send_timeout = worker.config.websocket_send_timeout_seconds
+
     # 检查连接数限制
     current_count = _ws_connections.get(device_id, 0)
 
-    if current_count >= MAX_WS_CONNECTIONS_PER_DEVICE:
+    if current_count >= max_connections:
         # 超过限制，拒绝连接（WebSocket Policy Violation）
         await websocket.close(code=1008, reason="Max connections reached")
         return
@@ -693,8 +701,16 @@ async def screen_stream(websocket: WebSocket, device_id: str):
 
         while streamer.is_running():
             frame = await streamer.get_frame_async()
-            # 发送 JPEG 原始数据
-            await websocket.send_bytes(frame)
+            # 发送 JPEG 原始数据，带超时保护
+            try:
+                await asyncio.wait_for(
+                    websocket.send_bytes(frame),
+                    timeout=send_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: device={device_id}")
+                await websocket.close(code=1001, reason="Send timeout")
+                break
             await asyncio.sleep(0.1)  # 10fps
 
     except WebSocketDisconnect:
