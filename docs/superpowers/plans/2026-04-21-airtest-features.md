@@ -1,12 +1,17 @@
 # Airtest 借鉴功能实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-step. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 实现从 Airtest 借鉴的 pinch 双指缩放手势、录屏功能、WebSocket 屏幕推流三大功能。
+**Goal:** 实现 minicap 流式截图修复、ScreenManager 模块、WebSocket 屏幕推流、录屏功能、pinch 双指缩放手势。
 
-**Architecture:** 新增 `worker/screen/` 模块统一管理帧获取、录屏、推流。FrameSource 抽象层实现各平台帧获取逻辑，ScreenManager 统一管理帧队列和并发控制。ScreenRecorder 使用 FFmpeg image2pipe 输入实现高效编码。WebSocketStreamer 提供 10fps 实时推流。pinch 手势通过 Android uiautomator2 和 iOS WDA 多点触控 API 实现。
+**Architecture:** 
+1. **minicap 流式截图**：改用 `-l` 模式 + socket 通信，解决 SDK 30+ 模拟器 `-s` 单帧模式失败问题
+2. **ScreenManager 模块**：新增 `worker/screen/` 统一管理帧获取、录屏、推流。FrameSource 抽象层实现各平台帧获取逻辑，ScreenManager 统一管理帧队列和并发控制
+3. **录屏**：ScreenRecorder 使用 FFmpeg image2pipe 输入实现高效编码
+4. **WebSocket 推流**：WebSocketStreamer 提供 10fps 实时推流，FastAPI WebSocket 路由
+5. **pinch 手势**：Android uiautomator2 和 iOS WDA 多点触控 API
 
-**Tech Stack:** Python threading/asyncio、FFmpeg、mss、uiautomator2、WDA、FastAPI WebSocket
+**Tech Stack:** Python threading/asyncio、FFmpeg、mss、socket、uiautomator2、WDA、FastAPI WebSocket
 
 ---
 
@@ -36,6 +41,7 @@ tests/unit/screen/
 ### 修改文件
 
 ```
+worker/platforms/minicap/minicap.py    # 改为流式截图模式（核心修复）
 worker/platforms/base.py           # 新增 pinch() 抽象方法
 worker/platforms/android.py        # 实现 pinch + 录屏帧源集成
 worker/platforms/ios.py            # 实现 pinch + 录屏帧源集成
@@ -46,6 +52,365 @@ worker/actions/__init__.py         # 注册新动作处理器
 worker/config.py                   # 新增录屏/推流配置项
 config/worker.yaml                 # 新增配置示例
 pyproject.toml                     # 新增依赖项说明（已有 mss）
+```
+
+---
+
+## Task 0: minicap 流式截图修复（P0 紧急）
+
+**背景问题**：当前 minicap 使用 `-s` 单帧截图模式，在 Android SDK 30+ 模拟器上失败：
+```
+ERROR: Unable to lock next buffer BAD_VALUE (-22)
+ERROR: Unable to consume pending frame
+```
+
+**根因分析**：SDK 30+ 模拟器不支持 `-s` 单帧模式，需改用流式截图 `-l` 模式 + socket 通信。
+
+**参考**：Airtest 的 `get_stream()` 方法使用流式截图成功。
+
+**Files:**
+- Modify: `worker/platforms/minicap/minicap.py`
+
+- [ ] **Step 1: 读取 Airtest 流式截图实现作为参考**
+
+已分析 Airtest `airtest/core/android/cap_methods/minicap.py`：
+- 使用 `_setup_stream_server()` 启动 minicap 服务器（`-l` 模式）
+- 使用 `adb forward` 设置端口转发
+- 使用 SafeSocket 连接并读取帧数据
+- 读取 24 bytes 全局 header，解析 quirk_flag
+- 发送 `b"1"` 请求帧，读取 4 bytes 帧大小，再读取帧数据
+
+- [ ] **Step 2: 重写 Minicap 类为流式截图模式**
+
+```python
+# worker/platforms/minicap/minicap.py
+"""
+Minicap 流式截图工具实现。
+
+基于 Airtest minicap 流式模式适配，解决 SDK 30+ 模拟器单帧截图失败问题。
+"""
+
+import logging
+import socket
+import struct
+import subprocess
+import time
+from io import BytesIO
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image
+
+from common.utils import run_cmd, popen_cmd
+from worker.discovery.android import get_adb_cmd
+
+logger = logging.getLogger(__name__)
+
+# stf_libs 资源目录路径
+STFLIB_PATH = Path(__file__).parent / "static" / "stf_libs"
+
+
+class MinicapError(Exception):
+    """Minicap 截图异常"""
+    pass
+
+
+class Minicap:
+    """Android minicap 流式截图工具（支持 SDK 30+）"""
+
+    VERSION = 5
+    DEVICE_DIR = "/data/local/tmp"
+    CMD = "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap"
+    RECV_TIMEOUT = 3.0  # socket 接收超时（秒）
+
+    def __init__(self, udid: str):
+        self.udid = udid
+        self._installed = False
+        self._abi: Optional[str] = None
+        self._sdk: Optional[int] = None
+        self._display_info: Optional[dict] = None
+        
+        # 流式截图相关
+        self._proc: Optional[subprocess.Popen] = None
+        self._socket: Optional[socket.socket] = None
+        self._local_port: int = 0
+        self._quirk_flag: int = 0
+        self._stream_rotation: int = 0
+
+    def _adb_shell(self, cmd: str, timeout: int = 30) -> str:
+        """执行 adb shell 命令"""
+        full_cmd = get_adb_cmd("-s", self.udid, "shell", cmd)
+        result = run_cmd(full_cmd, timeout=timeout)
+        if result.returncode != 0:
+            raise MinicapError(f"ADB shell failed: {result.stderr}")
+        return result.stdout.strip()
+
+    def _adb_push(self, local_path: str, remote_path: str) -> None:
+        """执行 adb push 命令"""
+        full_cmd = get_adb_cmd("-s", self.udid, "push", local_path, remote_path)
+        result = run_cmd(full_cmd, timeout=60)
+        if result.returncode != 0:
+            raise MinicapError(f"ADB push failed: {result.stderr}")
+
+    def _get_device_info(self) -> tuple[str, int]:
+        """获取设备 CPU ABI 和 SDK 版本"""
+        if self._abi and self._sdk:
+            return self._abi, self._sdk
+
+        abi = self._adb_shell("getprop ro.product.cpu.abi")
+        self._abi = abi
+        sdk_str = self._adb_shell("getprop ro.build.version.sdk")
+        self._sdk = int(sdk_str)
+        logger.info(f"Device info: abi={abi}, sdk={self._sdk}")
+        return self._abi, self._sdk
+
+    def get_display_info(self) -> dict:
+        """获取屏幕显示信息"""
+        if self._display_info:
+            return self._display_info
+
+        # 使用 wm size 获取物理分辨率
+        size_output = self._adb_shell("wm size")
+        width, height = 1080, 1920
+        if "Physical size:" in size_output:
+            import re
+            match = re.search(r"Physical size: (\d+)x(\d+)", size_output)
+            if match:
+                width, height = int(match.group(1)), int(match.group(2))
+
+        # 解析旋转角度
+        rotation = 0
+        try:
+            display_output = self._adb_shell("dumpsys display | grep 'mOrientation'")
+            import re
+            match = re.search(r"mOrientation=(\d+)", display_output)
+            if match:
+                rotation = int(match.group(1)) * 90
+        except Exception:
+            pass
+
+        self._display_info = {"width": width, "height": height, "rotation": rotation}
+        logger.info(f"Display info: {self._display_info}")
+        return self._display_info
+
+    def install(self) -> None:
+        """安装 minicap 到设备"""
+        if self._installed:
+            logger.info("Minicap already installed, skipping")
+            return
+
+        abi, sdk = self._get_device_info()
+
+        # 选择 minicap 二进制文件
+        if sdk >= 16:
+            binfile = "minicap"
+        else:
+            binfile = "minicap-nopie"
+
+        # 推送 minicap 二进制
+        minicap_bin_path = STFLIB_PATH / abi / binfile
+        if not minicap_bin_path.exists():
+            raise MinicapError(f"Minicap binary not found: {minicap_bin_path}")
+
+        logger.info(f"Pushing minicap: {minicap_bin_path}")
+        self._adb_push(str(minicap_bin_path), f"{self.DEVICE_DIR}/minicap")
+
+        # 推送 minicap.so
+        minicap_so_pattern = STFLIB_PATH / "minicap-shared" / "aosp" / "libs" / f"android-{sdk}" / abi / "minicap.so"
+        if not minicap_so_pattern.exists():
+            rel = self._adb_shell("getprop ro.build.version.release")
+            minicap_so_pattern = STFLIB_PATH / "minicap-shared" / "aosp" / "libs" / f"android-{rel}" / abi / "minicap.so"
+
+        if not minicap_so_pattern.exists():
+            raise MinicapError(f"Minicap.so not found for sdk={sdk}, abi={abi}")
+
+        logger.info(f"Pushing minicap.so: {minicap_so_pattern}")
+        self._adb_push(str(minicap_so_pattern), f"{self.DEVICE_DIR}/minicap.so")
+
+        # 设置执行权限
+        self._adb_shell(f"chmod 755 {self.DEVICE_DIR}/minicap")
+        self._adb_shell(f"chmod 755 {self.DEVICE_DIR}/minicap.so")
+
+        self._installed = True
+        logger.info("Minicap installation completed")
+
+    def _setup_stream(self) -> None:
+        """设置 minicap 流式截图服务器"""
+        if self._proc and self._proc.poll() is None:
+            return  # 已启动
+
+        display_info = self.get_display_info()
+        width = display_info["width"]
+        height = display_info["height"]
+        rotation = display_info["rotation"]
+
+        # 设置端口转发
+        self._local_port = self._find_free_port()
+        device_port_name = f"minicap_{self.udid[-8:]}"
+        
+        forward_cmd = get_adb_cmd("-s", self.udid, "forward", 
+                                  f"tcp:{self._local_port}", 
+                                  f"localabstract:{device_port_name}")
+        result = run_cmd(forward_cmd, timeout=10)
+        if result.returncode != 0:
+            raise MinicapError(f"ADB forward failed: {result.stderr}")
+
+        # 构建 minicap 流式命令（-l 模式）
+        params = f"{width}x{height}@{width}x{height}/{rotation}"
+        cmd = f"{self.CMD} -n '{device_port_name}' -P {params} -l 2>&1"
+
+        # 启动 minicap 服务器进程
+        full_cmd = get_adb_cmd("-s", self.udid, "shell", cmd)
+        self._proc = popen_cmd(
+            full_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        # 等待服务器启动
+        self._wait_server_start()
+        self._stream_rotation = rotation
+
+        # 连接 socket
+        self._connect_socket()
+
+        logger.info(f"Minicap stream setup: port={self._local_port}")
+
+    def _find_free_port(self) -> int:
+        """查找可用端口"""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+
+    def _wait_server_start(self, timeout: float = 5.0) -> None:
+        """等待 minicap 服务器启动"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if self._proc.poll() is not None:
+                raise MinicapError("Minicap server quit immediately")
+            
+            # 读取 stdout 检查 "Server start"
+            try:
+                line = self._proc.stdout.readline()
+                if b"Server start" in line:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.1)
+        
+        raise MinicapError("Minicap server setup timeout")
+
+    def _connect_socket(self) -> None:
+        """连接 minicap socket 并读取全局 header"""
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.settimeout(self.RECV_TIMEOUT)
+        self._socket.connect(('127.0.0.1', self._local_port))
+
+        # 读取全局 header (24 bytes)
+        header = self._recv_all(24)
+        if len(header) < 24:
+            raise MinicapError(f"Invalid minicap header: {len(header)} bytes")
+
+        global_headers = struct.unpack("<2B5I2B", header)
+        logger.debug(f"Minicap global headers: {global_headers}")
+        
+        # 解析 quirk_flag
+        self._quirk_flag = global_headers[-1]
+
+    def _recv_all(self, size: int) -> bytes:
+        """接收指定大小的数据"""
+        data = b''
+        while len(data) < size:
+            chunk = self._socket.recv(size - len(data))
+            if not chunk:
+                break
+            data += chunk
+        return data
+
+    def get_frame(self) -> bytes:
+        """获取单帧（JPEG 格式）- 流式模式"""
+        if not self._installed:
+            raise MinicapError("Minicap not installed, call install() first")
+
+        # 确保流已启动
+        self._setup_stream()
+
+        # 发送请求帧信号
+        self._socket.send(b"1")
+
+        # 读取帧大小 (4 bytes)
+        header = self._recv_all(4)
+        if len(header) < 4:
+            raise MinicapError("Failed to read frame size")
+        
+        frame_size = struct.unpack("<I", header)[0]
+        if frame_size <= 0:
+            raise MinicapError(f"Invalid frame size: {frame_size}")
+
+        # 读取帧数据
+        frame_data = self._recv_all(frame_size)
+        if len(frame_data) < frame_size:
+            raise MinicapError(f"Incomplete frame: {len(frame_data)} < {frame_size}")
+
+        # 验证 JPG 格式
+        if not frame_data.startswith(b'\xff\xd8'):
+            raise MinicapError("Invalid JPG format")
+
+        return frame_data
+
+    def get_screenshot_png(self) -> bytes:
+        """获取 PNG 格式截图"""
+        jpg_data = self.get_frame()
+        img = Image.open(BytesIO(jpg_data))
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def stop_stream(self) -> None:
+        """停止流式截图"""
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
+
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                pass
+            self._proc = None
+
+        # 移除端口转发
+        if self._local_port:
+            try:
+                remove_cmd = get_adb_cmd("-s", self.udid, "forward", 
+                                         "--remove", f"tcp:{self._local_port}")
+                run_cmd(remove_cmd, timeout=5)
+            except Exception:
+                pass
+            self._local_port = 0
+
+        logger.info("Minicap stream stopped")
+```
+
+- [ ] **Step 3: 验证流式截图在 SDK 30+ 模拟器成功**
+
+Run: 手动测试 minicap 流式截图
+```bash
+# 启动 Worker 后执行 screenshot action
+curl -X POST http://localhost:8088/task/execute -H "Content-Type: application/json" -d '{"platform": "android", "device_id": "emulator-5554", "actions": [{"action_type": "screenshot"}]}'
+```
+Expected: 返回成功，无 "Invalid JPG format" 错误
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add worker/platforms/minicap/minicap.py
+git commit -m "fix(minicap): switch to stream mode (-l) for SDK 30+ compatibility"
 ```
 
 ---
@@ -187,33 +552,34 @@ class FrameSource(ABC):
 
 
 class MinicapFrameSource(FrameSource):
-    """Android: minicap socket 流（占位实现）。"""
+    """Android: minicap socket 流（使用 Task 0 重写的流式截图）。"""
 
-    def __init__(self, device_id: str, minicap_instance):
+    def __init__(self, device_id: str, minicap_instance: "Minicap"):
         self.device_id = device_id
         self.minicap = minicap_instance
         self._screen_size: Optional[tuple[int, int]] = None
 
     def get_frame(self) -> bytes:
-        """从 minicap 获取帧（JPEG 格式）。"""
-        # 实际实现使用 minicap.get_frame()
-        raise ConnectionError("Not implemented - placeholder")
+        """从 minicap 流获取帧（JPEG 格式）。"""
+        # 使用 Task 0 重写的流式截图方法
+        return self.minicap.get_frame()
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取屏幕尺寸。"""
         if self._screen_size:
             return self._screen_size
-        # 从 minicap 获取
-        # self._screen_size = self.minicap.get_screen_size()
-        return (1080, 1920)  # 默认值
+        display_info = self.minicap.get_display_info()
+        self._screen_size = (display_info["width"], display_info["height"])
+        return self._screen_size
 
     def start(self) -> None:
         """启动 minicap 流。"""
-        pass  # minicap 由平台管理器启动
+        # minicap.get_frame() 内部会自动启动流
+        pass
 
     def stop(self) -> None:
         """停止 minicap 流。"""
-        pass
+        self.minicap.stop_stream()
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
