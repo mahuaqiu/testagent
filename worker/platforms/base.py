@@ -212,6 +212,24 @@ class PlatformManager(ABC):
         """
         pass
 
+    # ========== 手势操作 ==========
+
+    def pinch(self, direction: str, scale: float = 0.5,
+              duration: int = 500, context: Any = None) -> None:
+        """
+        双指缩放手势。
+
+        Args:
+            direction: "in" 缩小 / "out" 放大
+            scale: 缩放比例
+            duration: 持续时间（毫秒）
+            context: 执行上下文
+
+        Note:
+            仅 Android/iOS 平台支持，Web/Windows 不支持。
+        """
+        raise NotImplementedError("pinch is not supported on this platform")
+
     @abstractmethod
     def press(self, key: str, context: Any = None) -> None:
         """

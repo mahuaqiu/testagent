@@ -30,7 +30,7 @@ class AndroidPlatformManager(PlatformManager):
     使用 uiautomator2 直连控制 Android 设备。
     """
 
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen", "pinch"}
 
     # Android 按键映射：标准按键名 → KeyCode
     # 参考：https://developer.android.com/reference/android/view/KeyEvent
@@ -264,6 +264,33 @@ class AndroidPlatformManager(PlatformManager):
             actual_steps = steps if steps is not None else 5
             logger.debug(f"Swipe with steps={actual_steps}")
             device.swipe(start_x, start_y, end_x, end_y, steps=actual_steps)
+
+    def pinch(self, direction: str, scale: float = 0.5,
+              duration: int = 500, context: Any = None) -> None:
+        """双指缩放手势。
+
+        使用 uiautomator2 的 pinch 方法实现。
+
+        Args:
+            direction: "in" 缩小 / "out" 放大
+            scale: 缩放比例
+            duration: 持续时间（毫秒）
+            context: 执行上下文
+        """
+        device = context or self._device_clients.get(self._current_device)
+        if not device:
+            raise RuntimeError("No device context")
+
+        duration_sec = duration / 1000.0
+
+        if direction == "in":
+            # 缩小：从外向内
+            device.pinch_in(percent=scale, duration=duration_sec)
+        else:
+            # 放大：从内向外
+            device.pinch_out(percent=scale, duration=duration_sec)
+
+        logger.debug(f"pinch {direction} executed: scale={scale}, duration={duration}ms")
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。
