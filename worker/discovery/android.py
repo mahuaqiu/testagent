@@ -4,11 +4,82 @@ Android 设备发现模块。
 通过 ADB 发现连接到本机的 Android 设备。
 """
 
+import os
+import platform
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Dict
 
 from common.utils import run_cmd
+
+
+# 缓存找到的 ADB 路径
+_ADB_PATH: Optional[str] = None
+
+
+def _find_adb_path() -> Optional[str]:
+    """
+    查找 ADB 可执行文件路径。
+
+    优先级：
+    1. 系统 PATH 中的 adb
+    2. tools/adb 目录下的 adb（打包环境）
+
+    Returns:
+        str | None: ADB 可执行文件路径，找不到则返回 None
+    """
+    global _ADB_PATH
+
+    # 如果已经找到，直接返回缓存
+    if _ADB_PATH:
+        return _ADB_PATH
+
+    # 1. 尝试系统 PATH 中的 adb
+    try:
+        result = run_cmd(
+            ["adb", "version"],
+            timeout=5
+        )
+        if result.returncode == 0:
+            _ADB_PATH = "adb"  # 使用系统 PATH
+            return _ADB_PATH
+    except Exception:
+        pass
+
+    # 2. 尝试 tools/adb 目录
+    # 获取项目根目录（discovery 目录的上两级）
+    project_root = Path(__file__).parent.parent.parent
+    tools_adb_dir = project_root / "tools" / "adb"
+
+    if platform.system().lower() == "windows":
+        adb_exe = tools_adb_dir / "adb.exe"
+    else:
+        adb_exe = tools_adb_dir / "adb"
+
+    if adb_exe.exists():
+        _ADB_PATH = str(adb_exe)
+        return _ADB_PATH
+
+    # 找不到
+    return None
+
+
+def get_adb_cmd(*args: str) -> List[str]:
+    """
+    构造 ADB 命令列表。
+
+    Args:
+        *args: ADB 命令参数
+
+    Returns:
+        List[str]: 完整的 ADB 命令列表
+    """
+    adb_path = _find_adb_path()
+    if not adb_path:
+        raise RuntimeError("ADB not found in system PATH or tools/adb directory")
+
+    return [adb_path] + list(args)
 
 
 @dataclass
@@ -51,14 +122,7 @@ class AndroidDiscoverer:
     @staticmethod
     def check_adb_available() -> bool:
         """检查 ADB 是否可用。"""
-        try:
-            result = run_cmd(
-                ["adb", "version"],
-                timeout=5
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        return _find_adb_path() is not None
 
     @staticmethod
     def list_devices() -> List[str]:
@@ -70,7 +134,7 @@ class AndroidDiscoverer:
         """
         try:
             result = run_cmd(
-                ["adb", "devices"],
+                get_adb_cmd("devices"),
                 timeout=10
             )
 
@@ -103,7 +167,7 @@ class AndroidDiscoverer:
         """
         try:
             result = run_cmd(
-                ["adb", "devices"],
+                get_adb_cmd("devices"),
                 timeout=10
             )
 
@@ -139,7 +203,7 @@ class AndroidDiscoverer:
         """
         try:
             result = run_cmd(
-                ["adb", "-s", udid, "shell", "getprop", prop],
+                get_adb_cmd("-s", udid, "shell", "getprop", prop),
                 timeout=10
             )
             return result.stdout.strip()
@@ -222,7 +286,7 @@ class AndroidDiscoverer:
         """
         try:
             result = run_cmd(
-                ["adb", "-s", udid, "shell", "wm", "size"],
+                get_adb_cmd("-s", udid, "shell", "wm", "size"),
                 timeout=10
             )
 

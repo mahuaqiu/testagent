@@ -14,6 +14,7 @@ import uiautomator2 as u2
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
+from worker.discovery.android import get_adb_cmd
 from worker.platforms.base import PlatformManager
 from worker.platforms.minicap import Minicap
 from worker.platforms.minicap.minicap import MinicapError
@@ -84,7 +85,7 @@ class AndroidPlatformManager(PlatformManager):
             return
 
         try:
-            result = run_cmd(["adb", "version"], timeout=5)
+            result = run_cmd(get_adb_cmd("version"), timeout=5)
             if result.returncode != 0:
                 logger.warning("ADB not available")
         except Exception as e:

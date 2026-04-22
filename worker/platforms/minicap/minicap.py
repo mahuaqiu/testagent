@@ -13,6 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from common.utils import run_cmd
+from worker.discovery.android import get_adb_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class Minicap:
 
     def _adb_shell(self, cmd: str, timeout: int = 30) -> str:
         """执行 adb shell 命令"""
-        full_cmd = ["adb", "-s", self.udid, "shell", cmd]
+        full_cmd = get_adb_cmd("-s", self.udid, "shell", cmd)
         result = run_cmd(
             full_cmd,
             timeout=timeout,
@@ -52,7 +53,7 @@ class Minicap:
 
     def _adb_push(self, local_path: str, remote_path: str) -> None:
         """执行 adb push 命令"""
-        full_cmd = ["adb", "-s", self.udid, "push", local_path, remote_path]
+        full_cmd = get_adb_cmd("-s", self.udid, "push", local_path, remote_path)
         result = run_cmd(
             full_cmd,
             timeout=60,
@@ -168,7 +169,7 @@ class Minicap:
         cmd = f"{self.CMD} -n 'worker_minicap' -P {params} -s 2>&1"
 
         # 执行命令获取截图
-        full_cmd = ["adb", "-s", self.udid, "shell", cmd]
+        full_cmd = get_adb_cmd("-s", self.udid, "shell", cmd)
         result = run_cmd(
             full_cmd,
             text=False,  # 获取二进制数据

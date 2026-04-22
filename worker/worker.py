@@ -205,10 +205,6 @@ class Worker:
 
         logger.info(f"Stopping Worker {self.worker_id}...")
 
-        # 关闭所有 ScreenManager
-        from worker.screen.manager import close_all_screen_managers
-        close_all_screen_managers()
-
         # 停止设备监控
         if self.device_monitor:
             self.device_monitor.stop()
