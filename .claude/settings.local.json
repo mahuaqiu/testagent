@@ -136,7 +136,28 @@
       "Bash(pytest tests/unit/ -v --tb=short)",
       "Bash(pytest tests/unit/platforms/test_ios_gesture.py -v)",
       "Bash(pytest tests/unit/ --tb=short)",
-      "Bash(.venv/Scripts/python.exe -m py_compile worker/platforms/minicap/minicap.py worker/config.py)"
+      "Bash(.venv/Scripts/python.exe -m py_compile worker/platforms/minicap/minicap.py worker/config.py)",
+      "Bash(gh search *)",
+      "Bash(pip index *)",
+      "Bash(build_env/Scripts/pyinstaller.exe --version)",
+      "Bash(pip list *)",
+      "Bash(pyinstaller test_minimal.py --onefile --console --name=test_minimal --clean --noconfirm)",
+      "Bash(D:/code/autotest/dist/test_minimal.exe)",
+      "Bash(pyinstaller test_qt_uvicorn.py --onefile --console --name=test_qt_uvicorn --clean --noconfirm --hidden-import=PyQt5.sip)",
+      "Bash(D:/code/autotest/dist/test_qt_uvicorn.exe)",
+      "Bash(pyinstaller test_qt_uvicorn.py --onefile --noconsole --name=test_qt_uvicorn_noconsole --clean --noconfirm --hidden-import=PyQt5.sip)",
+      "Bash(D:/code/autotest/dist/test_qt_uvicorn_noconsole.exe)",
+      "Bash(pyinstaller test_full_import.py --onedir --noconsole --name=test_full_import --clean --noconfirm --hidden-import=PyQt5.sip --hidden-import=uvicorn --hidden-import=uvicorn.logging --hidden-import=uvicorn.loops --hidden-import=uvicorn.loops.auto --hidden-import=uvicorn.protocols --hidden-import=uvicorn.protocols.http --hidden-import=uvicorn.protocols.http.auto --hidden-import=uvicorn.protocols.websockets --hidden-import=uvicorn.protocols.websockets.auto --hidden-import=uvicorn.lifespan --hidden-import=uvicorn.lifespan.on --add-data=config)",
+      "Bash(config --add-data=assets)",
+      "Bash(assets)",
+      "Bash(pyinstaller test_full_import.py --onedir --noconsole --name=test_full_import --clean --noconfirm --hidden-import=PyQt5.sip --hidden-import=uvicorn --hidden-import=uvicorn.logging --hidden-import=uvicorn.loops --hidden-import=uvicorn.loops.auto --hidden-import=uvicorn.protocols --hidden-import=uvicorn.protocols.http --hidden-import=uvicorn.protocols.http.auto --hidden-import=uvicorn.protocols.websockets --hidden-import=uvicorn.protocols.websockets.auto --hidden-import=uvicorn.lifespan --hidden-import=uvicorn.lifespan.on '--add-data=config;config' '--add-data=assets;assets')",
+      "Bash(D:/code/autotest/dist/test_full_import/test_full_import.exe)",
+      "Bash(pyinstaller test_full_import.py --onedir --console --name=test_full_import_console --clean --noconfirm --hidden-import=PyQt5.sip --hidden-import=uvicorn --hidden-import=uvicorn.logging --hidden-import=uvicorn.loops --hidden-import=uvicorn.loops.auto --hidden-import=uvicorn.protocols --hidden-import=uvicorn.protocols.http --hidden-import=uvicorn.protocols.http.auto --hidden-import=uvicorn.protocols.websockets --hidden-import=uvicorn.protocols.websockets.auto --hidden-import=uvicorn.lifespan --hidden-import=uvicorn.lifespan.on '--add-data=config;config' '--add-data=assets;assets')",
+      "Bash(D:/code/autotest/dist/test_full_import_console/test_full_import_console.exe *)",
+      "Bash(tee /tmp/build_log.txt)",
+      "Bash(D:/code/autotest/dist/windows/test-worker/test-worker.exe)",
+      "Bash(ls -la /tmp/*worker*.log)",
+      "Read(//c/Users/Administrator/AppData/Local/Temp/**)"
     ]
   }
 }
