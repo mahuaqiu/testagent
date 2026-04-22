@@ -26,7 +26,7 @@ class iOSPlatformManager(PlatformManager):
     使用 tidevice3 + WDA 直连控制 iOS 设备。
     """
 
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen", "pinch"}
 
     # iOS 按键映射：标准按键名 → WDA 按键名
     # WDA 支持的按键取决于设备型号，iPhone 8 (Touch ID) 只支持 home, volumeup, volumedown
@@ -389,6 +389,33 @@ class iOSPlatformManager(PlatformManager):
             success = client.swipe(wx1, wy1, wx2, wy2, duration=duration_sec)
             if not success:
                 raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")
+
+    # ========== 手势操作 ==========
+
+    def pinch(self, direction: str, scale: float = 0.5,
+              duration: int = 500, context: Any = None) -> None:
+        """
+        双指缩放手势。
+
+        Args:
+            direction: "in" 缩小 / "out" 放大
+            scale: 缩放比例
+            duration: 持续时间（毫秒）
+            context: 执行上下文
+        """
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise RuntimeError("No device context")
+
+        duration_sec = duration / 1000.0
+
+        # WDA pinch 方法
+        if direction == "in":
+            client.pinch(scale=scale, duration=duration_sec)
+        else:
+            client.pinch(scale=1.0 / scale, duration=duration_sec)
+
+        logger.debug(f"pinch {direction} executed: scale={scale}, duration={duration}ms")
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。
