@@ -5,13 +5,13 @@ Worker 配置管理模块。
 import logging
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 
+from common.utils import popen_cmd
 from worker.discovery.host import HostDiscoverer
 
 logger = logging.getLogger(__name__)
@@ -434,8 +434,8 @@ def cli_restart():
     logger.info(f"CLI mode: restarting with args={args}")
 
     try:
-        # 启动新进程（分离运行）
-        subprocess.Popen([executable] + args)
+        # 启动新进程（分离运行，隐藏窗口）
+        popen_cmd([executable] + args)
         # 退出当前进程
         sys.exit(0)
     except Exception as e:

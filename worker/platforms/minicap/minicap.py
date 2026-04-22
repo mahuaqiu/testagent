@@ -7,11 +7,12 @@ Minicap 截图工具实现。
 
 import logging
 import re
-import subprocess
 from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
+
+from common.utils import run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,8 @@ class Minicap:
     def _adb_shell(self, cmd: str, timeout: int = 30) -> str:
         """执行 adb shell 命令"""
         full_cmd = ["adb", "-s", self.udid, "shell", cmd]
-        result = subprocess.run(
+        result = run_cmd(
             full_cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout,
         )
         if result.returncode != 0:
@@ -54,10 +53,8 @@ class Minicap:
     def _adb_push(self, local_path: str, remote_path: str) -> None:
         """执行 adb push 命令"""
         full_cmd = ["adb", "-s", self.udid, "push", local_path, remote_path]
-        result = subprocess.run(
+        result = run_cmd(
             full_cmd,
-            capture_output=True,
-            text=True,
             timeout=60,
         )
         if result.returncode != 0:
@@ -172,9 +169,9 @@ class Minicap:
 
         # 执行命令获取截图
         full_cmd = ["adb", "-s", self.udid, "shell", cmd]
-        result = subprocess.run(
+        result = run_cmd(
             full_cmd,
-            capture_output=True,
+            text=False,  # 获取二进制数据
             timeout=30,
         )
 
