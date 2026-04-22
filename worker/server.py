@@ -4,6 +4,7 @@ HTTP Server。
 提供 RESTful API 接口供外部平台调用。
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -11,7 +12,7 @@ import threading
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -28,6 +29,12 @@ from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, sta
 from worker.worker import TaskConflictError, Worker
 
 logger = logging.getLogger(__name__)
+
+# WebSocket 连接计数器
+_ws_connections: dict[str, int] = {}
+
+# 最大 WebSocket 连接数（每设备）
+MAX_WS_CONNECTIONS_PER_DEVICE = 3
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -649,6 +656,57 @@ def _trigger_restart_after_response():
 
     # 启动后台线程执行重启
     threading.Thread(target=_do_restart_async, daemon=True).start()
+
+
+# ========== WebSocket 路由 ==========
+
+
+@app.websocket("/ws/screen/{device_id}")
+async def screen_stream(websocket: WebSocket, device_id: str):
+    """实时屏幕推流（10fps）。"""
+
+    # 检查连接数限制
+    current_count = _ws_connections.get(device_id, 0)
+
+    if current_count >= MAX_WS_CONNECTIONS_PER_DEVICE:
+        # 超过限制，拒绝连接（WebSocket Policy Violation）
+        await websocket.close(code=1008, reason="Max connections reached")
+        return
+
+    await websocket.accept()
+    _ws_connections[device_id] = current_count + 1
+
+    logger.info(f"WebSocket connected: device={device_id}, count={current_count + 1}")
+
+    try:
+        # 获取 ScreenManager
+        from worker.screen.manager import get_screen_manager, _screen_managers
+        from worker.screen.frame_source import WindowsFrameSource
+
+        if device_id not in _screen_managers:
+            frame_source = WindowsFrameSource(fps=10)
+            screen_manager = get_screen_manager(device_id, frame_source)
+        else:
+            screen_manager = _screen_managers[device_id]
+
+        streamer = screen_manager.start_streaming()
+
+        while streamer.is_running():
+            frame = await streamer.get_frame_async()
+            # 发送 JPEG 原始数据
+            await websocket.send_bytes(frame)
+            await asyncio.sleep(0.1)  # 10fps
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: device={device_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        # 确保减少连接计数
+        _ws_connections[device_id] = _ws_connections.get(device_id, 1) - 1
+        if _ws_connections[device_id] <= 0:
+            del _ws_connections[device_id]
+        logger.info(f"WebSocket connection closed: device={device_id}")
 
 
 # 异常处理

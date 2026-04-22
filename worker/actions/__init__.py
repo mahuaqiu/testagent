@@ -48,6 +48,8 @@ from worker.actions.cmd_exec import CmdExecAction
 from worker.actions.web_token import GetTokenAction
 from worker.actions.position import OcrGetPositionExecutor, ImageGetPositionExecutor
 from worker.actions.unlock import UnlockScreenAction
+from worker.actions.gesture import PinchAction
+from worker.actions.recording import StartRecordingAction, StopRecordingAction
 
 # 注册所有 Actions
 def _register_all_actions():
@@ -100,6 +102,13 @@ def _register_all_actions():
     # Unlock Screen Action
     ActionRegistry.register(UnlockScreenAction())
 
+    # Gesture Actions
+    ActionRegistry.register(PinchAction())
+
+    # Recording Actions
+    ActionRegistry.register(StartRecordingAction())
+    ActionRegistry.register(StopRecordingAction())
+
 
 # 模块加载时自动注册
 _register_all_actions()
@@ -151,4 +160,9 @@ __all__ = [
     "ImageGetPositionExecutor",
     # Unlock Screen Action
     "UnlockScreenAction",
+    # Gesture Actions
+    "PinchAction",
+    # Recording Actions
+    "StartRecordingAction",
+    "StopRecordingAction",
 ]

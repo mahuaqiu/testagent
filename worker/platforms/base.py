@@ -40,6 +40,9 @@ class PlatformManager(ABC):
         "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
+        "pinch",  # 双指缩放（Android/iOS）
+        "start_recording",  # 开始录屏
+        "stop_recording",  # 停止录屏
     }
 
     # 子类可覆盖，定义平台特有动作
