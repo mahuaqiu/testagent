@@ -75,6 +75,14 @@ class WorkerConfig:
     # 解锁屏幕配置
     unlock: Dict[str, Any] = field(default_factory=dict)
 
+    # 录屏配置
+    recording_output_dir: str = "data/recordings"
+    recording_default_fps: int = 10
+    recording_max_timeout_ms: int = 7200000  # 2小时
+
+    # WebSocket 推流配置
+    websocket_max_connections_per_device: int = 3
+
     # 配置版本号
     config_version: Optional[str] = None
 
@@ -109,6 +117,8 @@ class WorkerConfig:
         image_matching = data.get("image_matching", {})
         upgrade_cfg = data.get("upgrade", {})
         unlock_cfg = data.get("unlock", {})
+        recording_cfg = data.get("recording", {})
+        websocket_cfg = data.get("websocket_streaming", {})
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -131,6 +141,10 @@ class WorkerConfig:
             upgrade_check_timeout=upgrade_cfg.get("check_timeout", 30),
             upgrade_download_timeout=upgrade_cfg.get("download_timeout", 300),
             unlock=unlock_cfg,
+            recording_output_dir=recording_cfg.get("output_dir", "data/recordings"),
+            recording_default_fps=recording_cfg.get("default_fps", 10),
+            recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
+            websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:

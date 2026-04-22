@@ -224,3 +224,13 @@ unlock:
       "8": {x: 270, y: 1050}
       "9": {x: 450, y: 1050}
       "0": {x: 270, y: 1150}
+
+# 录屏配置
+recording:
+  output_dir: data/recordings    # 输出目录
+  default_fps: 10                # 默认帧率
+  max_timeout_ms: 7200000        # 最大超时（毫秒），2小时
+
+# WebSocket 推流配置
+websocket_streaming:
+  max_connections_per_device: 3  # 单设备最大连接数
