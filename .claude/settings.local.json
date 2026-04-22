@@ -120,7 +120,23 @@
       "Bash(curl -s -X POST http://127.0.0.1:8100/session -H \"Content-Type: application/json\" -d '{\"capabilities\": {}}')",
       "Bash(curl *)",
       "WebFetch(domain:appium.github.io)",
-      "Bash(dir \"D:\\\\code\\\\Airtest-master\\\\airtest\\\\core\\\\android\\\\static\\\\stf_libs\" /b)"
+      "Bash(dir \"D:\\\\code\\\\Airtest-master\\\\airtest\\\\core\\\\android\\\\static\\\\stf_libs\" /b)",
+      "Bash(pytest tests/unit/screen/test_frame_source.py -v)",
+      "Bash(pytest tests/unit/screen/test_frame_source.py -v --tb=short)",
+      "Bash(.venv/Scripts/python -m pytest tests/unit/screen/test_frame_source.py::TestWindowsFrameSource -v)",
+      "Bash(\"D:/code/autotest/venv/Scripts/python.exe\" -m pytest tests/unit/screen/test_frame_source.py::TestWindowsFrameSource -v)",
+      "Bash(D:/code/autotest/venv/Scripts/python.exe *)",
+      "Bash(cmd.exe *)",
+      "Bash(pytest tests/unit/screen/test_recorder.py -v)",
+      "Bash(\"D:/code/autotest/.venv/Scripts/python.exe\" -m pytest tests/unit/test_server_websocket.py -v)",
+      "Bash(.venv\\\\Scripts\\\\activate)",
+      "Bash(pytest tests/unit/actions/test_gesture.py -v)",
+      "Bash(pytest tests/unit/platforms/test_android_gesture.py -v)",
+      "Bash(pytest tests/unit/platforms/test_android_gesture.py::TestAndroidPinch::test_pinch_is_in_supported_actions -v --no-header)",
+      "Bash(pytest tests/unit/ -v --tb=short)",
+      "Bash(pytest tests/unit/platforms/test_ios_gesture.py -v)",
+      "Bash(pytest tests/unit/ --tb=short)",
+      "Bash(.venv/Scripts/python.exe -m py_compile worker/platforms/minicap/minicap.py worker/config.py)"
     ]
   }
 }
