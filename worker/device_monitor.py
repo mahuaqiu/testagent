@@ -192,6 +192,10 @@ class DeviceMonitor:
                 udid = device["udid"]
                 manager_devices = self._android_manager.get_online_devices()
                 if udid not in manager_devices:
+                    # 设备离线时关闭 ScreenManager
+                    from worker.screen.manager import close_screen_manager
+                    close_screen_manager(udid)
+
                     self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
                     self._faulty_android_devices.append({"udid": udid})
                     logger.warning(f"Android device went offline: {udid}")
@@ -201,6 +205,10 @@ class DeviceMonitor:
                 udid = device["udid"]
                 manager_devices = self._ios_manager.get_online_devices()
                 if udid not in manager_devices:
+                    # 设备离线时关闭 ScreenManager
+                    from worker.screen.manager import close_screen_manager
+                    close_screen_manager(udid)
+
                     self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
                     self._faulty_ios_devices.append({"udid": udid})
                     logger.warning(f"iOS device went offline: {udid}")
