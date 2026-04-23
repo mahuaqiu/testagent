@@ -28,6 +28,8 @@ from worker.tools import (
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
 
+from common.request_context import generate_request_id, set_request_id, clear_request_id
+
 logger = logging.getLogger(__name__)
 
 # WebSocket 连接计数器
@@ -218,24 +220,35 @@ async def execute_task(request: TaskRequest):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 记录原始请求数据（过滤 base64）
-    logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
+    # 生成 request-id
+    request_id = generate_request_id()
+    set_request_id(request_id)
 
-    # 同步执行（不生成 task_id）
     try:
+        # 记录原始请求数据（过滤 base64）
+        logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
+
+        # 同步执行（不生成 task_id）
         result = worker.execute_sync(
             platform=request.platform,
             actions=request.actions,
             device_id=request.device_id,
         )
+
+        # 添加 request_id 到返回结果
+        result['request_id'] = request_id
+
+        # 打印响应结果（排除 base64 数据）
+        logger.info(f"Sync task response: {_format_result_for_log(result)}")
+
+        return result
+
     except Exception as e:
         logger.error(f"execute_sync failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
-    # 打印响应结果（排除 base64 数据）
-    logger.info(f"Sync task response: {_format_result_for_log(result)}")
-
-    return result
+    finally:
+        clear_request_id()
 
 
 @app.post("/task/execute_async")
@@ -246,7 +259,7 @@ async def execute_task_async(request: TaskRequest):
     立即返回 task_id，任务在后台执行。
 
     Returns:
-        Dict: {"task_id": "xxx", "status": "running"}
+        Dict: {"task_id": "xxx", "status": "running", "request_id": "xxx"}
 
     Raises:
         HTTPException: 409 如果设备/平台正被占用
@@ -254,10 +267,14 @@ async def execute_task_async(request: TaskRequest):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 记录原始请求数据（过滤 base64）
-    logger.info(f"Async task raw request: {_format_request_for_log(request)}")
+    # 生成 request-id
+    request_id = generate_request_id()
+    set_request_id(request_id)
 
     try:
+        # 记录原始请求数据（过滤 base64）
+        logger.info(f"Async task raw request: {_format_request_for_log(request)}")
+
         task_id, status = worker.execute_async(
             platform=request.platform,
             actions=request.actions,
@@ -267,13 +284,16 @@ async def execute_task_async(request: TaskRequest):
         # 记录任务提交结果
         logger.info(f"Async task submitted: task_id={task_id}, status={status}")
 
-        return {"task_id": task_id, "status": status}
+        return {"task_id": task_id, "status": status, "request_id": request_id}
 
     except TaskConflictError as e:
         raise HTTPException(
             status_code=409,
             detail=str(e),
         )
+
+    finally:
+        clear_request_id()
 
 
 @app.get("/task/{task_id}")
