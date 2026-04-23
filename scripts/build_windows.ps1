@@ -1,193 +1,159 @@
-# Windows Build Script (PowerShell)
-
+# Nuitka Build Script for Windows
 param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
-    [switch]$Clean  # Use -Clean to force rebuild venv
+    [switch]$Clean,
+    [switch]$UseMsvc  # 使用 MSVC（需要 VS Build Tools），默认用 MinGW
 )
 
 Write-Host "=========================================="
-Write-Host "Building Test Worker for Windows"
+Write-Host "Building Test Worker with Nuitka"
 Write-Host "Version: $Version"
 Write-Host "Output: $OutputDir"
+if ($UseMsvc) { Write-Host "Compiler: MSVC" } else { Write-Host "Compiler: MinGW-w64 (default)" }
 Write-Host "=========================================="
 
-# Check Python
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Error "Python not found!"
     exit 1
 }
 
-# Virtual environment path
-$VenvPath = "build_env"
+$nuitkaInstalled = python -c "import nuitka; print('ok')" 2>$null
+if ($nuitkaInstalled -ne "ok") {
+    Write-Host "Installing Nuitka..."
+    pip install nuitka ordered-set zstandard
+}
 
-# Check if we need to recreate virtual environment
-if ($Clean -or -not (Test-Path $VenvPath)) {
-    if (Test-Path $VenvPath) {
-        Write-Host "[1/7] Removing old virtual environment..."
-        Remove-Item -Recurse -Force $VenvPath
+$mingwBinPath = ""
+if (-not $UseMsvc) {
+    # 默认使用 MinGW
+    $mingwPaths = @("C:\mingw64\bin\gcc.exe", "C:\msys64\ucrt64\bin\gcc.exe")
+    $mingwPath = $mingwPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $mingwPath) {
+        Write-Error "MinGW-w64 GCC not found at C:\mingw64\bin\gcc.exe"
+        Write-Host "Download from: https://github.com/niXman/mingw-builds-binaries/releases"
+        exit 1
     }
-    Write-Host "[1/7] Creating virtual environment..."
+    $mingwBinPath = Split-Path $mingwPath -Parent
+    Write-Host "MinGW-w64 GCC found: $mingwPath"
+    $env:PATH = "$mingwBinPath;$env:PATH"
+} else {
+    $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vsWhere)) {
+        Write-Error "Visual Studio Build Tools not found. Use -UseMingw flag."
+        exit 1
+    }
+}
+
+$VenvPath = "build_env_nuitka"
+if ($Clean -or -not (Test-Path $VenvPath)) {
+    if (Test-Path $VenvPath) { Remove-Item -Recurse -Force $VenvPath }
+    Write-Host "[1/6] Creating virtual environment..."
     python -m venv $VenvPath
 } else {
-    Write-Host "[1/7] Using existing virtual environment..."
+    Write-Host "[1/6] Using existing virtual environment..."
 }
 
-# Activate virtual environment
 & ".\$VenvPath\Scripts\Activate.ps1"
 
-# Check if pyinstaller exists in venv
-$PyinstallerExists = Test-Path ".\$VenvPath\Scripts\pyinstaller.exe"
+Write-Host "[2/6] Installing dependencies..."
+pip install --upgrade pip
+pip install nuitka ordered-set zstandard
+pip install -e ".[all]"
 
-if (-not $PyinstallerExists) {
-    Write-Host "[2/7] Installing dependencies (pyinstaller not found in venv)..."
-    pip install --upgrade pip
-    pip install -e ".[all]"
-    pip install pyinstaller
-} else {
-    Write-Host "[2/7] Dependencies already installed, skipping..."
-}
-
-# Check if Playwright chromium is already installed
-$ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
-$ChromiumInstalled = Test-Path $ChromiumPath
-
-if ($ChromiumInstalled) {
-    Write-Host "[3/7] Playwright chromium already installed, skipping..."
-} else {
-    Write-Host "[3/7] Installing Playwright browsers..."
-    playwright install chromium
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Playwright browser installation may have issues"
-    }
-}
-
-# Generate version file
-Write-Host "[4/7] Generating version file..."
+Write-Host "[3/6] Generating version file..."
 $BuildVersion = Get-Date -Format "yyyyMMddHHmm"
-$VersionFile = "worker\_version.py"
-$VersionContent = "VERSION = `"$BuildVersion`""
-Set-Content -Path $VersionFile -Value $VersionContent -Encoding UTF8
-Write-Host "Build version: $BuildVersion"
+Set-Content -Path "worker\_version.py" -Value "VERSION = `"$BuildVersion`"" -Encoding UTF8
 
-# Build
-Write-Host "[5/7] Building executable..."
-pyinstaller scripts/pyinstaller.spec --clean --noconfirm
+Write-Host "[4/6] Checking Playwright..."
+$ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
+if (-not (Test-Path $ChromiumPath)) { playwright install chromium }
+
+Write-Host "[5/6] Building with Nuitka..."
+
+$nuitkaArgs = @(
+    "--mode=standalone"
+    "worker\gui_main.py"
+    "--output-filename=test-worker.exe"
+    "--windows-console-mode=disable"
+    "--windows-uac-admin"
+    "--windows-icon-from-ico=assets\icon.ico"
+    "--include-data-dir=config=config"
+    "--include-data-dir=assets=assets"
+    "--include-data-dir=tools=tools"
+    "--enable-plugin=pyqt5"
+    "--include-package=uvicorn"
+    "--include-package=fastapi"
+    "--include-package=starlette"
+    "--include-package=httpx"
+    "--include-package=playwright"
+    "--include-package=pyautogui"
+    "--include-package=mss"
+    "--include-package=cv2"
+    "--include-package=PIL"
+    "--include-package=numpy"
+    "--include-package=pydantic"
+    "--include-package=pystray"
+    "--include-package=uiautomator2"
+    "--include-package=tidevice3"
+    "--include-module=uvicorn.logging"
+    "--include-module=uvicorn.loops"
+    "--include-module=uvicorn.loops.auto"
+    "--include-module=uvicorn.protocols"
+    "--include-module=uvicorn.protocols.http"
+    "--include-module=uvicorn.protocols.http.auto"
+    "--include-module=uvicorn.protocols.websockets"
+    "--include-module=uvicorn.protocols.websockets.auto"
+    "--include-module=uvicorn.lifespan"
+    "--include-module=uvicorn.lifespan.on"
+    "--nofollow-import-to=pytest"
+    "--nofollow-import-to=allure"
+    "--nofollow-import-to=faker"
+    "--output-dir=dist\nuitka_build"
+    "--show-progress"
+)
+
+if (-not $UseMsvc) { $nuitkaArgs += "--mingw64" }
+
+& python -m nuitka $nuitkaArgs
+
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "PyInstaller build failed!"
-    Remove-Item $VersionFile -ErrorAction SilentlyContinue
+    Write-Error "Nuitka build failed!"
+    Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
     deactivate
     exit 1
 }
 
-# Clean up version file (keep in source)
-Remove-Item $VersionFile -ErrorAction SilentlyContinue
+Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
 
-# Check generated directory
-$BuildDir = "dist\test-worker"
-if (-not (Test-Path $BuildDir)) {
+Write-Host "[6/6] Creating release package..."
+$PackageDir = "$OutputDir\test-worker"
+if (Test-Path $PackageDir) { Remove-Item -Recurse -Force $PackageDir }
+New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+
+$BuildDir = "dist\nuitka_build\gui_main.dist"
+if (Test-Path $BuildDir) {
+    Move-Item "$BuildDir\*" $PackageDir
+} else {
     Write-Error "Build directory not found: $BuildDir"
     deactivate
     exit 1
 }
 
-# Create release package (no version suffix)
-Write-Host "[6/7] Creating release package..."
-$PackageDir = "$OutputDir\test-worker"
+Set-Content -Path "$PackageDir\VERSION" -Value $BuildVersion -Encoding UTF8
 
-# Clean old release directory
-if (Test-Path $PackageDir) {
-    Remove-Item -Recurse -Force $PackageDir
-}
-New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
-
-# Move build directory to package
-Move-Item "$BuildDir\*" $PackageDir
-
-# Clean up empty build directory
-if (Test-Path $BuildDir) {
-    Remove-Item -Path $BuildDir -Force -Recurse -ErrorAction SilentlyContinue
-}
-
-# Write version to dist directory for installer to read
-$DistVersionFile = "$PackageDir\VERSION"
-Set-Content -Path $DistVersionFile -Value $BuildVersion -Encoding UTF8
-Write-Host "Version saved to: $DistVersionFile"
-
-# Copy Playwright chromium to package
 Write-Host "Copying Playwright chromium..."
-$SourcePlaywright = "$env:LOCALAPPDATA\ms-playwright"
-$DestPlaywright = "$PackageDir\playwright"
-
-$ChromiumDir = Get-ChildItem -Path $SourcePlaywright -Filter "chromium-*" -Directory | Select-Object -First 1
+$ChromiumDir = Get-ChildItem -Path "$env:LOCALAPPDATA\ms-playwright" -Filter "chromium-*" -Directory | Select-Object -First 1
 if ($ChromiumDir) {
-    Copy-Item -Path $ChromiumDir.FullName -Destination "$DestPlaywright\$($ChromiumDir.Name)" -Recurse
-    Write-Host "Copied chromium: $($ChromiumDir.Name)"
-} else {
-    Write-Warning "Playwright chromium not found at $SourcePlaywright"
+    Copy-Item -Path $ChromiumDir.FullName -Destination "$PackageDir\playwright\$($ChromiumDir.Name)" -Recurse
 }
 
-# Create start script
-@"
-@echo off
-chcp 65001 >nul 2>&1
-cd /d "%~dp0"
-test-worker.exe
-pause
-"@ | Out-File "$PackageDir\start.bat" -Encoding ASCII
+Set-Content -Path "$PackageDir\start.bat" -Value "@echo off`nchcp 65001 >nul 2>&1`ncd /d `%~dp0`ntest-worker.exe`npause" -Encoding ASCII
+Set-Content -Path "$PackageDir\README.txt" -Value "Test Worker - Windows (Nuitka Build)`nBuild Version: $BuildVersion" -Encoding UTF8
 
-# Create README
-@"
-Test Worker - Windows
-
-Usage:
-  1. Edit config\worker.yaml to configure settings
-  2. Double-click start.bat to start the worker
-  3. Or run from command line: test-worker.exe
-
-Configuration:
-  All settings are read from config\worker.yaml, including:
-  - Server port (default: 8088)
-  - IP address (optional, auto-detected if not specified)
-  - OCR service URL
-  - Platform API URL
-  - Platform-specific options
-
-Requirements:
-  - For Android/iOS: ADB and libimobiledevice must be installed
-  - For OCR: OCR service must be running
-
-Build Version: $BuildVersion
-"@ | Out-File "$PackageDir\README.txt" -Encoding UTF8
-
-# Deactivate virtual environment
 deactivate
 
-Write-Host "[7/7] Build complete!"
 Write-Host "=========================================="
-Write-Host "Build successful!"
+Write-Host "Build complete!"
 Write-Host "Package: $PackageDir"
-Write-Host "Build Version: $BuildVersion"
-Write-Host ""
-Write-Host "Note: Virtual environment preserved at: $VenvPath"
-Write-Host "Use -Clean flag to rebuild from scratch: .\build_windows.ps1 -Clean"
-Write-Host "=========================================="
-
-# 构建安装包（可选）
-Write-Host ""
-Write-Host "installation package build?"
-$BuildInstaller = Read-Host "Enter 'y' to build, and skip the other keys"
-
-if ($BuildInstaller -eq 'y') {
-    Write-Host "Building installer..."
-    & ".\installer\build_installer.ps1" -Version $BuildVersion
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Installer build failed, but EXE package is available"
-    }
-}
-
-Write-Host "=========================================="
-Write-Host "All builds complete!"
-Write-Host "EXE package: $PackageDir"
-Write-Host "Installer: $OutputDir\test-worker-installer.exe (if built)"
 Write-Host "=========================================="

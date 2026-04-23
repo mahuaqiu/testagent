@@ -157,7 +157,8 @@
       "Bash(tee /tmp/build_log.txt)",
       "Bash(D:/code/autotest/dist/windows/test-worker/test-worker.exe)",
       "Bash(ls -la /tmp/*worker*.log)",
-      "Read(//c/Users/Administrator/AppData/Local/Temp/**)"
+      "Read(//c/Users/Administrator/AppData/Local/Temp/**)",
+      "Bash(gh release *)"
     ]
   }
 }

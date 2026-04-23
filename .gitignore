@@ -16,3 +16,4 @@ worker.log
 /data/chrome_profile
 /data
 worker/_version.py
+/build_env_nuitka
