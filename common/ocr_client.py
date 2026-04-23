@@ -33,6 +33,7 @@ from typing import Optional
 import httpx
 
 from common.config import Config
+from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ class OCRClient:
         self.retry = retry
         self.lang = lang
         self._client = httpx.Client(timeout=self.timeout, trust_env=False)
+        self._last_response: dict = {}  # 缓存最后一次调用结果
 
     def recognize(
         self,
@@ -440,12 +442,17 @@ class OCRClient:
         last_error = None
         url = f"{self.base_url}{path}"
 
+        # 添加 request-id header
+        request_id = get_request_id()
+        headers = {"X-Request-Id": request_id or ""}
+
         for attempt in range(self.retry + 1):
             try:
                 logger.debug(f"OCR请求: {url}")
-                response = self._client.post(url, json=data)
+                response = self._client.post(url, json=data, headers=headers)
                 response.raise_for_status()
                 result = response.json()
+                self._last_response = result  # 缓存响应
                 logger.debug(f"OCR响应: status={result.get('status')}")
                 return result
             except Exception as e:
@@ -455,7 +462,9 @@ class OCRClient:
                     time.sleep(0.5 * (attempt + 1))
 
         logger.error(f"OCR请求最终失败: {url}, 错误: {last_error}")
-        return {"status": "error", "error": str(last_error)}
+        error_result = {"status": "error", "error": str(last_error)}
+        self._last_response = error_result  # 缓存错误结果
+        return error_result
 
     def close(self):
         """关闭客户端连接。"""
@@ -466,6 +475,10 @@ class OCRClient:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def get_last_response(self) -> dict:
+        """获取最后一次 OCR/Image 调用的原始响应。"""
+        return self._last_response
 
 
 # 全局客户端实例
