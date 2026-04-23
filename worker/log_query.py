@@ -109,13 +109,15 @@ def grep_request_id_in_file(file_path: str, request_id: str) -> list[str]:
     Returns:
         匹配的日志行列表
     """
+    # 搜索模式：[request_id]（方括号内精确匹配）
     pattern = f"[{request_id}]"
 
     try:
         if platform.system() == "Windows":
-            # Windows 使用 findstr
+            # Windows 使用 findstr /C: 进行字面字符串匹配
+            # /C: 后紧跟搜索字符串，方括号作为字面值而非正则字符集
             result = subprocess.run(
-                ["findstr", pattern, file_path],
+                ["findstr", f"/C:{pattern}", file_path],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
