@@ -222,7 +222,17 @@ class BaseActionExecutor(ActionExecutor):
         Returns:
             匹配中心坐标 (x, y)，未找到返回 None
         """
-        return platform._find_image_position(source_bytes, template_base64, threshold, index)
+        position = platform._find_image_position(source_bytes, template_base64, threshold, index)
+
+        # 图像匹配失败时打印原始响应
+        if position is None and platform.ocr_client:
+            last_response = platform.ocr_client.get_last_response()
+            logger.warning(
+                f"Image match failed, threshold={threshold}, "
+                f"ocr_response={last_response}"
+            )
+
+        return position
 
     def _find_text_with_fallback(
         self,
@@ -253,4 +263,14 @@ class BaseActionExecutor(ActionExecutor):
         if match_mode == "regex" and not text.startswith("reg_"):
             actual_text = f"reg_{text}"
         # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
-        return platform._find_text_position(image_bytes, actual_text, "exact", index)
+        position = platform._find_text_position(image_bytes, actual_text, "exact", index)
+
+        # OCR 失败时打印原始响应
+        if position is None and platform.ocr_client:
+            last_response = platform.ocr_client.get_last_response()
+            logger.warning(
+                f"OCR find text failed, target=\"{text}\", "
+                f"ocr_response={last_response}"
+            )
+
+        return position
