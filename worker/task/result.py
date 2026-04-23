@@ -36,6 +36,7 @@ class ActionResult:
     number: int  # 动作在任务列表中的序号（第几个动作）
     action_type: str
     status: ActionStatus
+    request_id: str | None = None  # request-id
     duration_ms: int = 0
     output: Optional[str] = None
     error: Optional[str] = None
@@ -53,6 +54,7 @@ class ActionResult:
             number=data.get("number", 0),
             action_type=data.get("action_type", ""),
             status=ActionStatus(data.get("status", "pending")),
+            request_id=data.get("request_id"),
             duration_ms=data.get("duration_ms", 0),
             output=data.get("output"),
             error=data.get("error"),
@@ -71,6 +73,8 @@ class ActionResult:
             "status": self.status.value,
             "duration_ms": self.duration_ms,
         }
+        if self.request_id is not None:
+            result["request_id"] = self.request_id
         if self.output is not None:
             result["output"] = self.output
         if self.error is not None:
@@ -92,6 +96,7 @@ class TaskResult:
     """任务执行结果。"""
 
     task_id: Optional[str] = None  # 可选，同步执行不生成 task_id
+    request_id: str | None = None  # request-id
     status: TaskStatus = TaskStatus.PENDING
     platform: str = ""
 
@@ -115,6 +120,7 @@ class TaskResult:
         """从字典创建。"""
         return cls(
             task_id=data.get("task_id", ""),
+            request_id=data.get("request_id"),
             status=TaskStatus(data.get("status", "pending")),
             platform=data.get("platform", ""),
             started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
@@ -143,6 +149,10 @@ class TaskResult:
         # task_id 可选输出
         if include_task_id and self.task_id:
             result["task_id"] = self.task_id
+
+        # request_id 可选输出
+        if self.request_id is not None:
+            result["request_id"] = self.request_id
 
         if self.started_at is not None:
             result["started_at"] = self.started_at.isoformat()
