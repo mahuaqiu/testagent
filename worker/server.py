@@ -28,6 +28,14 @@ from worker.tools import (
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
 
+from worker.log_query import (
+    query_by_lines,
+    query_by_request_id,
+    query_by_time_range,
+    validate_query_params,
+    LogQueryError,
+)
+
 from common.request_context import generate_request_id, set_request_id, clear_request_id
 
 logger = logging.getLogger(__name__)
@@ -360,18 +368,27 @@ async def refresh_devices():
 
 @app.get("/worker/logs", response_class=PlainTextResponse)
 async def get_logs(
-    lines: int = Query(default=400, ge=1, le=2000, description="返回的日志行数"),
+    lines: int | None = Query(default=None, ge=1, le=2000, description="返回的日志行数"),
+    request_id: str | None = Query(default=None, description="查询指定 request_id 的日志"),
+    start_time: str | None = Query(default=None, description="时间区间起始（ISO 8601 格式）"),
+    end_time: str | None = Query(default=None, description="时间区间结束（ISO 8601 格式）"),
 ):
     """
     获取日志内容。
 
-    返回最后 N 行日志纯文本。
+    支持三种查询模式（互斥）：
+    - lines: 返回最后 N 行（默认 400）
+    - request_id: grep 搜索所有日志文件
+    - start_time + end_time: 时间区间过滤（最多 5 分钟）
 
     Args:
-        lines: 返回的行数（默认 400，最大 2000）
+        lines: 返回行数（范围 1-2000）
+        request_id: 查询指定 request_id 的所有日志
+        start_time: 时间区间起始（ISO 8601）
+        end_time: 时间区间结束（ISO 8601）
 
     Returns:
-        PlainTextResponse: 日志内容（UTF-8 编码）
+        PlainTextResponse: 日志内容，带响应头 X-Log-Count 和 X-Files-Scanned
     """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
@@ -386,20 +403,40 @@ async def get_logs(
         raise HTTPException(status_code=404, detail=f"Log file not found: {log_path}")
 
     try:
-        # 读取最后 N 行日志
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            all_lines = f.readlines()
-            last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-            content = "".join(last_lines)
+        # 参数校验
+        mode, lines_val, request_id_val, start_dt, end_dt = validate_query_params(
+            lines, request_id, start_time, end_time
+        )
 
-        return PlainTextResponse(
+        # 执行查询
+        if mode == "lines":
+            content, log_count = query_by_lines(log_path, lines_val)
+            files_scanned = 1
+        elif mode == "request_id":
+            content, log_count, files_scanned = query_by_request_id(
+                log_path, request_id_val
+            )
+        else:  # time_range
+            content, log_count, files_scanned = query_by_time_range(
+                log_path, start_dt, end_dt
+            )
+
+        # 构建响应
+        response = PlainTextResponse(
             content=content,
             media_type="text/plain; charset=utf-8",
         )
+        response.headers["X-Log-Count"] = str(log_count)
+        response.headers["X-Files-Scanned"] = str(files_scanned)
 
+        return response
+
+    except LogQueryError as e:
+        logger.warning(f"Log query validation failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to read log file: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to read log file: {e}")
+        logger.error(f"Failed to query logs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to query logs: {e}")
 
 
 @app.post("/worker/upgrade")
