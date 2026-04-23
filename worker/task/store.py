@@ -36,6 +36,7 @@ class TaskEntry:
     result: Optional[TaskResult] = None
     thread: Optional[threading.Thread] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    request_id: str | None = None  # 用于异步任务传递 request-id
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict[str, Any]:
