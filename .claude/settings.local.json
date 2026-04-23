@@ -158,7 +158,10 @@
       "Bash(D:/code/autotest/dist/windows/test-worker/test-worker.exe)",
       "Bash(ls -la /tmp/*worker*.log)",
       "Read(//c/Users/Administrator/AppData/Local/Temp/**)",
-      "Bash(gh release *)"
+      "Bash(gh release *)",
+      "Bash(echo \"2026-04-24 10:00:00,123 [req-001] INFO logger: message\")",
+      "Bash(findstr /C:\"[req-001]\" /tmp/test.log)",
+      "Bash(findstr /C:\"[req-001]\" D:/code/autotest/test_findstr.log)"
     ]
   }
 }
