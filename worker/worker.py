@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from common.ocr_client import OCRClient
+from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
 from worker.config import PlatformConfig, WorkerConfig
 from worker.device_monitor import DeviceMonitor
@@ -833,6 +834,7 @@ class Worker:
         """
         started_at = datetime.now()
         actions_results = []
+        request_id = get_request_id()  # 获取 request_id
 
         for i, action in enumerate(task.actions):
             # 取消检查点：在执行每个 action 之前检查
@@ -843,6 +845,7 @@ class Worker:
                     logger.info(f"Task cancelled at action {i}: task_id={task.task_id}")
                     return TaskResult(
                         task_id=task.task_id,
+                        request_id=request_id,  # 填充 request_id
                         status=TaskStatus.CANCELLED,
                         platform=task.platform,
                         started_at=started_at,
@@ -853,6 +856,7 @@ class Worker:
 
             result = manager.execute_action(context, action)
             result.number = i
+            result.request_id = request_id  # 填充 request_id
             actions_results.append(result)
 
             # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
@@ -893,6 +897,7 @@ class Worker:
 
                 failed_result = TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,  # 填充 request_id
                     status=TaskStatus.FAILED,
                     platform=task.platform,
                     started_at=started_at,
@@ -916,6 +921,7 @@ class Worker:
 
         result = TaskResult(
             task_id=task.task_id,
+            request_id=request_id,  # 填充 request_id
             status=TaskStatus.SUCCESS,
             platform=task.platform,
             started_at=started_at,
@@ -1006,11 +1012,15 @@ class Worker:
             generate_id=True,
         )
 
+        # 获取当前 request-id（传递给后台线程）
+        request_id = get_request_id()
+
         # 创建任务条目
         entry = TaskEntry(
             task_id=task.task_id,
             task=task,
             status=TaskStatus.RUNNING,
+            request_id=request_id,  # 传递 request-id
         )
 
         # 存储任务
@@ -1036,8 +1046,15 @@ class Worker:
         Args:
             entry: 任务条目
         """
+        from common.request_context import set_request_id, clear_request_id
+
         task = entry.task
         platform = task.platform
+        request_id = entry.request_id
+
+        # 后台线程设置 request-id
+        if request_id:
+            set_request_id(request_id)
 
         try:
             # 获取平台管理器
@@ -1046,6 +1063,7 @@ class Worker:
                 entry.status = TaskStatus.FAILED
                 entry.result = TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,  # 填充 request_id
                     status=TaskStatus.FAILED,
                     platform=platform,
                     error=f"Platform manager not available: {platform}",
@@ -1067,6 +1085,7 @@ class Worker:
                     entry.status = TaskStatus.FAILED
                     entry.result = TaskResult(
                         task_id=task.task_id,
+                        request_id=request_id,  # 填充 request_id
                         status=TaskStatus.FAILED,
                         platform=platform,
                         error=f"Failed to start platform: {e}",
@@ -1079,6 +1098,7 @@ class Worker:
                 entry.status = TaskStatus.FAILED
                 entry.result = TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,  # 填充 request_id
                     status=TaskStatus.FAILED,
                     platform=platform,
                     error="Device is busy, please retry later",
@@ -1094,6 +1114,7 @@ class Worker:
                         entry.status = TaskStatus.FAILED
                         entry.result = TaskResult(
                             task_id=task.task_id,
+                            request_id=request_id,  # 填充 request_id
                             status=TaskStatus.FAILED,
                             platform=platform,
                             error=f"Device service not available: {message}",
@@ -1110,6 +1131,9 @@ class Worker:
                 result = self._execute_actions(
                     manager, context, task, cancel_event=entry.cancel_event
                 )
+
+                # 确保 result 包含 request_id
+                result.request_id = request_id
 
                 entry.result = result
                 entry.status = result.status
@@ -1129,6 +1153,7 @@ class Worker:
             entry.status = TaskStatus.FAILED
             entry.result = TaskResult(
                 task_id=task.task_id,
+                request_id=request_id,  # 填充 request_id
                 status=TaskStatus.FAILED,
                 platform=task.platform,
                 error=str(e),
@@ -1142,6 +1167,10 @@ class Worker:
             logger.info(
                 f"Async task completed: task_id={task.task_id}, status={entry.status}"
             )
+
+            # 清理 request-id
+            if request_id:
+                clear_request_id()
 
     def get_task_result(self, task_id: str) -> dict[str, Any] | None:
         """
