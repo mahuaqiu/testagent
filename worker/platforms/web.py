@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 try:
     import mss
     import pyautogui
+    import pyperclip
     SYSTEM_LEVEL_AVAILABLE = True
 except ImportError:
     SYSTEM_LEVEL_AVAILABLE = False
@@ -541,10 +542,11 @@ class WebPlatformManager(PlatformManager):
             _run_async(page.keyboard.type(text))
 
     def _system_input(self, text: str) -> None:
-        """系统级输入文本（使用 pyautogui）。"""
+        """系统级输入文本（使用剪贴板粘贴，支持特殊字符）。"""
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
-        pyautogui.write(text)
+        pyperclip.copy(text)
+        pyautogui.hotkey('ctrl', 'v')
         logger.debug(f"System-level input: {text}")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,

@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, Optional, Set
 
 import pyautogui
+import pyperclip
 
 from common.utils import run_cmd, popen_cmd
 from worker.platforms.base import PlatformManager
@@ -103,8 +104,9 @@ class WindowsPlatformManager(PlatformManager):
         pyautogui.moveTo(x, y)
 
     def input_text(self, text: str, context: Any = None) -> None:
-        """输入文本。"""
-        pyautogui.write(text)
+        """输入文本（使用剪贴板粘贴，支持特殊字符）。"""
+        pyperclip.copy(text)
+        pyautogui.hotkey('ctrl', 'v')
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
               duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
