@@ -10,6 +10,17 @@ import sys
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
+from common.request_context import get_request_id
+
+
+class RequestIdFormatter(logging.Formatter):
+    """自定义 Formatter，自动注入 request-id。"""
+
+    def format(self, record):
+        # 在格式化前设置 request_id
+        record.request_id = get_request_id() or '-'
+        return super().format(record)
+
 
 def get_default_log_path() -> str:
     """
@@ -72,9 +83,9 @@ def setup_logging(
     log_level = getattr(logging, level.upper(), logging.INFO)
     root_logger.setLevel(log_level)
 
-    # 日志格式
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    formatter = logging.Formatter(log_format)
+    # 日志格式（包含 request_id）
+    log_format = "%(asctime)s [%(request_id)s] %(levelname)s %(name)s: %(message)s"
+    formatter = RequestIdFormatter(log_format)
 
     # 添加文件处理器（轮转）
     file_handler = RotatingFileHandler(
