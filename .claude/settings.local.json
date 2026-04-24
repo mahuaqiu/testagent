@@ -161,7 +161,10 @@
       "Bash(gh release *)",
       "Bash(echo \"2026-04-24 10:00:00,123 [req-001] INFO logger: message\")",
       "Bash(findstr /C:\"[req-001]\" /tmp/test.log)",
-      "Bash(findstr /C:\"[req-001]\" D:/code/autotest/test_findstr.log)"
+      "Bash(findstr /C:\"[req-001]\" D:/code/autotest/test_findstr.log)",
+      "Bash(rm -rf \"C:/Users/Administrator/AppData/Local/Nuitka/Nuitka/Cache/downloads/gcc\")",
+      "Bash(rm -rf \"D:/code/autotest/dist/nuitka_build\")",
+      "Bash(rm -f \"D:/code/autotest/nuitka-crash-report.xml\")"
     ]
   }
 }

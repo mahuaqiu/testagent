@@ -215,7 +215,12 @@ class GUIApp:
     def _get_icon_path(self) -> str:
         """获取图标路径（PNG 格式，pystray 需要）。"""
         if getattr(sys, 'frozen', False):
+            # Nuitka standalone 模式：assets 直接在 exe 同级目录
             base_dir = os.path.dirname(sys.executable)
+            icon_path = os.path.join(base_dir, "assets", "icon.png")
+            if os.path.exists(icon_path):
+                return icon_path
+            # 备选：_internal 目录（某些打包模式）
             return os.path.join(base_dir, "_internal", "assets", "icon.png")
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
