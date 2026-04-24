@@ -378,14 +378,42 @@ class Worker:
         if not self.reporter:
             return
 
-        # 获取设备信息
-        devices_data = self.get_devices()
+        # 获取设备信息 - 从 DeviceMonitor 获取最新的设备状态
+        if self.device_monitor:
+            devices = self.device_monitor.get_all_devices()
+            android_udids = [d["udid"] for d in devices.get("android", [])]
+            ios_udids = [d["udid"] for d in devices.get("ios", [])]
+        else:
+            # DeviceMonitor 未启动时，使用启动时发现的设备列表
+            android_udids = [d.udid for d in self.android_devices]
+            ios_udids = [d.udid for d in self.ios_devices]
+
+        # 获取本机 IP
+        ip = HostDiscoverer.get_preferred_ip(self.config.ip)
+
+        devices_payload: dict[str, list[str]] = {}
+
+        # 1. 根据操作系统添加桌面平台
+        if self.host_info:
+            if self.host_info.os_type == "windows":
+                devices_payload["windows"] = []
+                devices_payload["web"] = []
+            elif self.host_info.os_type == "macos":
+                devices_payload["mac"] = []
+
+        # 2. Android 设备
+        if android_udids:
+            devices_payload["android"] = android_udids
+
+        # 3. iOS 设备
+        if ios_udids:
+            devices_payload["ios"] = ios_udids
 
         # 调用新的注册接口
         self.reporter.register_env(
-            ip=devices_data["ip"],
-            port=devices_data["port"],
-            devices=devices_data["devices"],
+            ip=ip,
+            port=self.port,
+            devices=devices_payload,
             version=self._get_version(),
             config_version=self.config.config_version,
         )
