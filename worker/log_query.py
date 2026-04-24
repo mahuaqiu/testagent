@@ -242,8 +242,9 @@ def query_by_time_range(
                 if start_time <= line_time <= end_time:
                     all_matches.append(line.rstrip("\n\r"))
 
-                # 停止优化：遇到早于 start_time 的行，后面的文件都不需要了
-                if line_time < start_time:
+                # 停止优化：日志文件是从旧到新追加写入的
+                # 当遇到晚于 end_time 的行时，已经过了查询区间上限，后续所有行都更晚
+                if line_time > end_time:
                     should_stop = True
                     break
 
