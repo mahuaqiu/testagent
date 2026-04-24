@@ -326,9 +326,17 @@ async def get_task_result(task_id: str):
         logger.info(f"Task result not found: task_id={task_id}")
         raise HTTPException(status_code=404, detail="Task not found")
 
-    logger.info(f"Task result response: {_format_result_for_log(result)}")
+    # 从任务结果中获取 request_id 并设置到当前线程
+    request_id = result.get('request_id')
+    if request_id:
+        set_request_id(request_id)
 
-    return result
+    try:
+        logger.info(f"Task result response: {_format_result_for_log(result)}")
+        return result
+    finally:
+        if request_id:
+            clear_request_id()
 
 
 @app.delete("/task/{task_id}")
