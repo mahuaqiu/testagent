@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from queue import Queue, Empty
 from typing import Optional, TYPE_CHECKING
 
@@ -87,9 +88,14 @@ class ScreenManager:
 
     def _capture_loop(self) -> None:
         """后台截图循环（队列满时丢弃旧帧）。"""
+        consecutive_errors = 0
+        max_consecutive_errors = 10  # 连续错误阈值
+
         while self._running:
             try:
                 frame = self._frame_source.get_frame_with_reconnect()
+                consecutive_errors = 0  # 成功后重置计数
+
                 if self._frame_queue.full():
                     # 队列满时丢弃最旧的帧
                     try:
@@ -98,7 +104,17 @@ class ScreenManager:
                         pass
                 self._frame_queue.put(frame, timeout=1)
             except Exception as e:
-                logger.warning(f"Frame capture error: {e}")
+                consecutive_errors += 1
+                # 连续错误时只打印一次摘要，避免刷屏
+                if consecutive_errors == 1:
+                    logger.warning(f"Frame capture error: {e}")
+                elif consecutive_errors == max_consecutive_errors:
+                    logger.error(f"Frame capture failed {max_consecutive_errors} times, stopping capture")
+                    break
+
+                # 连续错误时增加延迟，避免快速循环
+                if consecutive_errors >= 3:
+                    time.sleep(0.5)
 
     def start_recording(self, output_path: str, fps: int = 10,
                         timeout_ms: int = 7200000) -> bool:

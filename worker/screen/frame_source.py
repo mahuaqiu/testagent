@@ -105,21 +105,68 @@ class MinicapFrameSource(FrameSource):
 
 
 class MJPEGFrameSource(FrameSource):
-    """iOS: WDA 9100 MJPEG 流。"""
+    """iOS: WDA MJPEG 流（固定端口 9100）。"""
 
     def __init__(self, device_id: str, wda_client):
         self.device_id = device_id
         self.wda_client = wda_client
         self._screen_size: Optional[tuple[int, int]] = None
+        self._stream_response = None
+        self._stream_iterator = None
+        self._stream_buffer = b""
 
     def get_frame(self) -> bytes:
-        """从 WDA MJPEG 流获取帧。"""
-        # WDA 客户端提供 screenshot 方法
-        # 使用 WDA 的 MJPEG 流：http://<device_ip>:9100
+        """从 WDA MJPEG 流获取帧（流式读取 multipart 格式）。"""
+        import re
         import requests
-        mjpeg_url = f"http://{self.wda_client.url.split('/')[2]}:9100"
-        response = requests.get(mjpeg_url, timeout=5)
-        return response.content
+
+        host_with_port = self.wda_client.base_url.split('/')[2]
+        host = host_with_port.split(':')[0]
+        mjpeg_url = f"http://{host}:9100"
+
+        # 打开持续流（stream=True）
+        if self._stream_response is None:
+            self._stream_response = requests.get(mjpeg_url, stream=True, timeout=30)
+            self._stream_iterator = self._stream_response.iter_content(chunk_size=8192)
+
+        # 解析 multipart 格式：--BoundaryString + Content-Length + JPEG 数据
+        boundary = b"--BoundaryString"
+        content_length_pattern = re.compile(rb"Content-Length: (\d+)")
+
+        # 读取数据直到找到完整帧
+        while True:
+            # 查找 boundary
+            boundary_pos = self._stream_buffer.find(boundary)
+            if boundary_pos != -1:
+                # 查找 Content-Length
+                header_start = boundary_pos + len(boundary)
+                header_end = self._stream_buffer.find(b"\r\n\r\n", header_start)
+                if header_end != -1:
+                    header = self._stream_buffer[header_start:header_end]
+                    match = content_length_pattern.search(header)
+                    if match:
+                        content_length = int(match.group(1))
+                        data_start = header_end + 4  # \r\n\r\n
+
+                        # 检查是否有完整帧数据
+                        if len(self._stream_buffer) >= data_start + content_length:
+                            # 提取 JPEG 数据
+                            frame_data = self._stream_buffer[data_start:data_start + content_length]
+                            # 清理已处理的数据
+                            self._stream_buffer = self._stream_buffer[data_start + content_length:]
+                            return frame_data
+
+            # 从流读取更多数据
+            try:
+                chunk = next(self._stream_iterator)
+                self._stream_buffer += chunk
+            except StopIteration:
+                # 流结束，重新连接
+                self._stream_response.close()
+                self._stream_response = None
+                self._stream_iterator = None
+                self._stream_buffer = b""
+                raise ConnectionError("MJPEG stream ended")
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取屏幕尺寸。"""
@@ -135,11 +182,15 @@ class MJPEGFrameSource(FrameSource):
 
     def start(self) -> None:
         """启动 MJPEG 流。"""
-        pass  # MJPEG 流无需预先启动
+        pass  # 流在 get_frame 时自动打开
 
     def stop(self) -> None:
         """停止 MJPEG 流。"""
-        pass
+        if self._stream_response:
+            self._stream_response.close()
+            self._stream_response = None
+        self._stream_iterator = None
+        self._stream_buffer = b""
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""

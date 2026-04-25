@@ -116,7 +116,15 @@ class iOSPlatformManager(PlatformManager):
                     if probe_client.health_check():
                         logger.info(f"Found existing WDA on port {self.wda_base_port}, reusing (attempt {i+1})")
                         self._device_clients[udid] = probe_client
-                        self._device_wda[udid] = {"port": self.wda_base_port, "process": None}
+                        # 启动 MJPEG 端口转发（设备端口 9100 -> 本地端口 9100）
+                        mjpeg_port = 9100
+                        mjpeg_process = self._start_mjpeg_relay(udid, mjpeg_port)
+                        self._device_wda[udid] = {
+                            "port": self.wda_base_port,
+                            "mjpeg_port": mjpeg_port,
+                            "process": None,
+                            "mjpeg_process": mjpeg_process,
+                        }
                         return ("online", "OK")
                     time.sleep(1)
 
@@ -181,26 +189,58 @@ class iOSPlatformManager(PlatformManager):
         except Exception as e:
             logger.warning(f"Failed to kill port process: {e}")
 
+    def _start_mjpeg_relay(self, udid: str, mjpeg_port: int = 9100):
+        """启动 MJPEG 端口转发（设备端口 9100 -> 本地端口）。"""
+        import subprocess
+        creationflags = subprocess.DETACHED_PROCESS if hasattr(subprocess, 'DETACHED_PROCESS') else 0
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        process = subprocess.Popen(
+            [
+                "t3",
+                "-u", udid,
+                "relay",
+                str(mjpeg_port),
+                "9100"
+            ],
+            stdin=None,
+            stdout=None,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+        logger.info(f"MJPEG relay started: device port 9100 -> local port {mjpeg_port}")
+        return process
+
     def _stop_wda(self, udid: str) -> None:
-        """停止 WDA 进程。"""
+        """停止 WDA 进程和 MJPEG 转发进程。"""
         if udid in self._device_wda:
             wda_info = self._device_wda[udid]
             process = wda_info.get("process")
+            mjpeg_process = wda_info.get("mjpeg_process")
             if process:
                 try:
                     process.terminate()
                     process.wait(timeout=5)
                 except Exception:
                     process.kill()
+            if mjpeg_process:
+                try:
+                    mjpeg_process.terminate()
+                    mjpeg_process.wait(timeout=5)
+                except Exception:
+                    mjpeg_process.kill()
             del self._device_wda[udid]
 
     def _start_wda(self, udid: str) -> tuple[str, str]:
-        """启动 WDA 服务。"""
+        """启动 WDA 服务（含 MJPEG 端口转发）。"""
         try:
             if udid in self._device_wda:
                 self._stop_wda(udid)
 
             port = self._allocate_port()
+            mjpeg_port = 9100  # MJPEG 端口固定为 9100
 
             # t3 runwda 命令 - 隐藏窗口，stderr 抑制（避免打印垃圾日志）
             # Windows: 使用 DETACHED_PROCESS 让子进程独立运行，STARTUPINFO 隐藏窗口
@@ -225,18 +265,27 @@ class iOSPlatformManager(PlatformManager):
                 startupinfo=startupinfo,
             )
 
+            # 启动 MJPEG 端口转发（设备端口 9100 -> 本地端口 9100）
+            mjpeg_process = self._start_mjpeg_relay(udid, mjpeg_port)
+
             base_url = f"http://127.0.0.1:{port}"
             client = WDAClient(base_url)
 
             logger.info(f"WDA process started on port {port}, waiting for ready...")
             if client.wait_ready(timeout=30):
-                self._device_wda[udid] = {"port": port, "process": process}
+                self._device_wda[udid] = {
+                    "port": port,
+                    "mjpeg_port": mjpeg_port,
+                    "process": process,
+                    "mjpeg_process": mjpeg_process,
+                }
                 self._device_clients[udid] = client
-                logger.info(f"WDA started: {udid} on port {port}")
+                logger.info(f"WDA started: {udid} on port {port}, MJPEG on port {mjpeg_port}")
                 return ("online", "OK")
             else:
                 logger.warning(f"WDA failed to become ready on port {port}")
                 process.terminate()
+                mjpeg_process.terminate()
                 return ("faulty", "WDA failed to start")
 
         except Exception as e:

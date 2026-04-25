@@ -727,9 +727,14 @@ def _trigger_restart_after_response():
 # ========== WebSocket 路由 ==========
 
 
-@app.websocket("/ws/screen/{device_id}")
-async def screen_stream(websocket: WebSocket, device_id: str):
-    """实时屏幕推流（10fps）。"""
+@app.websocket("/ws/screen/{platform}/{device_id}")
+async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
+    """实时屏幕推流（10fps）。
+
+    Args:
+        platform: 设备平台类型 (ios, android, windows, mac, web)
+        device_id: 设备标识符
+    """
 
     # 从配置读取参数（使用默认值作为 fallback）
     max_connections = DEFAULT_WS_MAX_CONNECTIONS
@@ -738,8 +743,9 @@ async def screen_stream(websocket: WebSocket, device_id: str):
         max_connections = worker.config.websocket_max_connections_per_device
         send_timeout = worker.config.websocket_send_timeout_seconds
 
-    # 检查连接数限制
-    current_count = _ws_connections.get(device_id, 0)
+    # 连接计数使用 platform+device_id 组合作为 key
+    conn_key = f"{platform}/{device_id}"
+    current_count = _ws_connections.get(conn_key, 0)
 
     if current_count >= max_connections:
         # 超过限制，拒绝连接（WebSocket Policy Violation）
@@ -747,20 +753,47 @@ async def screen_stream(websocket: WebSocket, device_id: str):
         return
 
     await websocket.accept()
-    _ws_connections[device_id] = current_count + 1
+    _ws_connections[conn_key] = current_count + 1
 
-    logger.info(f"WebSocket connected: device={device_id}, count={current_count + 1}")
+    logger.info(f"WebSocket connected: platform={platform}, device={device_id}, count={current_count + 1}")
 
     try:
         # 获取 ScreenManager
         from worker.screen.manager import get_screen_manager, _screen_managers
-        from worker.screen.frame_source import WindowsFrameSource
+        from worker.screen.frame_source import (
+            WindowsFrameSource,
+            MJPEGFrameSource,
+            MinicapFrameSource,
+        )
 
-        if device_id not in _screen_managers:
-            frame_source = WindowsFrameSource(fps=10)
-            screen_manager = get_screen_manager(device_id, frame_source)
+        # iOS/Android: 检查设备是否已注册（有 WDA/minicap 服务）
+        if platform == "ios":
+            if not worker or not worker.ios_manager:
+                logger.warning(f"WebSocket rejected: iOS platform not initialized")
+                await websocket.close(code=1008, reason="iOS platform not initialized")
+                return
+            wda_client = worker.ios_manager._device_clients.get(device_id)
+            if not wda_client:
+                logger.warning(f"WebSocket rejected: iOS device not registered: {device_id}")
+                await websocket.close(code=1008, reason=f"iOS device not registered: {device_id}")
+                return
+        elif platform == "android":
+            if not worker or not worker.android_manager:
+                logger.warning(f"WebSocket rejected: Android platform not initialized")
+                await websocket.close(code=1008, reason="Android platform not initialized")
+                return
+            minicap = worker.android_manager._minicap_instances.get(device_id)
+            if not minicap:
+                logger.warning(f"WebSocket rejected: Android device not registered: {device_id}")
+                await websocket.close(code=1008, reason=f"Android device not registered: {device_id}")
+                return
+
+        # 根据 platform 创建对应的 FrameSource
+        if conn_key not in _screen_managers:
+            frame_source = _create_frame_source(platform, device_id)
+            screen_manager = get_screen_manager(conn_key, frame_source)
         else:
-            screen_manager = _screen_managers[device_id]
+            screen_manager = _screen_managers[conn_key]
 
         streamer = screen_manager.start_streaming()
 
@@ -773,21 +806,72 @@ async def screen_stream(websocket: WebSocket, device_id: str):
                     timeout=send_timeout
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: device={device_id}")
+                logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: platform={platform}, device={device_id}")
                 await websocket.close(code=1001, reason="Send timeout")
                 break
             await asyncio.sleep(0.1)  # 10fps
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: device={device_id}")
+        logger.info(f"WebSocket disconnected: platform={platform}, device={device_id}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
         # 确保减少连接计数
-        _ws_connections[device_id] = _ws_connections.get(device_id, 1) - 1
-        if _ws_connections[device_id] <= 0:
-            del _ws_connections[device_id]
-        logger.info(f"WebSocket connection closed: device={device_id}")
+        _ws_connections[conn_key] = _ws_connections.get(conn_key, 1) - 1
+        if _ws_connections[conn_key] <= 0:
+            del _ws_connections[conn_key]
+        logger.info(f"WebSocket connection closed: platform={platform}, device={device_id}")
+
+
+def _create_frame_source(platform: str, device_id: str):
+    """根据平台类型创建对应的 FrameSource。
+
+    Args:
+        platform: 设备平台类型 (ios, android, windows, mac, web)
+        device_id: 设备标识符
+
+    Returns:
+        FrameSource 实例
+    """
+    from worker.screen.frame_source import (
+        WindowsFrameSource,
+        MJPEGFrameSource,
+        MinicapFrameSource,
+    )
+
+    if platform == "ios":
+        # iOS: 使用 WDA MJPEG 流
+        if worker and worker.ios_manager:
+            wda_client = worker.ios_manager._device_clients.get(device_id)
+            if wda_client:
+                return MJPEGFrameSource(device_id, wda_client)
+        # Fallback: 直接连接 WDA（假设本地 9100 端口）
+        from worker.platforms.wda_client import WDAClient
+        wda_client = WDAClient("http://127.0.0.1:8100")
+        return MJPEGFrameSource(device_id, wda_client)
+
+    elif platform == "android":
+        # Android: 使用 minicap 流
+        if worker and worker.android_manager:
+            minicap = worker.android_manager._minicap_instances.get(device_id)
+            if minicap:
+                return MinicapFrameSource(device_id, minicap)
+        # Fallback: 创建新的 minicap 实例
+        from worker.platforms.minicap import Minicap
+        minicap = Minicap(device_id)
+        minicap.install()
+        return MinicapFrameSource(device_id, minicap)
+
+    elif platform in ("windows", "mac"):
+        # Windows/Mac: 使用系统截屏（mss 支持跨平台）
+        return WindowsFrameSource(fps=10)
+
+    elif platform == "web":
+        # Web: 暂不支持 WebSocket 推流（需要 Playwright page 实例）
+        raise ValueError("Web platform does not support WebSocket screen streaming")
+
+    else:
+        raise ValueError(f"Unsupported platform: {platform}")
 
 
 # 异常处理
