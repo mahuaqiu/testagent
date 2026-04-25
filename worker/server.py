@@ -728,12 +728,18 @@ def _trigger_restart_after_response():
 
 
 @app.websocket("/ws/screen/{platform}/{device_id}")
-async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
+async def screen_stream(
+    websocket: WebSocket,
+    platform: str,
+    device_id: str,
+    monitor: int = 1  # 新增：屏幕索引，默认1=主显示器
+):
     """实时屏幕推流（10fps）。
 
     Args:
         platform: 设备平台类型 (ios, android, windows, mac, web)
         device_id: 设备标识符
+        monitor: 屏幕索引（mss索引：1=主显示器，2+=副显示器）
     """
 
     # 从配置读取参数（使用默认值作为 fallback）
@@ -743,8 +749,14 @@ async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
         max_connections = worker.config.websocket_max_connections_per_device
         send_timeout = worker.config.websocket_send_timeout_seconds
 
-    # 连接计数使用 platform+device_id 组合作为 key
-    conn_key = f"{platform}/{device_id}"
+    # 连接计数和 ScreenManager key
+    # 桌面端设备：key 包含 monitor 参数，支持多屏幕
+    # 移动端设备：key 不包含 monitor，单屏幕
+    if platform in ("windows", "mac"):
+        conn_key = f"{platform}/{device_id}/{monitor}"
+    else:
+        conn_key = f"{platform}/{device_id}"
+
     current_count = _ws_connections.get(conn_key, 0)
 
     if current_count >= max_connections:
@@ -755,7 +767,9 @@ async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
     await websocket.accept()
     _ws_connections[conn_key] = current_count + 1
 
-    logger.info(f"WebSocket connected: platform={platform}, device={device_id}, count={current_count + 1}")
+    # 日志显示 monitor 参数
+    log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+    logger.info(f"WebSocket connected: platform={platform}, device={log_device}, count={current_count + 1}")
 
     try:
         # 获取 ScreenManager
@@ -790,7 +804,7 @@ async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
 
         # 根据 platform 创建对应的 FrameSource
         if conn_key not in _screen_managers:
-            frame_source = _create_frame_source(platform, device_id)
+            frame_source = _create_frame_source(platform, device_id, monitor)
             screen_manager = get_screen_manager(conn_key, frame_source)
         else:
             screen_manager = _screen_managers[conn_key]
@@ -812,23 +826,27 @@ async def screen_stream(websocket: WebSocket, platform: str, device_id: str):
             await asyncio.sleep(0.1)  # 10fps
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: platform={platform}, device={device_id}")
+        log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+        logger.info(f"WebSocket disconnected: platform={platform}, device={log_device}")
     except Exception as e:
+        log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.error(f"WebSocket error: {e}")
     finally:
         # 确保减少连接计数
         _ws_connections[conn_key] = _ws_connections.get(conn_key, 1) - 1
         if _ws_connections[conn_key] <= 0:
             del _ws_connections[conn_key]
-        logger.info(f"WebSocket connection closed: platform={platform}, device={device_id}")
+        log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+        logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
 
 
-def _create_frame_source(platform: str, device_id: str):
+def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
     """根据平台类型创建对应的 FrameSource。
 
     Args:
         platform: 设备平台类型 (ios, android, windows, mac, web)
         device_id: 设备标识符
+        monitor: 屏幕索引（mss索引：1=主显示器，2+=副显示器）
 
     Returns:
         FrameSource 实例
@@ -863,8 +881,8 @@ def _create_frame_source(platform: str, device_id: str):
         return MinicapFrameSource(device_id, minicap)
 
     elif platform in ("windows", "mac"):
-        # Windows/Mac: 使用系统截屏（mss 支持跨平台）
-        return WindowsFrameSource(fps=10)
+        # Windows/Mac: 使用系统截屏（mss 支持跨平台），传递 monitor 参数
+        return WindowsFrameSource(fps=10, monitor=monitor)
 
     elif platform == "web":
         # Web: 暂不支持 WebSocket 推流（需要 Playwright page 实例）
