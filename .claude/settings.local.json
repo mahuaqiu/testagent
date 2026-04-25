@@ -164,7 +164,11 @@
       "Bash(findstr /C:\"[req-001]\" D:/code/autotest/test_findstr.log)",
       "Bash(rm -rf \"C:/Users/Administrator/AppData/Local/Nuitka/Nuitka/Cache/downloads/gcc\")",
       "Bash(rm -rf \"D:/code/autotest/dist/nuitka_build\")",
-      "Bash(rm -f \"D:/code/autotest/nuitka-crash-report.xml\")"
+      "Bash(rm -f \"D:/code/autotest/nuitka-crash-report.xml\")",
+      "Bash(netstat -ano)",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(findstr -E \"8100|9100\")",
+      "Bash(findstr \"9100\")"
     ]
   }
 }
