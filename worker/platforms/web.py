@@ -467,8 +467,9 @@ class WebPlatformManager(PlatformManager):
             level: 执行层级（browser 或 system）
         """
         effective_level = level or self._current_level
+        effective_monitor = self._current_monitor
         if effective_level == "system":
-            self._system_click(x, y, duration)
+            self._system_click(x, y, duration, effective_monitor)
             return
         page = context or self._current_page
         if page:
@@ -483,53 +484,77 @@ class WebPlatformManager(PlatformManager):
             else:
                 _run_async(page.mouse.click(x, y))
 
-    def _system_click(self, x: int, y: int, duration: int = 0) -> None:
-        """系统级点击（使用 pyautogui），支持长按。"""
+    def _system_click(self, x: int, y: int, duration: int = 0, monitor: int = 1) -> None:
+        """系统级点击（使用 pyautogui），支持长按。
+
+        坐标转换：截图是相对坐标，pyautogui 需要全局坐标。
+        """
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available (mss/pyautogui not installed)")
+
+        # 坐标转换：相对坐标 -> 全局坐标
+        from worker.screen.monitor_utils import convert_to_global_coords
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+
         if duration > 0:
             duration_sec = duration / 1000.0
-            pyautogui.moveTo(x, y)
+            pyautogui.moveTo(global_x, global_y)
             pyautogui.mouseDown()
             pyautogui.mouseUp(duration=duration_sec)
-            logger.debug(f"System-level long click at ({x}, {y}) for {duration}ms")
+            logger.debug(f"System-level long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms")
         else:
-            pyautogui.click(x, y)
-            logger.debug(f"System-level click at ({x}, {y})")
+            pyautogui.click(global_x, global_y)
+            logger.debug(f"System-level click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def double_click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """双击指定坐标。"""
         effective_level = level or self._current_level
+        effective_monitor = self._current_monitor
         if effective_level == "system":
-            self._system_double_click(x, y)
+            self._system_double_click(x, y, effective_monitor)
             return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.click(x, y, click_count=2))
 
-    def _system_double_click(self, x: int, y: int) -> None:
-        """系统级双击（使用 pyautogui）。"""
+    def _system_double_click(self, x: int, y: int, monitor: int = 1) -> None:
+        """系统级双击（使用 pyautogui）。
+
+        坐标转换：截图是相对坐标，pyautogui 需要全局坐标。
+        """
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
-        pyautogui.doubleClick(x, y)
-        logger.debug(f"System-level double click at ({x}, {y})")
+
+        from worker.screen.monitor_utils import convert_to_global_coords
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+
+        pyautogui.doubleClick(global_x, global_y)
+        logger.debug(f"System-level double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def move(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """移动鼠标到指定坐标。"""
         effective_level = level or self._current_level
+        effective_monitor = self._current_monitor
         if effective_level == "system":
-            self._system_move(x, y)
+            self._system_move(x, y, effective_monitor)
             return
         page = context or self._current_page
         if page:
             _run_async(page.mouse.move(x, y))
 
-    def _system_move(self, x: int, y: int) -> None:
-        """系统级移动鼠标（使用 pyautogui）。"""
+    def _system_move(self, x: int, y: int, monitor: int = 1) -> None:
+        """系统级移动鼠标（使用 pyautogui）。
+
+        坐标转换：截图是相对坐标，pyautogui 需要全局坐标。
+        """
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
-        pyautogui.moveTo(x, y)
-        logger.debug(f"System-level move to ({x}, {y})")
+
+        from worker.screen.monitor_utils import convert_to_global_coords
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+
+        pyautogui.moveTo(global_x, global_y)
+        logger.debug(f"System-level move to ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def input_text(self, text: str, context: Any = None, level: str = None) -> None:
         """输入文本。"""
@@ -567,8 +592,9 @@ class WebPlatformManager(PlatformManager):
             Playwright mouse 不支持 steps 参数，使用 duration*60 计算步数模拟平滑移动。
         """
         effective_level = level or self._current_level
+        effective_monitor = self._current_monitor
         if effective_level == "system":
-            self._system_drag(start_x, start_y, end_x, end_y, duration)
+            self._system_drag(start_x, start_y, end_x, end_y, duration, effective_monitor)
             return
         page = context or self._current_page
         if page:
@@ -579,14 +605,22 @@ class WebPlatformManager(PlatformManager):
             _run_async(page.mouse.move(end_x, end_y, steps=int(duration_sec * 60)))  # 60 steps/sec 模拟平滑移动
             _run_async(page.mouse.up())
 
-    def _system_drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500) -> None:
-        """系统级拖拽（使用 pyautogui）。"""
+    def _system_drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, monitor: int = 1) -> None:
+        """系统级拖拽（使用 pyautogui）。
+
+        坐标转换：截图是相对坐标，pyautogui 需要全局坐标。
+        """
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
+
+        from worker.screen.monitor_utils import convert_to_global_coords
+        global_start_x, global_start_y = convert_to_global_coords(start_x, start_y, monitor)
+        global_end_x, global_end_y = convert_to_global_coords(end_x, end_y, monitor)
+
         duration_sec = duration / 1000.0
-        pyautogui.moveTo(start_x, start_y)
-        pyautogui.drag(end_x - start_x, end_y - start_y, duration=duration_sec)
-        logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y}) in {duration}ms")
+        pyautogui.moveTo(global_start_x, global_start_y)
+        pyautogui.drag(global_end_x - global_start_x, global_end_y - global_start_y, duration=duration_sec)
+        logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y}) -> global ({global_start_x}, {global_start_y}) to ({global_end_x}, {global_end_y})")
 
     def press(self, key: str, context: Any = None, level: str = None) -> None:
         """按键。"""

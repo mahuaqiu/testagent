@@ -200,32 +200,50 @@ class MJPEGFrameSource(FrameSource):
 
 
 class WindowsFrameSource(FrameSource):
-    """Windows: mss 截屏。"""
+    """Windows: mss 截屏。
+
+    使用显示器映射逻辑：
+    - monitor=1: 主屏幕（left=0 的显示器）
+    - monitor=2: 副屏幕（另一个显示器）
+    """
 
     def __init__(self, fps: int = 10, monitor: int = 1):
         self.fps = fps
         self.monitor = monitor
         self._screen_size: Optional[tuple[int, int]] = None
+        self._monitor_offset: Optional[tuple[int, int]] = None
 
     def get_frame(self) -> bytes:
-        """使用 mss 截屏，转为 JPEG。"""
+        """使用 mss 截屏，转为 JPEG。使用显示器映射逻辑。"""
+        from worker.screen.monitor_utils import get_mapped_monitor_index
+
         import mss
 
         with mss.mss() as sct:
-            monitor_config = sct.monitors[self.monitor]
-            screenshot = sct.grab(monitor_config)
+            # 使用映射后的显示器配置
+            target_index, target_monitor = get_mapped_monitor_index(self.monitor)
+            # 缓存偏移量供坐标转换使用
+            self._monitor_offset = (target_monitor['left'], target_monitor['top'])
+            screenshot = sct.grab(target_monitor)
             img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=80)
             return buffer.getvalue()
 
     def get_screen_size(self) -> tuple[int, int]:
-        """获取显示器尺寸。"""
-        import mss
+        """获取显示器尺寸。使用显示器映射逻辑。"""
+        from worker.screen.monitor_utils import get_mapped_monitor_index
 
-        with mss.mss() as sct:
-            monitor_config = sct.monitors[self.monitor]
-            return (monitor_config["width"], monitor_config["height"])
+        _, monitor_config = get_mapped_monitor_index(self.monitor)
+        return (monitor_config["width"], monitor_config["height"])
+
+    def get_monitor_offset(self) -> tuple[int, int]:
+        """获取当前显示器相对于虚拟屏幕的偏移量（用于坐标转换）。"""
+        if self._monitor_offset:
+            return self._monitor_offset
+        from worker.screen.monitor_utils import get_monitor_offset
+        self._monitor_offset = get_monitor_offset(self.monitor)
+        return self._monitor_offset
 
     def start(self) -> None:
         """mss 不需要启动。"""

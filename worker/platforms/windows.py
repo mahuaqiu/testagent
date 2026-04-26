@@ -40,6 +40,7 @@ class WindowsPlatformManager(PlatformManager):
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
         self.timeout = config.timeout
+        self._current_monitor: int = 1  # 当前操作的显示器：1=主屏幕，2=副屏幕
 
     @property
     def platform(self) -> str:
@@ -85,23 +86,47 @@ class WindowsPlatformManager(PlatformManager):
             y: Y 坐标
             duration: 点击持续时间（毫秒），0=普通点击，>0=长按
             context: 执行上下文
+
+        Note:
+            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
         """
+        from worker.screen.monitor_utils import convert_to_global_coords
+        monitor = self._current_monitor
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+
         if duration > 0:
             duration_sec = duration / 1000.0
-            pyautogui.moveTo(x, y)
+            pyautogui.moveTo(global_x, global_y)
             pyautogui.mouseDown()
             pyautogui.mouseUp(duration=duration_sec)
-            logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
+            logger.debug(f"Long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms")
         else:
-            pyautogui.click(x, y)
+            pyautogui.click(global_x, global_y)
+            logger.debug(f"Click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
-        """双击指定坐标。"""
-        pyautogui.doubleClick(x, y)
+        """双击指定坐标。
+
+        Note:
+            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+        """
+        from worker.screen.monitor_utils import convert_to_global_coords
+        monitor = self._current_monitor
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        pyautogui.doubleClick(global_x, global_y)
+        logger.debug(f"Double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def move(self, x: int, y: int, context: Any = None) -> None:
-        """移动鼠标到指定坐标。"""
-        pyautogui.moveTo(x, y)
+        """移动鼠标到指定坐标。
+
+        Note:
+            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+        """
+        from worker.screen.monitor_utils import convert_to_global_coords
+        monitor = self._current_monitor
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        pyautogui.moveTo(global_x, global_y)
+        logger.debug(f"Move to ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本（使用剪贴板粘贴，支持特殊字符）。"""
@@ -123,12 +148,19 @@ class WindowsPlatformManager(PlatformManager):
 
         Note:
             pyautogui 不支持 steps 参数，始终使用 duration 控制滑动时间。
+            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
         """
+        from worker.screen.monitor_utils import convert_to_global_coords
+        monitor = self._current_monitor
+        global_start_x, global_start_y = convert_to_global_coords(start_x, start_y, monitor)
+        global_end_x, global_end_y = convert_to_global_coords(end_x, end_y, monitor)
+
         duration_sec = duration / 1000.0
-        pyautogui.moveTo(start_x, start_y)
+        pyautogui.moveTo(global_start_x, global_start_y)
         pyautogui.mouseDown()
-        pyautogui.moveTo(end_x, end_y, duration=duration_sec)
+        pyautogui.moveTo(global_end_x, global_end_y, duration=duration_sec)
         pyautogui.mouseUp()
+        logger.debug(f"Swipe from ({start_x}, {start_y}) to ({end_x}, {end_y}) -> global ({global_start_x}, {global_start_y}) to ({global_end_x}, {global_end_y})")
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。支持组合键，如 "ctrl+c"。"""
