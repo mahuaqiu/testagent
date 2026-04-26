@@ -31,6 +31,8 @@ platforms:
     permissions:                    # Web permissions (camera, microphone, etc.)
       - camera
       - microphone
+      - clipboard-read
+      - clipboard-write
     # Clear Default directory on startup (keep Cache directory) to avoid account cache
     clear_profile_on_start: true
     # Request blacklist: intercept specific requests (e.g. JS files that timeout)
