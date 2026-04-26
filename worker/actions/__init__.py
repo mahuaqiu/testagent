@@ -51,6 +51,7 @@ from worker.actions.position import OcrGetPositionExecutor, ImageGetPositionExec
 from worker.actions.unlock import UnlockScreenAction
 from worker.actions.gesture import PinchAction
 from worker.actions.recording import StartRecordingAction, StopRecordingAction
+from worker.actions.window import ActivateWindowAction
 
 # 注册所有 Actions
 def _register_all_actions():
@@ -111,6 +112,9 @@ def _register_all_actions():
     ActionRegistry.register(StartRecordingAction())
     ActionRegistry.register(StopRecordingAction())
 
+    # Window Actions
+    ActionRegistry.register(ActivateWindowAction())
+
 
 # 模块加载时自动注册
 _register_all_actions()
@@ -168,4 +172,6 @@ __all__ = [
     # Recording Actions
     "StartRecordingAction",
     "StopRecordingAction",
+    # Window Actions
+    "ActivateWindowAction",
 ]
