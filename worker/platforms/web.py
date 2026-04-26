@@ -760,8 +760,21 @@ class WebPlatformManager(PlatformManager):
             logger.error(f"System-level screenshot failed: {e}")
             return b""
 
-    def get_screenshot(self, context: Any) -> bytes:
-        """获取当前页面截图（兼容旧接口）。"""
+    def get_screenshot(self, context: Any, use_system_level: bool = True) -> bytes:
+        """获取当前页面截图（兼容旧接口）。
+
+        Args:
+            context: 执行上下文
+            use_system_level: 是否使用系统级截图（默认 True）。
+                失败截图场景应使用系统级截图，以便捕获浏览器原生对话框、
+                系统弹窗等 Playwright 无法截取的内容。
+
+        Returns:
+            bytes: 截图数据
+        """
+        if use_system_level:
+            # 失败截图使用系统级截图，捕获完整屏幕（包括原生对话框）
+            return self._take_system_screenshot(self._current_monitor)
         return self.take_screenshot(context)
 
     # ========== 动作执行 ==========
