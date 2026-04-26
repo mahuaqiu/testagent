@@ -53,10 +53,10 @@ class ActionExecutor(ABC):
 
     def _set_level(self, platform: "PlatformManager", action: Action) -> str:
         """
-        设置执行层级和显示器（Web 平台专用）。
+        设置执行层级和显示器。
 
         对于 Web 平台，根据 action.level 决定使用 Playwright 还是系统级操作。
-        根据 action.monitor 决定截取哪个显示器（仅 level=system 时生效）。
+        根据 action.monitor 决定截取哪个显示器（多显示器场景）。
 
         Args:
             platform: 平台管理器
@@ -67,12 +67,19 @@ class ActionExecutor(ABC):
         """
         level = action.level if hasattr(action, 'level') else "browser"
         monitor = action.monitor if hasattr(action, 'monitor') else 1
-        # 只有 Web 平台支持 level 和 monitor 参数
+
+        # Web 平台：设置 level 和 monitor
         if hasattr(platform, '_current_level'):
             platform._current_level = level
             if hasattr(platform, '_current_monitor'):
                 platform._current_monitor = monitor
             logger.info(f"_set_level: level='{level}', monitor={monitor}")
+
+        # Windows/Mac 平台：只设置 monitor（没有 level 属性）
+        elif hasattr(platform, '_current_monitor'):
+            platform._current_monitor = monitor
+            logger.info(f"_set_monitor: monitor={monitor}")
+
         return level
 
     def _apply_offset(self, x: int, y: int, offset: dict | None) -> tuple[int, int]:

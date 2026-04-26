@@ -101,10 +101,10 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui.moveTo(global_x, global_y)
             pyautogui.mouseDown()
             pyautogui.mouseUp(duration=duration_sec)
-            logger.debug(f"Long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms")
+            logger.info(f"Long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms, monitor={monitor}")
         else:
             pyautogui.click(global_x, global_y)
-            logger.debug(f"Click at ({x}, {y}) -> global ({global_x}, {global_y})")
+            logger.info(f"Click at ({x}, {y}) -> global ({global_x}, {global_y}), monitor={monitor}")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标。
