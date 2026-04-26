@@ -43,6 +43,7 @@ class PlatformManager(ABC):
         "pinch",  # 双指缩放（Android/iOS）
         "start_recording",  # 开始录屏
         "stop_recording",  # 停止录屏
+        "activate_window",  # 窗口激活（Windows/Mac）
     }
 
     # 子类可覆盖，定义平台特有动作
