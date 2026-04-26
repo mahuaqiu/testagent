@@ -22,8 +22,10 @@ from worker.tools import get_tools_dir
 
 logger = logging.getLogger(__name__)
 
-# 设置 pyautogui 安全措施
-pyautogui.FAILSAFE = True
+# 设置 pyautogui 参数
+# 禁用 FAILSAFE：自动化测试场景中，鼠标可能因上次操作停留在角落，
+# 该机制会阻止后续操作，干扰正常执行
+pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.1
 
 
