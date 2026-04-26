@@ -305,6 +305,7 @@ components:
             - image_double_click
             - image_exist
             - click
+            - right_click
             - double_click
             - move
             - swipe
@@ -353,6 +354,7 @@ components:
 
             【坐标动作】
             - click: 点击指定坐标
+            - right_click: 右键点击指定坐标（仅桌面端）
             - double_click: 双击指定坐标
             - move: 移动鼠标到指定坐标（仅桌面端）
             - swipe: 滑动手势
@@ -518,10 +520,10 @@ components:
             其他动作（如 ocr_click、ocr_assert、image_click、image_assert 等）不使用此参数。
         x:
           type: integer
-          description: "X 坐标（像素），仅 click、move 和 input 动作必填"
+          description: "X 坐标（像素），仅 click、right_click、move 和 input 动作必填"
         y:
           type: integer
-          description: "Y 坐标（像素），仅 click、move 和 input 动作必填"
+          description: "Y 坐标（像素），仅 click、right_click、move 和 input 动作必填"
         end_x:
           type: integer
           description: |
@@ -841,6 +843,12 @@ components:
   # {"action_type": "click", "x": 500, "y": 300}
   # 示例 2: 长按屏幕坐标 (500, 300) 2 秒
   # {"action_type": "click", "x": 500, "y": 300, "click_duration": 2000}
+
+  # right_click - 右键点击指定坐标（仅桌面端）
+  # 示例 1: 右键点击屏幕坐标 (500, 300)
+  # {"action_type": "right_click", "x": 500, "y": 300}
+  # 示例 2: 右键点击副屏幕坐标
+  # {"action_type": "right_click", "x": 1731, "y": 369, "monitor": 2}
 
   # double_click - 双击指定坐标
   # 示例 1: 双击屏幕坐标 (500, 300)
