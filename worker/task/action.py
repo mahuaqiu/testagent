@@ -30,6 +30,8 @@ class ActionType(Enum):
 
     # 基础操作（坐标/按键）
     CLICK = "click"                   # 坐标点击 (x, y)
+    RIGHT_CLICK = "right_click"       # 右键点击 (x, y)
+    DOUBLE_CLICK = "double_click"     # 双击 (x, y)
     SWIPE = "swipe"                   # 滑动 (方向/坐标)
     INPUT = "input"                   # 输入文本
     PRESS = "press"                   # 按键

@@ -106,6 +106,18 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui.click(global_x, global_y)
             logger.info(f"Click at ({x}, {y}) -> global ({global_x}, {global_y}), monitor={monitor}")
 
+    def right_click(self, x: int, y: int, context: Any = None) -> None:
+        """右键点击指定坐标。
+
+        Note:
+            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+        """
+        from worker.screen.monitor_utils import convert_to_global_coords
+        monitor = self._current_monitor
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        pyautogui.rightClick(global_x, global_y)
+        logger.info(f"Right click at ({x}, {y}) -> global ({global_x}, {global_y}), monitor={monitor}")
+
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标。
 

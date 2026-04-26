@@ -54,6 +54,33 @@ class ClickAction(BaseActionExecutor):
         )
 
 
+class RightClickAction(BaseActionExecutor):
+    """右键点击。"""
+
+    name = "right_click"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        platform.right_click(action.x, action.y, context)
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Right clicked at ({action.x}, {action.y})",
+        )
+
+
 class DoubleClickAction(BaseActionExecutor):
     """坐标双击。"""
 

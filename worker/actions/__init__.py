@@ -35,6 +35,7 @@ from worker.actions.image import (
 )
 from worker.actions.coordinate import (
     ClickAction,
+    RightClickAction,
     DoubleClickAction,
     MoveAction,
     InputAction,
@@ -80,6 +81,7 @@ def _register_all_actions():
 
     # Coordinate Actions
     ActionRegistry.register(ClickAction())
+    ActionRegistry.register(RightClickAction())
     ActionRegistry.register(DoubleClickAction())
     ActionRegistry.register(MoveAction())
     ActionRegistry.register(InputAction())
@@ -143,6 +145,7 @@ __all__ = [
     "OcrCheckSameRowImageAction",
     # Coordinate Actions
     "ClickAction",
+    "RightClickAction",
     "DoubleClickAction",
     "MoveAction",
     "InputAction",

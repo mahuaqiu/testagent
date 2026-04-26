@@ -531,6 +531,31 @@ class WebPlatformManager(PlatformManager):
         pyautogui.doubleClick(global_x, global_y)
         logger.debug(f"System-level double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
+    def right_click(self, x: int, y: int, context: Any = None, level: str = None) -> None:
+        """右键点击指定坐标。"""
+        effective_level = level or self._current_level
+        effective_monitor = self._current_monitor
+        if effective_level == "system":
+            self._system_right_click(x, y, effective_monitor)
+            return
+        page = context or self._current_page
+        if page:
+            _run_async(page.mouse.click(x, y, button="right"))
+
+    def _system_right_click(self, x: int, y: int, monitor: int = 1) -> None:
+        """系统级右键点击（使用 pyautogui）。
+
+        坐标转换：截图是相对坐标，pyautogui 需要全局坐标。
+        """
+        if not SYSTEM_LEVEL_AVAILABLE:
+            raise RuntimeError("System-level operations not available")
+
+        from worker.screen.monitor_utils import convert_to_global_coords
+        global_x, global_y = convert_to_global_coords(x, y, monitor)
+
+        pyautogui.rightClick(global_x, global_y)
+        logger.debug(f"System-level right click at ({x}, {y}) -> global ({global_x}, {global_y})")
+
     def move(self, x: int, y: int, context: Any = None, level: str = None) -> None:
         """移动鼠标到指定坐标。"""
         effective_level = level or self._current_level
