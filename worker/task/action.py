@@ -114,6 +114,7 @@ class Action:
     row_tolerance: int | None = None      # 水平带范围（像素，默认20）
     target_index: int | None = None       # 目标索引（同行第几个匹配）
     region: list[int] | None = None       # 操作区域 [x1, y1, x2, y2]
+    match_by: str | None = None           # 定位方式："title" 或 "process"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
@@ -172,6 +173,7 @@ class Action:
             row_tolerance=data.get("row_tolerance"),
             target_index=data.get("target_index"),
             region=data.get("region"),
+            match_by=data.get("match_by"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -238,5 +240,7 @@ class Action:
             result["target_index"] = self.target_index
         if self.region is not None:
             result["region"] = self.region
+        if self.match_by is not None:
+            result["match_by"] = self.match_by
 
         return result
