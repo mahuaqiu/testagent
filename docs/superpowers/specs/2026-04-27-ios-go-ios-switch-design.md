@@ -156,10 +156,12 @@ ios:
 
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
-| `worker/platforms/ios.py` | 重写 | GoIOSClient + iOSPlatformManager 重构 |
-| `worker/config.py` | 修改 | 新增 go_ios_path、agent_port 配置项 |
+| `worker/platforms/go_ios_client.py` | 新增 | GoIOSClient 类封装 go-ios CLI 命令 |
+| `worker/platforms/ios.py` | 重写 | iOSPlatformManager 使用 go-ios |
+| `worker/config.py` | 修改 | 新增 go_ios_path、agent_port、mjpeg_base_port 配置项 |
 | `config/worker.yaml` | 修改 | iOS 配置结构变更 |
-| `requirements.txt` | 修改 | 移除 tidevice3 |
+| `worker/discovery/ios.py` | 修改 | iOS 设备发现模块切换到 go-ios |
+| `pyproject.toml` | 修改 | 移除 tidevice3 依赖 |
 
 ## 测试计划
 
