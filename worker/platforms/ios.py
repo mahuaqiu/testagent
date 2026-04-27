@@ -1,18 +1,19 @@
 """
 iOS 平台执行引擎。
 
-基于 tidevice3 + WDA 直连实现，支持 OCR/图像识别定位。
+基于 go-ios + WDA 直连实现，支持 OCR/图像识别定位。
 """
 
-import json
 import logging
 import time
+import subprocess
 from typing import Any, Optional
 
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
+from worker.platforms.go_ios_client import GoIOSClient
 from worker.platforms.wda_client import WDAClient
 from worker.task import Action, ActionResult, ActionStatus
 
@@ -23,7 +24,7 @@ class iOSPlatformManager(PlatformManager):
     """
     iOS 平台管理器。
 
-    使用 tidevice3 + WDA 直连控制 iOS 设备。
+    使用 go-ios + WDA 直连控制 iOS 设备。
     """
 
     SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen", "pinch"}
@@ -54,104 +55,287 @@ class iOSPlatformManager(PlatformManager):
 
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
+        # go-ios 配置
+        self.go_ios_path = config.go_ios_path or "tools/go-ios/ios.exe"
+        self.agent_port = config.agent_port or 28100
         self.wda_base_port = config.wda_base_port or 8100
-        self.wda_ipa_path = config.wda_ipa_path or "wda/WebDriverAgent.ipa"
+        self.mjpeg_base_port = config.mjpeg_base_port or 9100
         self.wda_bundle_id = config.wda_bundle_id or "com.facebook.WebDriverAgentRunner"
-        self._device_wda: dict[str, dict] = {}
-        self._device_clients: dict[str, WDAClient] = {}
+
+        # GoIOSClient 实例
+        self._go_ios: Optional[GoIOSClient] = None
+
+        # 设备状态管理
+        self._device_wda: dict[str, dict] = {}  # udid -> {port, mjpeg_port, process, forward_process}
+        self._device_clients: dict[str, WDAClient] = {}  # udid -> WDAClient
+        self._device_tunnel_info: dict[str, dict] = {}  # udid -> tunnel info
         self._current_device: str | None = None
-        self._unlock_config = unlock_config or {}  # 解锁配置
+        self._unlock_config = unlock_config or {}
+
+        # Agent 进程引用（用于异常时重启）
+        self._agent_process: subprocess.Popen | None = None
 
     @property
     def platform(self) -> str:
         return "ios"
 
+    # ========== 生命周期管理 ==========
+
     def start(self) -> None:
-        """启动 iOS 平台（检查环境）。"""
+        """启动 iOS 平台（检查并启动 go-ios agent）。"""
         if self._started:
             return
 
-        try:
-            from tidevice3.api import list_devices
-            devices = list_devices()
-            logger.info(f"tidevice3 available, found {len(devices)} devices")
-        except Exception as e:
-            logger.warning(f"tidevice3 check failed: {e}")
+        # 1. 创建 GoIOSClient
+        self._go_ios = GoIOSClient(
+            go_ios_path=self.go_ios_path,
+            agent_port=self.agent_port,
+        )
+
+        # 2. 确保 agent 运行
+        self._ensure_agent_running()
+
+        # 3. 设置设备发现模块的 GoIOSClient
+        from worker.discovery.ios import iOSDiscoverer
+        iOSDiscoverer.set_go_ios_client(self._go_ios)
 
         self._started = True
-        logger.info("iOS platform started (tidevice3 + WDA mode)")
+        logger.info("iOS platform started (go-ios + WDA mode)")
 
     def stop(self) -> None:
-        """停止 iOS 平台（不关闭 WDA 进程，保持复用）。"""
-        # 不主动关闭 WDA，让其继续运行以便下次复用
-        # 只清理内存中的引用
+        """停止 iOS 平台（不关闭进程，保持复用）。"""
+        # 只清理内存引用，不关闭 agent、runwda、forward 进程
         self._device_clients.clear()
-        self._device_wda.clear()  # process=None 的不会被终止
+        self._device_wda.clear()
+        self._device_tunnel_info.clear()
+
+        if self._go_ios:
+            self._go_ios.close()
+            self._go_ios = None
+
+        # 不关闭 agent 进程，保持运行以便下次复用
+        # self._agent_process = None
+
         self._started = False
-        logger.info("iOS platform stopped (WDA processes preserved for reuse)")
+        logger.info("iOS platform stopped (processes preserved for reuse)")
 
     def is_available(self) -> bool:
         """检查平台是否可用。"""
-        return self._started
+        return self._started and self._go_ios is not None
+
+    # ========== Agent 管理 ==========
+
+    def _ensure_agent_running(self) -> None:
+        """确保 go-ios agent 正在运行，异常则重启。"""
+        if self._go_ios.check_agent_health():
+            logger.info("go-ios agent already running, reusing")
+            return
+
+        # Agent 未运行或健康检查失败，尝试启动
+        logger.info("go-ios agent not running, starting...")
+        self._agent_process = self._go_ios.start_agent()
+
+        # 等待就绪
+        if not self._go_ios.wait_agent_ready(timeout=30):
+            logger.error("go-ios agent failed to start within 30s")
+            # 尝试杀掉可能残留的进程
+            self._kill_agent_processes()
+            raise RuntimeError("go-ios agent failed to start")
+
+        logger.info("go-ios agent started successfully")
+
+    def _kill_agent_processes(self) -> None:
+        """杀掉 go-ios agent 相关进程。"""
+        try:
+            # 通过端口查找并杀掉进程
+            result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
+            for line in result.stdout.splitlines():
+                if f":{self.agent_port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        logger.info(f"Killing agent process {pid}")
+                        run_cmd(["taskkill", "/F", "/PID", pid], check=True, timeout=10)
+        except Exception as e:
+            logger.warning(f"Failed to kill agent processes: {e}")
 
     # ========== 设备服务管理 ==========
+
+    def _is_ios17_plus(self, version: str) -> bool:
+        """检测 iOS 版本是否 >= 17。"""
+        try:
+            major = int(version.split('.')[0])
+            return major >= 17
+        except (ValueError, IndexError):
+            return False
+
+    def _get_device_version(self, udid: str) -> str:
+        """获取设备 iOS 版本。"""
+        return self._go_ios.get_device_version(udid)
+
+    def _get_device_index(self, udid: str) -> int:
+        """根据设备列表位置计算索引（用于端口分配）。"""
+        devices = self._go_ios.list_devices()
+        for i, d in enumerate(devices):
+            if d["udid"] == udid:
+                return i
+        return 0
+
+    def _allocate_ports(self, udid: str) -> tuple[int, int]:
+        """分配 WDA 和 MJPEG 端口。"""
+        index = self._get_device_index(udid)
+        wda_port = self.wda_base_port + index
+        mjpeg_port = self.mjpeg_base_port + index
+        return wda_port, mjpeg_port
+
+    def _get_tunnel_info(self, udid: str, timeout: int = 30) -> Optional[dict]:
+        """获取 iOS 17+ 设备的 tunnel 信息（等待建立）。"""
+        # 先检查是否已缓存
+        if udid in self._device_tunnel_info:
+            return self._device_tunnel_info[udid]
+
+        # 等待 agent 建立 tunnel
+        start = time.time()
+        while time.time() - start < timeout:
+            info = self._go_ios.get_tunnel_info(udid)
+            if info and info.get("address"):
+                self._device_tunnel_info[udid] = info
+                return info
+            time.sleep(1)
+
+        logger.warning(f"Tunnel not established for {udid} within {timeout}s")
+        return None
 
     def ensure_device_service(self, udid: str) -> tuple[str, str]:
         """确保 WDA 服务可用。"""
         try:
-            # 1. 检查已有的 client 是否可用
+            # 0. 获取设备版本
+            device_version = self._get_device_version(udid)
+
+            # 1. iOS 17+ 设备获取 tunnel 信息
+            if device_version and self._is_ios17_plus(device_version):
+                tunnel_info = self._get_tunnel_info(udid)
+                if not tunnel_info:
+                    return ("faulty", f"iOS 17+ device {udid} tunnel not established")
+
+            # 2. 检查已有的 client 是否可用
             client = self._device_clients.get(udid)
             if client and client.health_check():
                 logger.info(f"WDA already running: {udid}")
                 return ("online", "OK")
 
-            # 2. 检查端口是否被占用
-            port_occupied = self._check_port_occupied(self.wda_base_port)
+            # 3. 分配端口
+            wda_port, mjpeg_port = self._allocate_ports(udid)
+
+            # 4. 检查端口是否被占用
+            port_occupied = self._check_port_occupied(wda_port)
 
             if port_occupied:
-                # 端口被占用，探测是否有可用的 WDA（重试避免误杀）
-                probe_client = WDAClient(f"http://127.0.0.1:{self.wda_base_port}")
-                retry_count = 10
+                # 端口被占用，探测是否有可用的 WDA
+                probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+                retry_count = 5
                 for i in range(retry_count):
                     if probe_client.health_check():
-                        logger.info(f"Found existing WDA on port {self.wda_base_port}, reusing (attempt {i+1})")
+                        logger.info(f"Found existing WDA on port {wda_port}, reusing")
                         self._device_clients[udid] = probe_client
-                        # 启动 MJPEG 端口转发（设备端口 9100 -> 本地端口 9100）
-                        mjpeg_port = 9100
-                        mjpeg_process = self._start_mjpeg_relay(udid, mjpeg_port)
+                        # 补充 MJPEG 端口转发（如未启动）
+                        mjpeg_process = self._start_mjpeg_forward(udid, mjpeg_port)
                         self._device_wda[udid] = {
-                            "port": self.wda_base_port,
+                            "port": wda_port,
                             "mjpeg_port": mjpeg_port,
-                            "process": None,
-                            "mjpeg_process": mjpeg_process,
+                            "process": None,  # WDA 进程不是我们启动的
+                            "forward_process": mjpeg_process,
                         }
                         return ("online", "OK")
                     time.sleep(1)
 
                 # 重试后仍失败，杀掉占用端口的进程
-                logger.warning(f"Port {self.wda_base_port} occupied but WDA not responding after {retry_count} retries, killing process")
-                self._kill_port_process(self.wda_base_port)
+                logger.warning(f"Port {wda_port} occupied but WDA not responding, killing process")
+                self._kill_port_process(wda_port)
 
-            # 3. 启动新的 WDA
-            return self._start_wda(udid)
+            # 5. 启动新的 WDA
+            return self._start_wda(udid, wda_port, mjpeg_port)
+
         except Exception as e:
             logger.error(f"Failed to ensure WDA service: {udid}, {e}")
             return ("faulty", str(e))
 
-    def mark_device_faulty(self, udid: str) -> None:
-        """标记设备为异常。"""
-        if udid in self._device_clients:
-            del self._device_clients[udid]
-        self._stop_wda(udid)
-        logger.info(f"iOS device marked faulty: {udid}")
+    def _start_wda(self, udid: str, wda_port: int, mjpeg_port: int) -> tuple[str, str]:
+        """启动 WDA 服务（含端口转发）。"""
+        try:
+            # 清理已有进程
+            if udid in self._device_wda:
+                self._stop_wda(udid)
 
-    def get_online_devices(self) -> list[str]:
-        """获取在线设备列表。"""
-        return list(self._device_clients.keys())
+            # 获取 tunnel 信息（iOS 17+）
+            tunnel_info = self._device_tunnel_info.get(udid)
+            address = tunnel_info.get("address") if tunnel_info else None
+            rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
 
-    def _allocate_port(self) -> int:
-        """分配 WDA 端口（固定使用配置的端口）。"""
-        return self.wda_base_port
+            # 启动 WDA
+            wda_process = self._go_ios.start_wda(
+                udid=udid,
+                bundle_id=self.wda_bundle_id,
+                address=address,
+                rsd_port=rsd_port,
+            )
+
+            # 启动 WDA 端口转发（设备 8100 -> 本地 wda_port）
+            forward_process = self._go_ios.forward_port(
+                udid=udid,
+                local_port=wda_port,
+                device_port=8100,
+                address=address,
+                rsd_port=rsd_port,
+            )
+
+            # 启动 MJPEG 端口转发（设备 9100 -> 本地 mjpeg_port）
+            mjpeg_process = self._start_mjpeg_forward(udid, mjpeg_port)
+
+            base_url = f"http://127.0.0.1:{wda_port}"
+            client = WDAClient(base_url)
+
+            logger.info(f"WDA process started on port {wda_port}, waiting for ready...")
+            if client.wait_ready(timeout=30):
+                self._device_wda[udid] = {
+                    "port": wda_port,
+                    "mjpeg_port": mjpeg_port,
+                    "process": wda_process,
+                    "forward_process": forward_process,
+                    "mjpeg_process": mjpeg_process,
+                }
+                self._device_clients[udid] = client
+                logger.info(f"WDA started: {udid} on port {wda_port}, MJPEG on port {mjpeg_port}")
+                return ("online", "OK")
+            else:
+                logger.warning(f"WDA failed to become ready on port {wda_port}")
+                # 不主动杀进程，让其保持运行以便下次复用或手动清理
+                return ("faulty", "WDA failed to start")
+
+        except Exception as e:
+            logger.error(f"Failed to start WDA: {e}")
+            return ("faulty", str(e))
+
+    def _start_mjpeg_forward(self, udid: str, mjpeg_port: int) -> subprocess.Popen:
+        """启动 MJPEG 端口转发。"""
+        tunnel_info = self._device_tunnel_info.get(udid)
+        address = tunnel_info.get("address") if tunnel_info else None
+        rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
+
+        return self._go_ios.forward_port(
+            udid=udid,
+            local_port=mjpeg_port,
+            device_port=9100,
+            address=address,
+            rsd_port=rsd_port,
+        )
+
+    def _stop_wda(self, udid: str) -> None:
+        """停止 WDA 相关进程（不主动停止，保留引用清理）。"""
+        if udid in self._device_wda:
+            # 不主动停止进程，只清理引用
+            # 进程使用 DETACHED_PROCESS 独立运行，会在设备断开时自动退出
+            del self._device_wda[udid]
 
     def _check_port_occupied(self, port: int) -> bool:
         """检查端口是否被占用。"""
@@ -168,13 +352,7 @@ class iOSPlatformManager(PlatformManager):
     def _kill_port_process(self, port: int) -> None:
         """杀掉占用指定端口的进程（Windows）。"""
         try:
-            # Windows: 使用 netstat 查找占用端口的进程
-            result = run_cmd(
-                ["netstat", "-ano"],
-                check=True, timeout=10
-            )
-
-            # 解析输出找到占用端口的 PID
+            result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
             for line in result.stdout.splitlines():
                 if f":{port}" in line and "LISTENING" in line:
                     parts = line.split()
@@ -182,115 +360,22 @@ class iOSPlatformManager(PlatformManager):
                         pid = parts[-1]
                         logger.info(f"Killing process {pid} occupying port {port}")
                         run_cmd(["taskkill", "/F", "/PID", pid], check=True, timeout=10)
-                        time.sleep(1)  # 等待进程完全退出
+                        time.sleep(1)
                         return
-
             logger.info(f"No process found occupying port {port}")
         except Exception as e:
             logger.warning(f"Failed to kill port process: {e}")
 
-    def _start_mjpeg_relay(self, udid: str, mjpeg_port: int = 9100):
-        """启动 MJPEG 端口转发（设备端口 9100 -> 本地端口）。"""
-        import subprocess
-        creationflags = subprocess.DETACHED_PROCESS if hasattr(subprocess, 'DETACHED_PROCESS') else 0
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        process = subprocess.Popen(
-            [
-                "t3",
-                "-u", udid,
-                "relay",
-                str(mjpeg_port),
-                "9100"
-            ],
-            stdin=None,
-            stdout=None,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-            startupinfo=startupinfo,
-        )
-        logger.info(f"MJPEG relay started: device port 9100 -> local port {mjpeg_port}")
-        return process
+    def mark_device_faulty(self, udid: str) -> None:
+        """标记设备为异常。"""
+        if udid in self._device_clients:
+            del self._device_clients[udid]
+        self._stop_wda(udid)
+        logger.info(f"iOS device marked faulty: {udid}")
 
-    def _stop_wda(self, udid: str) -> None:
-        """停止 WDA 进程和 MJPEG 转发进程。"""
-        if udid in self._device_wda:
-            wda_info = self._device_wda[udid]
-            process = wda_info.get("process")
-            mjpeg_process = wda_info.get("mjpeg_process")
-            if process:
-                try:
-                    process.terminate()
-                    process.wait(timeout=5)
-                except Exception:
-                    process.kill()
-            if mjpeg_process:
-                try:
-                    mjpeg_process.terminate()
-                    mjpeg_process.wait(timeout=5)
-                except Exception:
-                    mjpeg_process.kill()
-            del self._device_wda[udid]
-
-    def _start_wda(self, udid: str) -> tuple[str, str]:
-        """启动 WDA 服务（含 MJPEG 端口转发）。"""
-        try:
-            if udid in self._device_wda:
-                self._stop_wda(udid)
-
-            port = self._allocate_port()
-            mjpeg_port = 9100  # MJPEG 端口固定为 9100
-
-            # t3 runwda 命令 - 隐藏窗口，stderr 抑制（避免打印垃圾日志）
-            # Windows: 使用 DETACHED_PROCESS 让子进程独立运行，STARTUPINFO 隐藏窗口
-            import subprocess
-            creationflags = subprocess.DETACHED_PROCESS if hasattr(subprocess, 'DETACHED_PROCESS') else 0
-            # 隐藏 CMD 窗口
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            process = subprocess.Popen(
-                [
-                    "t3",
-                    "-u", udid,
-                    "runwda",
-                    "--bundle-id", self.wda_bundle_id,
-                    "--dst-port", str(port)
-                ],
-                stdin=None,
-                stdout=None,
-                stderr=subprocess.DEVNULL,
-                creationflags=creationflags,
-                startupinfo=startupinfo,
-            )
-
-            # 启动 MJPEG 端口转发（设备端口 9100 -> 本地端口 9100）
-            mjpeg_process = self._start_mjpeg_relay(udid, mjpeg_port)
-
-            base_url = f"http://127.0.0.1:{port}"
-            client = WDAClient(base_url)
-
-            logger.info(f"WDA process started on port {port}, waiting for ready...")
-            if client.wait_ready(timeout=30):
-                self._device_wda[udid] = {
-                    "port": port,
-                    "mjpeg_port": mjpeg_port,
-                    "process": process,
-                    "mjpeg_process": mjpeg_process,
-                }
-                self._device_clients[udid] = client
-                logger.info(f"WDA started: {udid} on port {port}, MJPEG on port {mjpeg_port}")
-                return ("online", "OK")
-            else:
-                logger.warning(f"WDA failed to become ready on port {port}")
-                process.terminate()
-                mjpeg_process.terminate()
-                return ("faulty", "WDA failed to start")
-
-        except Exception as e:
-            logger.error(f"Failed to start WDA: {e}")
-            return ("faulty", str(e))
+    def get_online_devices(self) -> list[str]:
+        """获取在线设备列表。"""
+        return list(self._device_clients.keys())
 
     # ========== 上下文管理 ==========
 
@@ -339,14 +424,12 @@ class iOSPlatformManager(PlatformManager):
     def close_session(self, device_id: str | None = None) -> None:
         """关闭会话（不关闭 WDA 进程，保持复用）。"""
         if device_id:
-            # 只清理内存引用，不关闭 WDA
             if device_id in self._device_wda:
                 del self._device_wda[device_id]
             if device_id in self._device_clients:
                 del self._device_clients[device_id]
             logger.info(f"iOS session closed (device={device_id}, WDA preserved)")
         else:
-            # 只清理内存引用
             self._device_wda.clear()
             self._device_clients.clear()
             logger.info("All iOS sessions closed (WDA preserved)")
@@ -421,12 +504,12 @@ class iOSPlatformManager(PlatformManager):
             start_y: 起始 Y 坐标
             end_x: 结束 X 坐标
             end_y: 结束 Y 坐标
-            duration: 滑动持续时间（毫秒），默认 500ms
-            steps: 滑动步数（iOS WDA 不支持，参数忽略）
+            duration: 滕动持续时间（毫秒），默认 500ms
+            steps: 滕动步数（iOS WDA 不支持，参数忽略）
             context: 执行上下文
 
         Note:
-            iOS WDA 不支持 steps 参数，始终使用 duration 控制滑动时间。
+            iOS WDA 不支持 steps 参数，始终使用 duration 控制滕动时间。
         """
         client = context or self._device_clients.get(self._current_device)
         if client:
@@ -616,19 +699,34 @@ class iOSPlatformManager(PlatformManager):
                 logger.warning(f"Failed to check lock status: {e}")
 
         try:
-            # t3 app launch 命令格式
-            run_cmd(
-                ["t3", "-u", self._current_device, "app", "launch", bundle_id],
-                check=True, timeout=30
+            # 使用 go-ios launch 命令
+            tunnel_info = self._device_tunnel_info.get(self._current_device)
+            address = tunnel_info.get("address") if tunnel_info else None
+            rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
+
+            success = self._go_ios.launch_app(
+                udid=self._current_device,
+                bundle_id=bundle_id,
+                address=address,
+                rsd_port=rsd_port,
             )
-            return ActionResult(
-                number=0,
-                action_type="start_app",
-                status=ActionStatus.SUCCESS,
-                output=f"Started: {bundle_id}",
-            )
+
+            if success:
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.SUCCESS,
+                    output=f"Started: {bundle_id}",
+                )
+            else:
+                return ActionResult(
+                    number=0,
+                    action_type="start_app",
+                    status=ActionStatus.FAILED,
+                    error=f"Failed to launch: {bundle_id}",
+                )
         except Exception as e:
-            logger.error(f"Failed to launch app via t3: {e}")
+            logger.error(f"Failed to launch app: {e}")
             return ActionResult(
                 number=0,
                 action_type="start_app",
@@ -641,7 +739,6 @@ class iOSPlatformManager(PlatformManager):
         from worker.actions import ActionRegistry
         from worker.task import Action
 
-        # 从配置读取密码
         password = self._unlock_config.get("password", "123456")
 
         unlock_action = Action(
@@ -673,28 +770,20 @@ class iOSPlatformManager(PlatformManager):
             )
 
         try:
-            # 如果指定了 bundle_id，先获取 PID 再 kill
             if bundle_id:
-                # 获取进程列表
-                result = run_cmd(
-                    ["t3", "-u", self._current_device, "app", "ps", "--json"],
-                    check=True, timeout=30
+                # 使用 go-ios kill 命令
+                tunnel_info = self._device_tunnel_info.get(self._current_device)
+                address = tunnel_info.get("address") if tunnel_info else None
+                rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
+
+                success = self._go_ios.kill_app(
+                    udid=self._current_device,
+                    bundle_id=bundle_id,
+                    address=address,
+                    rsd_port=rsd_port,
                 )
-                processes = json.loads(result.stdout)
 
-                # 查找目标应用的 PID
-                target_pid = None
-                for proc in processes:
-                    if proc.get("bundleIdentifier") == bundle_id:
-                        target_pid = proc.get("pid")
-                        break
-
-                if target_pid:
-                    # 使用 PID 关闭应用
-                    run_cmd(
-                        ["t3", "-u", self._current_device, "app", "kill", str(target_pid)],
-                        check=True, timeout=30
-                    )
+                if success:
                     return ActionResult(
                         number=0,
                         action_type="stop_app",
@@ -702,12 +791,11 @@ class iOSPlatformManager(PlatformManager):
                         output=f"Stopped: {bundle_id}",
                     )
                 else:
-                    # 应用未运行，也算成功
                     return ActionResult(
                         number=0,
                         action_type="stop_app",
-                        status=ActionStatus.SUCCESS,
-                        output=f"App not running: {bundle_id}",
+                        status=ActionStatus.FAILED,
+                        error=f"Failed to kill: {bundle_id}",
                     )
             else:
                 # 未指定 bundle_id，按 HOME 键回到主屏幕
