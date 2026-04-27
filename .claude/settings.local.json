@@ -168,7 +168,31 @@
       "Bash(netstat -ano)",
       "Bash(findstr \"LISTENING\")",
       "Bash(findstr -E \"8100|9100\")",
-      "Bash(findstr \"9100\")"
+      "Bash(findstr \"9100\")",
+      "Bash(findstr 5555)",
+      "Bash(findstr 8100)",
+      "Bash(findstr \"pymobiledevice3\")",
+      "Bash(findstr \"IPv6\")",
+      "Bash(findstr \"5555\")",
+      "Bash(findstr \"58783\")",
+      "Bash(findstr \"49151\")",
+      "Bash(taskkill *)",
+      "Bash(./tools/ios.exe list *)",
+      "Bash(./tools/ios.exe tunnel *)",
+      "Bash(findstr \"60105\")",
+      "Bash(unzip -o D:/code/autotest/tools/wintun64.dll -d D:/code/autotest/tools/wintun_temp)",
+      "Bash(mv D:/code/autotest/tools/wintun_temp/wintun/amd64/wintun.dll D:/code/autotest/tools/wintun.dll)",
+      "Bash(rm -rf D:/code/autotest/tools/wintun_temp D:/code/autotest/tools/wintun64.dll)",
+      "Bash(unzip -o wintun.zip)",
+      "Bash(cp wintun*/amd64/wintun.dll ./wintun.dll)",
+      "Bash(cp wintun/bin/amd64/wintun.dll ./wintun.dll)",
+      "Bash(rm -rf wintun wintun.zip)",
+      "Bash(netsh interface *)",
+      "Bash(findstr \"23160\")",
+      "Bash(./tools/ios.exe screenshot *)",
+      "Bash(./tools/ios.exe image *)",
+      "Bash(./tools/ios.exe --version)",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe *)"
     ]
   }
 }

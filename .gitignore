@@ -17,3 +17,4 @@ worker.log
 /data
 worker/_version.py
 /build_env_nuitka
+selfIdentity.plist
