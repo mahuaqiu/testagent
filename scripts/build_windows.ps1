@@ -3,14 +3,14 @@ param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
     [switch]$Clean,
-    [switch]$UseMsvc  # 使用 MSVC（需要 VS Build Tools），默认用 MinGW
+    [switch]$UseMingw  # 使用 MinGW（需要单独安装），默认用 MSVC
 )
 
 Write-Host "=========================================="
 Write-Host "Building Test Worker with Nuitka"
 Write-Host "Version: $Version"
 Write-Host "Output: $OutputDir"
-if ($UseMsvc) { Write-Host "Compiler: MSVC" } else { Write-Host "Compiler: MinGW-w64 (default)" }
+if ($UseMingw) { Write-Host "Compiler: MinGW-w64" } else { Write-Host "Compiler: MSVC (default)" }
 Write-Host "=========================================="
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
@@ -25,8 +25,8 @@ if ($nuitkaInstalled -ne "ok") {
 }
 
 $mingwBinPath = ""
-if (-not $UseMsvc) {
-    # 默认使用 MinGW
+if ($UseMingw) {
+    # 使用 MinGW
     $mingwPaths = @("C:\mingw64\bin\gcc.exe", "C:\msys64\ucrt64\bin\gcc.exe")
     $mingwPath = $mingwPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $mingwPath) {
@@ -38,10 +38,10 @@ if (-not $UseMsvc) {
     Write-Host "MinGW-w64 GCC found: $mingwPath"
     $env:PATH = "$mingwBinPath;$env:PATH"
 } else {
+    # 默认使用 MSVC，检查 Visual Studio
     $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vsWhere)) {
-        Write-Error "Visual Studio Build Tools not found. Use -UseMingw flag."
-        exit 1
+        Write-Warning "Visual Studio Installer not found, but Nuitka will auto-detect MSVC"
     }
 }
 
@@ -130,7 +130,7 @@ $nuitkaArgs = @(
     "--show-progress"
 )
 
-if (-not $UseMsvc) { $nuitkaArgs += "--mingw64" }
+if ($UseMingw) { $nuitkaArgs += "--mingw64" }
 
 & python -m nuitka $nuitkaArgs
 
