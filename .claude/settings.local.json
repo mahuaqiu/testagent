@@ -192,7 +192,10 @@
       "Bash(./tools/ios.exe screenshot *)",
       "Bash(./tools/ios.exe image *)",
       "Bash(./tools/ios.exe --version)",
-      "Bash(D:/code/autotest/tools/go-ios/ios.exe *)"
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe *)",
+      "Read(//c/mingw64/bin/**)",
+      "Read(//c/msys64/ucrt64/bin/**)",
+      "Read(//c/msys64/mingw64/bin/**)"
     ]
   }
 }
