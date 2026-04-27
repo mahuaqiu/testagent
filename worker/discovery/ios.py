@@ -1,7 +1,7 @@
 """
 iOS 设备发现模块。
 
-使用 tidevice3 发现 iOS 设备。
+使用 go-ios 发现 iOS 设备。
 """
 
 import logging
@@ -86,22 +86,36 @@ class iOSDeviceInfo:
 class iOSDiscoverer:
     """iOS 设备发现器。"""
 
+    _go_ios_client: Optional["GoIOSClient"] = None
+
+    @classmethod
+    def set_go_ios_client(cls, client: "GoIOSClient") -> None:
+        """设置 GoIOSClient 实例。"""
+        cls._go_ios_client = client
+
     @staticmethod
-    def check_tidevice_available() -> bool:
-        """检查 tidevice3 是否可用。"""
+    def check_go_ios_available() -> bool:
+        """检查 go-ios 是否可用。"""
         try:
-            from tidevice3 import api
+            from worker.platforms.go_ios_client import GoIOSClient
             return True
         except ImportError:
             return False
 
     @staticmethod
+    def check_tidevice_available() -> bool:
+        """检查 tidevice3 是否可用（已废弃，保留向后兼容）。"""
+        return iOSDiscoverer.check_go_ios_available()
+
+    @staticmethod
     def list_devices() -> List[str]:
         """获取设备 UDID 列表。"""
+        if not iOSDiscoverer._go_ios_client:
+            logger.warning("GoIOSClient not initialized")
+            return []
         try:
-            from tidevice3.api import list_devices
-            devices = list_devices()
-            return [d.Identifier for d in devices]
+            devices = iOSDiscoverer._go_ios_client.list_devices()
+            return [d["udid"] for d in devices if d["udid"]]
         except Exception as e:
             logger.error(f"Failed to list iOS devices: {e}")
             return []
@@ -126,23 +140,24 @@ class iOSDiscoverer:
                 status="offline",
             )
 
-        try:
-            from tidevice3.api import list_devices
-            devices = list_devices()
-            for d in devices:
-                if d.Identifier == udid:
-                    product_type = d.ProductType or "Unknown"
-                    return iOSDeviceInfo(
-                        udid=udid,
-                        name=d.DeviceName or "Unknown",
-                        model=IOS_DEVICE_MODELS.get(product_type, product_type),
-                        product_type=product_type,
-                        os_version=d.ProductVersion or "Unknown",
-                        build_version=d.BuildVersion or "Unknown",
-                        resolution=iOSDiscoverer.get_resolution_by_model(product_type),
-                        status="online",
-                    )
+        if not iOSDiscoverer._go_ios_client:
             return None
+
+        try:
+            info = iOSDiscoverer._go_ios_client.get_device_info(udid)
+            if not info:
+                return None
+            product_type = info.get("model", "Unknown")
+            return iOSDeviceInfo(
+                udid=udid,
+                name=info.get("name", "Unknown"),
+                model=IOS_DEVICE_MODELS.get(product_type, product_type),
+                product_type=product_type,
+                os_version=info.get("version", "Unknown"),
+                build_version=info.get("build_version", "Unknown"),
+                resolution=iOSDiscoverer.get_resolution_by_model(product_type),
+                status="online",
+            )
         except Exception as e:
             logger.error(f"Failed to get device info for {udid}: {e}")
             return None
@@ -150,26 +165,20 @@ class iOSDiscoverer:
     @classmethod
     def discover(cls) -> List[iOSDeviceInfo]:
         """发现所有 iOS 设备。"""
-        if not cls.check_tidevice_available():
-            logger.warning("tidevice3 not available, skipping iOS discovery")
+        if not cls._go_ios_client:
+            logger.warning("GoIOSClient not initialized, skipping iOS discovery")
             return []
 
         try:
-            from tidevice3.api import list_devices
-            devices = []
-            for d in list_devices():
-                product_type = d.ProductType or "Unknown"
-                devices.append(iOSDeviceInfo(
-                    udid=d.Identifier,
-                    name=d.DeviceName or "Unknown",
-                    model=IOS_DEVICE_MODELS.get(product_type, product_type),
-                    product_type=product_type,
-                    os_version=d.ProductVersion or "Unknown",
-                    build_version=d.BuildVersion or "Unknown",
-                    resolution=cls.get_resolution_by_model(product_type),
-                    status="online",
-                ))
-            return devices
+            devices = cls._go_ios_client.list_devices()
+            result = []
+            for d in devices:
+                udid = d["udid"]
+                if udid:
+                    info = cls.get_device_info(udid)
+                    if info:
+                        result.append(info)
+            return result
         except Exception as e:
             logger.error(f"Failed to discover iOS devices: {e}")
             return []
