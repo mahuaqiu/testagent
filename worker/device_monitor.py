@@ -62,6 +62,11 @@ class DeviceMonitor:
         self._monitor_thread.start()
         logger.info(f"Device monitor started (interval={self.check_interval}s)")
 
+    def trigger_check(self) -> None:
+        """立即触发一次设备检测（供外部调用，如 iOS agent 启动成功后）。"""
+        logger.info("Device monitor triggered for immediate check")
+        self._check_and_maintain()
+
     def stop(self) -> None:
         """停止监控。"""
         self._stop_event.set()

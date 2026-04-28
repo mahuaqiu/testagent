@@ -14,6 +14,8 @@ import subprocess
 from datetime import datetime, timedelta
 from typing import Optional
 
+from common.utils import SUBPROCESS_HIDE_WINDOW
+
 logger = logging.getLogger(__name__)
 
 # 日志时间格式
@@ -122,6 +124,7 @@ def grep_request_id_in_file(file_path: str, request_id: str) -> list[str]:
                 text=True,
                 encoding="utf-8",
                 timeout=30,
+                creationflags=SUBPROCESS_HIDE_WINDOW,
             )
         else:
             # Linux/Mac 使用 grep -F（固定字符串匹配）

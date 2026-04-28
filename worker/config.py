@@ -185,8 +185,10 @@ class PlatformConfig:
     wda_base_port: int = 8100
     wda_ipa_path: str = "wda/WebDriverAgent.ipa"
     wda_bundle_id: str = "com.facebook.WebDriverAgentRunner"
+    wda_testrunner_bundle_id: str = ""  # go-ios runwda 需要
+    wda_xctest_config: str = "WebDriverAgentRunner.xctest"  # go-ios runwda 需要
     go_ios_path: str = "tools/go-ios/ios.exe"  # go-ios 可执行文件路径
-    agent_port: int = 28100                    # go-ios agent HTTP API 端口
+    agent_port: int = 60105                    # go-ios agent HTTP API 端口（默认 60105）
     mjpeg_base_port: int = 9100               # MJPEG 基础端口
 
     # Android 专用
@@ -211,8 +213,10 @@ class PlatformConfig:
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),
+            wda_testrunner_bundle_id=data.get("wda_testrunner_bundle_id", ""),
+            wda_xctest_config=data.get("wda_xctest_config", "WebDriverAgentRunner.xctest"),
             go_ios_path=data.get("go_ios_path", "tools/go-ios/ios.exe"),
-            agent_port=data.get("agent_port", 28100),
+            agent_port=data.get("agent_port", 60105),
             mjpeg_base_port=data.get("mjpeg_base_port", 9100),
             u2_port=data.get("u2_port", 7912),
         )

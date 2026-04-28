@@ -96,15 +96,15 @@ class HostDiscoverer:
 
     @staticmethod
     def get_ip_addresses() -> List[str]:
-        """获取所有 IP 地址。"""
+        """获取所有 IP 地址（过滤链路本地地址）。"""
         addresses = []
         try:
             hostname = socket.gethostname()
             # 获取所有 IP 地址
             for info in socket.getaddrinfo(hostname, None):
                 ip = info[4][0]
-                # 过滤掉本地回环地址和 IPv6 本地地址
-                if ip != "127.0.0.1" and not ip.startswith("::1"):
+                # 过滤掉本地回环地址、IPv6 本地地址和链路本地地址（169.254.x.x）
+                if ip != "127.0.0.1" and not ip.startswith("::1") and not ip.startswith("169.254."):
                     if ip not in addresses:
                         addresses.append(ip)
         except Exception:
@@ -117,7 +117,8 @@ class HostDiscoverer:
                     for addr in addrs:
                         if addr.family == socket.AF_INET:
                             ip = addr.address
-                            if ip != "127.0.0.1" and ip not in addresses:
+                            # 同样过滤链路本地地址
+                            if ip != "127.0.0.1" and not ip.startswith("169.254.") and ip not in addresses:
                                 addresses.append(ip)
             except Exception:
                 pass

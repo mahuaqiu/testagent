@@ -5,6 +5,8 @@ import subprocess
 import threading
 from typing import TYPE_CHECKING
 
+from common.utils import SUBPROCESS_HIDE_WINDOW
+
 if TYPE_CHECKING:
     from worker.screen.manager import ScreenManager
 
@@ -74,6 +76,7 @@ class ScreenRecorder:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=SUBPROCESS_HIDE_WINDOW,
             )
 
             while not self._stop_event.is_set():

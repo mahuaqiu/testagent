@@ -7,7 +7,8 @@ iOS 平台执行引擎。
 import logging
 import time
 import subprocess
-from typing import Any, Optional
+import threading
+from typing import Any, Callable, Optional
 
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
@@ -57,10 +58,12 @@ class iOSPlatformManager(PlatformManager):
         super().__init__(config, ocr_client)
         # go-ios 配置
         self.go_ios_path = config.go_ios_path or "tools/go-ios/ios.exe"
-        self.agent_port = config.agent_port or 28100
+        self.agent_port = config.agent_port or 60105
         self.wda_base_port = config.wda_base_port or 8100
         self.mjpeg_base_port = config.mjpeg_base_port or 9100
         self.wda_bundle_id = config.wda_bundle_id or "com.facebook.WebDriverAgentRunner"
+        self.wda_testrunner_bundle_id = config.wda_testrunner_bundle_id or self.wda_bundle_id
+        self.wda_xctest_config = config.wda_xctest_config or "WebDriverAgentRunner.xctest"
 
         # GoIOSClient 实例
         self._go_ios: Optional[GoIOSClient] = None
@@ -75,6 +78,22 @@ class iOSPlatformManager(PlatformManager):
         # Agent 进程引用（用于异常时重启）
         self._agent_process: subprocess.Popen | None = None
 
+        # Agent 就绪回调（供外部设置，如 Worker 设置触发设备发现）
+        self._on_agent_ready: Optional[Callable[[], None]] = None
+
+        # 设备服务启动锁（防止重复启动）
+        self._service_locks: dict[str, threading.Lock] = {}
+
+    def set_on_agent_ready(self, callback: Callable[[], None]) -> None:
+        """设置 agent 就绪回调。"""
+        self._on_agent_ready = callback
+
+    def _get_service_lock(self, udid: str) -> threading.Lock:
+        """获取设备服务启动锁。"""
+        if udid not in self._service_locks:
+            self._service_locks[udid] = threading.Lock()
+        return self._service_locks[udid]
+
     @property
     def platform(self) -> str:
         return "ios"
@@ -82,7 +101,7 @@ class iOSPlatformManager(PlatformManager):
     # ========== 生命周期管理 ==========
 
     def start(self) -> None:
-        """启动 iOS 平台（检查并启动 go-ios agent）。"""
+        """启动 iOS 平台（后台启动 go-ios agent，不阻塞主线程）。"""
         if self._started:
             return
 
@@ -92,15 +111,31 @@ class iOSPlatformManager(PlatformManager):
             agent_port=self.agent_port,
         )
 
-        # 2. 确保 agent 运行
-        self._ensure_agent_running()
-
-        # 3. 设置设备发现模块的 GoIOSClient
+        # 2. 先设置设备发现模块的 GoIOSClient（让设备发现可以工作）
         from worker.discovery.ios import iOSDiscoverer
         iOSDiscoverer.set_go_ios_client(self._go_ios)
 
+        # 3. 后台启动 agent（不阻塞主线程）
+        import threading
+        self._agent_thread = threading.Thread(
+            target=self._ensure_agent_running_async,
+            daemon=True,
+        )
+        self._agent_thread.start()
+
         self._started = True
-        logger.info("iOS platform started (go-ios + WDA mode)")
+        logger.info("iOS platform started (go-ios + WDA mode, agent starting in background)")
+
+    def _ensure_agent_running_async(self) -> None:
+        """后台确保 go-ios agent 运行，成功后触发设备发现。"""
+        try:
+            self._ensure_agent_running()
+            # Agent 启动成功后，触发回调（如触发设备发现）
+            if self._on_agent_ready:
+                logger.info("Calling agent ready callback")
+                self._on_agent_ready()
+        except Exception as e:
+            logger.error(f"Failed to start go-ios agent in background: {e}")
 
     def stop(self) -> None:
         """停止 iOS 平台（不关闭进程，保持复用）。"""
@@ -127,18 +162,23 @@ class iOSPlatformManager(PlatformManager):
 
     def _ensure_agent_running(self) -> None:
         """确保 go-ios agent 正在运行，异常则重启。"""
+        # 1. 先检查健康状态
         if self._go_ios.check_agent_health():
             logger.info("go-ios agent already running, reusing")
             return
 
-        # Agent 未运行或健康检查失败，尝试启动
+        # 2. 健康检查失败，先杀掉可能占用端口的进程
+        logger.info("go-ios agent health check failed, checking port occupation...")
+        self._kill_agent_processes()
+
+        # 3. 启动新 agent
         logger.info("go-ios agent not running, starting...")
         self._agent_process = self._go_ios.start_agent()
 
-        # 等待就绪
+        # 4. 等待就绪
         if not self._go_ios.wait_agent_ready(timeout=30):
             logger.error("go-ios agent failed to start within 30s")
-            # 尝试杀掉可能残留的进程
+            # 再次尝试杀掉进程
             self._kill_agent_processes()
             raise RuntimeError("go-ios agent failed to start")
 
@@ -208,6 +248,12 @@ class iOSPlatformManager(PlatformManager):
 
     def ensure_device_service(self, udid: str) -> tuple[str, str]:
         """确保 WDA 服务可用。"""
+        # 获取锁防止重复启动
+        lock = self._get_service_lock(udid)
+        if not lock.acquire(blocking=False):
+            logger.info(f"Service start already in progress for {udid}, skipping")
+            return ("pending", "Service start in progress")
+
         try:
             # 0. 获取设备版本
             device_version = self._get_device_version(udid)
@@ -217,6 +263,7 @@ class iOSPlatformManager(PlatformManager):
                 tunnel_info = self._get_tunnel_info(udid)
                 if not tunnel_info:
                     return ("faulty", f"iOS 17+ device {udid} tunnel not established")
+                logger.info(f"Tunnel info for {udid}: address={tunnel_info.get('address')}, rsdPort={tunnel_info.get('rsdPort')}")
 
             # 2. 检查已有的 client 是否可用
             client = self._device_clients.get(udid)
@@ -259,6 +306,8 @@ class iOSPlatformManager(PlatformManager):
         except Exception as e:
             logger.error(f"Failed to ensure WDA service: {udid}, {e}")
             return ("faulty", str(e))
+        finally:
+            lock.release()
 
     def _start_wda(self, udid: str, wda_port: int, mjpeg_port: int) -> tuple[str, str]:
         """启动 WDA 服务（含端口转发）。"""
@@ -267,26 +316,24 @@ class iOSPlatformManager(PlatformManager):
             if udid in self._device_wda:
                 self._stop_wda(udid)
 
-            # 获取 tunnel 信息（iOS 17+）
-            tunnel_info = self._device_tunnel_info.get(udid)
-            address = tunnel_info.get("address") if tunnel_info else None
-            rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
-
-            # 启动 WDA
+            # 启动 WDA（不手动传递 tunnel 参数，让 go-ios 自动从 agent 获取）
+            logger.info(f"Starting WDA for {udid} on port {wda_port}")
             wda_process = self._go_ios.start_wda(
                 udid=udid,
                 bundle_id=self.wda_bundle_id,
-                address=address,
-                rsd_port=rsd_port,
+                testrunner_bundle_id=self.wda_testrunner_bundle_id,
+                xctest_config=self.wda_xctest_config,
             )
+
+            # 等待 WDA 在设备上初始化（1-2秒）
+            logger.info(f"WDA process started, waiting 2 seconds for initialization...")
+            time.sleep(2)
 
             # 启动 WDA 端口转发（设备 8100 -> 本地 wda_port）
             forward_process = self._go_ios.forward_port(
                 udid=udid,
                 local_port=wda_port,
                 device_port=8100,
-                address=address,
-                rsd_port=rsd_port,
             )
 
             # 启动 MJPEG 端口转发（设备 9100 -> 本地 mjpeg_port）
@@ -318,16 +365,10 @@ class iOSPlatformManager(PlatformManager):
 
     def _start_mjpeg_forward(self, udid: str, mjpeg_port: int) -> subprocess.Popen:
         """启动 MJPEG 端口转发。"""
-        tunnel_info = self._device_tunnel_info.get(udid)
-        address = tunnel_info.get("address") if tunnel_info else None
-        rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
-
         return self._go_ios.forward_port(
             udid=udid,
             local_port=mjpeg_port,
             device_port=9100,
-            address=address,
-            rsd_port=rsd_port,
         )
 
     def _stop_wda(self, udid: str) -> None:
@@ -700,15 +741,9 @@ class iOSPlatformManager(PlatformManager):
 
         try:
             # 使用 go-ios launch 命令
-            tunnel_info = self._device_tunnel_info.get(self._current_device)
-            address = tunnel_info.get("address") if tunnel_info else None
-            rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
-
             success = self._go_ios.launch_app(
                 udid=self._current_device,
                 bundle_id=bundle_id,
-                address=address,
-                rsd_port=rsd_port,
             )
 
             if success:
@@ -772,15 +807,9 @@ class iOSPlatformManager(PlatformManager):
         try:
             if bundle_id:
                 # 使用 go-ios kill 命令
-                tunnel_info = self._device_tunnel_info.get(self._current_device)
-                address = tunnel_info.get("address") if tunnel_info else None
-                rsd_port = tunnel_info.get("rsdPort") if tunnel_info else None
-
                 success = self._go_ios.kill_app(
                     udid=self._current_device,
                     bundle_id=bundle_id,
-                    address=address,
-                    rsd_port=rsd_port,
                 )
 
                 if success:

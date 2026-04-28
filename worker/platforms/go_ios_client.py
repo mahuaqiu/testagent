@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import httpx
 
+from common.utils import run_cmd, popen_cmd
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +24,7 @@ class GoIOSClient:
     def __init__(
         self,
         go_ios_path: str,
-        agent_port: int = 28100,
+        agent_port: int = 60105,
         timeout: int = 30,
     ):
         """
@@ -30,7 +32,7 @@ class GoIOSClient:
 
         Args:
             go_ios_path: go-ios 可执行文件路径（相对于 exe 目录或绝对路径）
-            agent_port: go-ios agent HTTP API 端口
+            agent_port: go-ios agent HTTP API 端口（默认 60105）
             timeout: 命令执行超时时间（秒）
         """
         self._go_ios_path = self._resolve_path(go_ios_path)
@@ -67,10 +69,8 @@ class GoIOSClient:
         """
         cmd = [self._go_ios_path] + args
         logger.debug(f"Running go-ios command: {cmd}")
-        result = subprocess.run(
+        result = run_cmd(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=timeout or self.timeout,
             check=check,
         )
@@ -91,26 +91,24 @@ class GoIOSClient:
     # ========== Agent 管理 ==========
 
     def start_agent(self) -> subprocess.Popen:
-        """启动 go-ios agent（后台进程）。"""
-        cmd = [self._go_ios_path, "tunnel", "start"]
-        # Windows: 隐藏窗口，独立进程
+        """启动 go-ios agent（后台进程，使用 userspace TUN 模式避免 IPv6 问题）。"""
+        # 使用 --userspace 参数启动 agent，避免 Windows IPv6 路由配置问题
+        cmd = [self._go_ios_path, "tunnel", "start", "--userspace"]
+        # 独立进程标志（popen_cmd 会自动合并隐藏窗口标志）
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        process = subprocess.Popen(
+        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立，不依赖父进程
+        process = popen_cmd(
             cmd,
-            stdin=None,
-            stdout=None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
-            startupinfo=startupinfo,
         )
-        logger.info(f"go-ios agent started (PID: {process.pid})")
+        logger.info(f"go-ios agent started (PID: {process.pid}, userspace mode)")
         return process
 
     def check_agent_health(self) -> bool:
-        """检查 agent 健康状态。"""
+        """检查 agent 进程是否运行（/health 接口）。"""
         try:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5)
@@ -120,11 +118,22 @@ class GoIOSClient:
             logger.debug(f"Agent health check failed: {e}")
             return False
 
+    def check_agent_ready(self) -> bool:
+        """检查 agent 是否就绪（/ready 接口，包括设备连接）。"""
+        try:
+            if not self._http_client:
+                self._http_client = httpx.Client(timeout=5)
+            resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/ready")
+            return resp.status_code == 200
+        except Exception as e:
+            logger.debug(f"Agent ready check failed: {e}")
+            return False
+
     def wait_agent_ready(self, timeout: int = 30) -> bool:
         """等待 agent 就绪。"""
         start = time.time()
         while time.time() - start < timeout:
-            if self.check_agent_health():
+            if self.check_agent_ready():
                 return True
             time.sleep(1)
         return False
@@ -180,19 +189,23 @@ class GoIOSClient:
         """
         data = self._run_cmd_json(["list", "--details"])
         if not data:
+            logger.warning("go-ios list --details returned no data")
             return []
         devices = data.get("deviceList", [])
+        logger.debug(f"go-ios found {len(devices)} devices in deviceList")
         result = []
         for d in devices:
-            # go-ios 的设备信息结构
-            props = d.get("Properties", {})
-            result.append({
-                "udid": props.get("SerialNumber", ""),
-                "name": "",  # 需要通过 info 命令获取
-                "version": "",  # 需要通过 info 命令获取
-                "model": props.get("ProductType", ""),
-                "device_id": d.get("DeviceID", 0),
-            })
+            # go-ios list --details 返回的结构
+            udid = d.get("Udid", "")
+            if udid:
+                result.append({
+                    "udid": udid,
+                    "name": d.get("DeviceName", ""),
+                    "version": d.get("ProductVersion", ""),
+                    "model": d.get("ProductType", ""),
+                    "device_id": d.get("DeviceID", 0),
+                })
+        logger.info(f"go-ios list_devices found {len(result)} devices")
         return result
 
     def get_device_info(self, udid: str) -> Optional[dict]:
@@ -227,6 +240,8 @@ class GoIOSClient:
         self,
         udid: str,
         bundle_id: str,
+        testrunner_bundle_id: str = "",
+        xctest_config: str = "WebDriverAgentRunner.xctest",
         address: Optional[str] = None,
         rsd_port: Optional[int] = None,
     ) -> subprocess.Popen:
@@ -235,29 +250,34 @@ class GoIOSClient:
 
         Args:
             udid: 设备 UDID
-            bundle_id: WDA bundle ID
-            address: iOS 17+ tunnel 地址
-            rsd_port: iOS 17+ tunnel RSD 端口
+            bundle_id: WDA bundle ID (--bundleid)
+            testrunner_bundle_id: Test Runner Bundle ID (--testrunnerbundleid)
+            xctest_config: XCTest Config (--xctestconfig)
+            address: iOS 17+ tunnel 地址（可选，不传则 go-ios 自动从 agent 获取）
+            rsd_port: iOS 17+ tunnel RSD 端口（可选，不传则 go-ios 自动从 agent 获取）
 
         Returns:
             subprocess.Popen: WDA 进程
         """
         args = ["--udid", udid, "runwda", "--bundleid", bundle_id]
-        if address and rsd_port:
-            args.extend(["--address", address, "--rsd-port", str(rsd_port)])
+        # 添加 go-ios runwda 必需的参数
+        if testrunner_bundle_id:
+            args.extend(["--testrunnerbundleid", testrunner_bundle_id])
+        if xctest_config:
+            args.extend(["--xctestconfig", xctest_config])
+        # 注意：不手动传递 address 和 rsd_port，让 go-ios 自动从 agent HTTP API 获取
+        # 这样可以避免 IPv6 地址变化导致连接失败的问题
         cmd = [self._go_ios_path] + args
-        # Windows: 隐藏窗口，独立进程
+        logger.info(f"WDA command: {' '.join(cmd)}")
+        # 使用 popen_cmd 统一处理黑框问题
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        process = subprocess.Popen(
+        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立
+        process = popen_cmd(
             cmd,
-            stdin=None,
-            stdout=None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
-            startupinfo=startupinfo,
         )
         logger.info(f"WDA started for {udid} (PID: {process.pid})")
         return process
@@ -279,72 +299,46 @@ class GoIOSClient:
             udid: 设备 UDID
             local_port: 本地端口
             device_port: 设备端口
-            address: iOS 17+ tunnel 地址
-            rsd_port: iOS 17+ tunnel RSD 端口
+            address: iOS 17+ tunnel 地址（可选，不传则 go-ios 自动从 agent 获取）
+            rsd_port: iOS 17+ tunnel RSD 端口（可选，不传则 go-ios 自动从 agent 获取）
 
         Returns:
             subprocess.Popen: 端口转发进程
         """
         args = ["--udid", udid, "forward", str(local_port), str(device_port)]
-        if address and rsd_port:
-            args.extend(["--address", address, "--rsd-port", str(rsd_port)])
+        # 注意：不手动传递 address 和 rsd_port，让 go-ios 自动从 agent HTTP API 获取
         cmd = [self._go_ios_path] + args
-        # Windows: 隐藏窗口，独立进程
+        logger.info(f"Forward command: {' '.join(cmd)}")
+        # 使用 popen_cmd 统一处理黑框问题
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        process = subprocess.Popen(
+        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立
+        process = popen_cmd(
             cmd,
-            stdin=None,
-            stdout=None,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
-            startupinfo=startupinfo,
         )
         logger.info(f"Port forward started: {local_port} -> {device_port} (PID: {process.pid})")
         return process
 
     # ========== 应用管理 ==========
 
-    def launch_app(
-        self,
-        udid: str,
-        bundle_id: str,
-        address: Optional[str] = None,
-        rsd_port: Optional[int] = None,
-    ) -> bool:
+    def launch_app(self, udid: str, bundle_id: str) -> bool:
         """启动应用。"""
         args = ["--udid", udid, "launch", bundle_id]
-        if address and rsd_port:
-            args.extend(["--address", address, "--rsd-port", str(rsd_port)])
         result = self._run_cmd(args, check=False)
         return result.returncode == 0
 
-    def kill_app(
-        self,
-        udid: str,
-        bundle_id: str,
-        address: Optional[str] = None,
-        rsd_port: Optional[int] = None,
-    ) -> bool:
+    def kill_app(self, udid: str, bundle_id: str) -> bool:
         """关闭应用。"""
         args = ["--udid", udid, "kill", bundle_id]
-        if address and rsd_port:
-            args.extend(["--address", address, "--rsd-port", str(rsd_port)])
         result = self._run_cmd(args, check=False)
         return result.returncode == 0
 
-    def get_processes(
-        self,
-        udid: str,
-        address: Optional[str] = None,
-        rsd_port: Optional[int] = None,
-    ) -> list[dict]:
+    def get_processes(self, udid: str) -> list[dict]:
         """获取运行的应用进程。"""
         args = ["--udid", udid, "ps", "--apps"]
-        if address and rsd_port:
-            args.extend(["--address", address, "--rsd-port", str(rsd_port)])
         data = self._run_cmd_json(args)
         if not data:
             return []

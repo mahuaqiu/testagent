@@ -171,12 +171,14 @@ class iOSDiscoverer:
 
         try:
             devices = cls._go_ios_client.list_devices()
+            logger.info(f"iOSDiscoverer: list_devices returned {len(devices)} devices")
             result = []
             for d in devices:
                 udid = d["udid"]
                 if udid:
                     info = cls.get_device_info(udid)
                     if info:
+                        logger.info(f"iOSDiscoverer: found device {udid} ({info.model}, iOS {info.os_version})")
                         result.append(info)
             return result
         except Exception as e:

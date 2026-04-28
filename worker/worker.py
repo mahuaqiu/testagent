@@ -189,7 +189,19 @@ class Worker:
         # 5. 上报初始状态
         self._report_devices()
 
-        # 6. 启动设备监控
+        # 6. 启动移动端平台管理器（必须在设备监控之前，否则 GoIOSClient 未初始化）
+        for platform in ("android", "ios"):
+            manager = self.platform_managers.get(platform)
+            if manager:
+                try:
+                    manager.start()
+                    # iOS platform 设置 agent 就绪回调，触发设备发现
+                    if platform == "ios" and self.device_monitor:
+                        manager.set_on_agent_ready(self.device_monitor.trigger_check)
+                except Exception as e:
+                    logger.error(f"Failed to start {platform} platform: {e}")
+
+        # 7. 启动设备监控
         if self.device_monitor:
             self.device_monitor.start()
 

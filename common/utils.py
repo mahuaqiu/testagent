@@ -91,7 +91,7 @@ def popen_cmd(
         stdout: 标准输出处理
         stderr: 标准错误处理
         stdin: 标准输入处理
-        **kwargs: 其他 subprocess.Popen 参数
+        **kwargs: 其他 subprocess.Popen 参数（creationflags 会自动合并隐藏窗口标志）
 
     Returns:
         subprocess.Popen: 进程对象
@@ -100,9 +100,10 @@ def popen_cmd(
         process = popen_cmd(["adb", "logcat"], stdout=subprocess.PIPE)
         process = popen_cmd("some_app.exe")  # 启动 GUI 应用
     """
-    # 在 Windows 上添加隐藏窗口标志
+    # 在 Windows 上合并隐藏窗口标志（即使已有其他 creationflags）
     if platform.system().lower() == "windows":
-        kwargs.setdefault("creationflags", SUBPROCESS_HIDE_WINDOW)
+        existing_flags = kwargs.get("creationflags", 0)
+        kwargs["creationflags"] = existing_flags | SUBPROCESS_HIDE_WINDOW
 
     return subprocess.Popen(
         cmd,
