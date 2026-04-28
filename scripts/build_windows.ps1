@@ -2,8 +2,10 @@
 param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
+    [string]$PythonPath = "",      # Specify Python executable path
     [switch]$Clean,
-    [switch]$UseMingw  # 使用 MinGW（需要单独安装），默认用 MSVC
+    [switch]$UseMingw,  # Use MinGW (needs separate install), default is MSVC
+    [switch]$BuildInstaller  # Build installer directly
 )
 
 Write-Host "=========================================="
@@ -13,20 +15,37 @@ Write-Host "Output: $OutputDir"
 if ($UseMingw) { Write-Host "Compiler: MinGW-w64" } else { Write-Host "Compiler: MSVC (default)" }
 Write-Host "=========================================="
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Error "Python not found!"
-    exit 1
+# Python path handling
+if ($PythonPath -ne "") {
+    $PythonExe = $PythonPath
+    if (-not (Test-Path $PythonExe)) {
+        Write-Error "Python not found at: $PythonPath"
+        exit 1
+    }
+    Write-Host "Python path: $PythonPath"
+} else {
+    $PythonExe = "python"
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        Write-Error "Python not found in PATH!"
+        exit 1
+    }
 }
 
-$nuitkaInstalled = python -c "import nuitka; print('ok')" 2>$null
+$nuitkaInstalled = & $PythonExe -c "import nuitka; print('ok')" 2>$null
 if ($nuitkaInstalled -ne "ok") {
     Write-Host "Installing Nuitka..."
     pip install nuitka ordered-set zstandard
 }
 
+# MSVC compiler heap optimization (fix C1002 heap memory error)
+if (-not $UseMingw) {
+    Write-Host "Setting MSVC compiler heap limit (2x default)..."
+    $env:_CL_ = "/Zm8000"
+}
+
 $mingwBinPath = ""
 if ($UseMingw) {
-    # 使用 MinGW
+    # Use MinGW
     $mingwPaths = @("C:\mingw64\bin\gcc.exe", "C:\msys64\ucrt64\bin\gcc.exe")
     $mingwPath = $mingwPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $mingwPath) {
@@ -38,7 +57,7 @@ if ($UseMingw) {
     Write-Host "MinGW-w64 GCC found: $mingwPath"
     $env:PATH = "$mingwBinPath;$env:PATH"
 } else {
-    # 默认使用 MSVC，检查 Visual Studio
+    # Default use MSVC, check Visual Studio
     $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vsWhere)) {
         Write-Warning "Visual Studio Installer not found, but Nuitka will auto-detect MSVC"
@@ -49,7 +68,7 @@ $VenvPath = "build_env_nuitka"
 if ($Clean -or -not (Test-Path $VenvPath)) {
     if (Test-Path $VenvPath) { Remove-Item -Recurse -Force $VenvPath }
     Write-Host "[1/6] Creating virtual environment..."
-    python -m venv $VenvPath
+    & $PythonExe -m venv $VenvPath
 } else {
     Write-Host "[1/6] Using existing virtual environment..."
 }
@@ -95,7 +114,7 @@ $nuitkaArgs = @(
     "--include-package=pydantic"
     "--include-package=pystray"
     "--include-package=uiautomator2"
-    # go-ios 已切换，移除 tidevice3
+    # go-ios switched, removed tidevice3
     "--include-module=uvicorn.logging"
     "--include-module=uvicorn.loops"
     "--include-module=uvicorn.loops.auto"
@@ -109,7 +128,11 @@ $nuitkaArgs = @(
     "--nofollow-import-to=pytest"
     "--nofollow-import-to=allure"
     "--nofollow-import-to=faker"
-    # 排除大型包的测试模块，减少编译量
+    # Exclude Playwright large generated modules (fix MSVC C1002 heap error)
+    "--nofollow-import-to=playwright.sync_api._generated"
+    "--nofollow-import-to=playwright.async_api._generated"
+    "--nofollow-import-to=playwright._impl._generated"
+    # Exclude large package test modules to reduce compile time
     "--nofollow-import-to=numpy._core.tests"
     "--nofollow-import-to=numpy.tests"
     "--nofollow-import-to=numpy.typing.tests"
@@ -157,6 +180,20 @@ if (Test-Path $BuildDir) {
     exit 1
 }
 
+# Nuitka --include-data-dir may miss binary files in subdirs, copy tools manually
+Write-Host "Copying tools directory (full)..."
+if (Test-Path "$PackageDir\tools") { Remove-Item -Recurse -Force "$PackageDir\tools" }
+Copy-Item -Path "tools" -Destination "$PackageDir\tools" -Recurse -Force
+
+# Also ensure assets and config are complete
+Write-Host "Copying assets directory..."
+if (Test-Path "$PackageDir\assets") { Remove-Item -Recurse -Force "$PackageDir\assets" }
+Copy-Item -Path "assets" -Destination "$PackageDir\assets" -Recurse -Force
+
+Write-Host "Copying config directory..."
+if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
+Copy-Item -Path "config" -Destination "$PackageDir\config" -Recurse -Force
+
 Set-Content -Path "$PackageDir\VERSION" -Value $BuildVersion -Encoding UTF8
 
 Write-Host "Copying Playwright chromium..."
@@ -173,4 +210,31 @@ deactivate
 Write-Host "=========================================="
 Write-Host "Build complete!"
 Write-Host "Package: $PackageDir"
+Write-Host "=========================================="
+
+# Build installer (optional)
+if ($BuildInstaller) {
+    Write-Host "Building installer (via -BuildInstaller flag)..."
+    & ".\installer\build_installer.ps1" -Version $BuildVersion
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Installer build failed, but EXE package is available"
+    }
+} else {
+    Write-Host ""
+    Write-Host "Build installer? (for distribution)"
+    $BuildInstallerChoice = Read-Host "Enter 'y' to build, or skip"
+
+    if ($BuildInstallerChoice -eq 'y') {
+        Write-Host "Building installer..."
+        & ".\installer\build_installer.ps1" -Version $BuildVersion
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Installer build failed, but EXE package is available"
+        }
+    }
+}
+
+Write-Host "=========================================="
+Write-Host "All builds complete!"
+Write-Host "EXE package: $PackageDir"
+Write-Host "Installer: $OutputDir\test-worker-installer.exe (if built)"
 Write-Host "=========================================="
