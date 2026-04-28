@@ -174,8 +174,11 @@ class Worker:
 
         logger.info(f"Starting Worker {self.worker_id}...")
 
-        # 1. 环境发现
-        self._discover_environment()
+        # 1. 发现宿主机环境（只获取主机信息，不发现设备）
+        self.host_info = HostDiscoverer.discover()
+        self.supported_platforms = HostDiscoverer.get_supported_platforms()
+        logger.info(f"Host: {self.host_info.hostname} ({self.host_info.os_type})")
+        logger.info(f"Supported platforms: {self.supported_platforms}")
 
         # 2. 初始化 OCR 客户端
         self._init_ocr_client()
@@ -183,25 +186,29 @@ class Worker:
         # 3. 初始化平台管理器
         self._init_platform_managers()
 
-        # 4. 初始化上报客户端
-        self._init_reporter()
-
-        # 5. 上报初始状态
-        self._report_devices()
-
-        # 6. 启动移动端平台管理器（必须在设备监控之前，否则 GoIOSClient 未初始化）
+        # 4. 启动移动端平台管理器（必须在设备发现之前，否则 GoIOSClient 未初始化）
         for platform in ("android", "ios"):
             manager = self.platform_managers.get(platform)
             if manager:
                 try:
                     manager.start()
-                    # iOS platform 设置 agent 就绪回调，触发设备发现
+                    # iOS platform 设置 agent 就绪回调
                     if platform == "ios" and self.device_monitor:
                         manager.set_on_agent_ready(self.device_monitor.trigger_check)
                 except Exception as e:
                     logger.error(f"Failed to start {platform} platform: {e}")
 
-        # 7. 启动设备监控
+        # 5. 发现移动设备（现在 GoIOSClient 已初始化）
+        if self.host_info.os_type == "windows":
+            self._discover_mobile_devices()
+
+        # 6. 初始化上报客户端
+        self._init_reporter()
+
+        # 7. 上报初始状态
+        self._report_devices()
+
+        # 8. 启动设备监控
         if self.device_monitor:
             self.device_monitor.start()
 
@@ -247,16 +254,12 @@ class Worker:
         logger.info(f"Worker {self.worker_id} stopped")
 
     def _discover_environment(self) -> None:
-        """发现宿主机环境。"""
+        """发现宿主机环境（不含设备发现）。"""
         # 发现宿主机信息
         self.host_info = HostDiscoverer.discover()
 
         # 根据操作系统决定支持的平台
         self.supported_platforms = HostDiscoverer.get_supported_platforms()
-
-        # 发现移动设备（仅 Windows）
-        if self.host_info.os_type == "windows":
-            self._discover_mobile_devices()
 
         logger.info(f"Host: {self.host_info.hostname} ({self.host_info.os_type})")
         logger.info(f"Supported platforms: {self.supported_platforms}")

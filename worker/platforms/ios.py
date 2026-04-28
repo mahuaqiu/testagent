@@ -31,27 +31,62 @@ class iOSPlatformManager(PlatformManager):
     SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen", "pinch"}
 
     # iOS 按键映射：标准按键名 → WDA 按键名
-    # WDA 支持的按键取决于设备型号，iPhone 8 (Touch ID) 只支持 home, volumeup, volumedown
-    KEY_MAP = {
+    # Touch ID 机型（iPhone 8, SE 等）：支持 home, volumeup, volumedown
+    # Face ID 机型（iPhone X~15）：支持 lock（侧边按钮），volumeup, volumedown（无 home 键）
+    KEY_MAP_TOUCH_ID = {
         "HOME": "home",
         "VOLUME_UP": "volumeup",
         "VOLUMEUP": "volumeup",
         "VOLUME_DOWN": "volumedown",
         "VOLUMEDOWN": "volumedown",
     }
+    KEY_MAP_FACE_ID = {
+        "LOCK": "lock",
+        "POWER": "lock",  # 侧边按钮（电源键）
+        "VOLUME_UP": "volumeup",
+        "VOLUMEUP": "volumeup",
+        "VOLUME_DOWN": "volumedown",
+        "VOLUMEDOWN": "volumedown",
+    }
+
+    # Face ID 机型 product_type 列表（iPhone X 及之后）
+    # iPhone10,3/10,6 = iPhone X, iPhone11,* = iPhone XS/XR, iPhone12,* = iPhone 11
+    # iPhone13,* = iPhone 12, iPhone14,* = iPhone 13, iPhone15,* = iPhone 14, iPhone16,* = iPhone 15
+    FACE_ID_MODELS = {
+        "iPhone10,3", "iPhone10,6",  # iPhone X
+        # iPhone 11 系列（iPhone11,x）
+        "iPhone11,2", "iPhone11,4", "iPhone11,6", "iPhone11,8",
+        # iPhone 12 系列（iPhone13,x）
+        "iPhone13,2", "iPhone13,3", "iPhone13,4", "iPhone13,5",
+        # iPhone 13 系列（iPhone14,x）
+        "iPhone14,2", "iPhone14,3", "iPhone14,4", "iPhone14,5",
+        # iPhone 14 系列（iPhone15,x）
+        "iPhone15,2", "iPhone15,3", "iPhone15,4", "iPhone15,5",
+        # iPhone 15 系列（iPhone16,x）
+        "iPhone16,1", "iPhone16,2", "iPhone16,3", "iPhone16,4",
+        # iPhone 16 系列（iPhone17,x）- 新增
+        "iPhone17,1", "iPhone17,2", "iPhone17,3", "iPhone17,4",
+    }
 
     # WDA 不支持的按键（用于错误提示）
-    UNSUPPORTED_KEYS = {
+    UNSUPPORTED_KEYS_COMMON = {
         "BACK": "iOS 无物理返回键，请使用 OCR 点击导航栏返回按钮",
         "ENTER": "iOS 无物理回车键，请使用 OCR 点击键盘上的完成/搜索按钮",
-        "LOCK": "iPhone 8 不支持 LOCK 按键，Face ID 机型可能支持",
-        "POWER": "iPhone 8 不支持 POWER 按键，Face ID 机型可能支持",
         "ESCAPE": "iOS 无 ESC 键",
         "TAB": "iOS 无 Tab 键",
         "ARROWUP": "iOS 无方向键",
         "ARROWDOWN": "iOS 无方向键",
         "ARROWLEFT": "iOS 无方向键",
         "ARROWRIGHT": "iOS 无方向键",
+    }
+    # Touch ID 机型不支持的按键
+    UNSUPPORTED_KEYS_TOUCH_ID = {
+        "LOCK": "Touch ID 机型无侧边按钮（LOCK），请使用 HOME 键唤醒屏幕",
+        "POWER": "Touch ID 机型无侧边按钮（POWER），请使用 HOME 键唤醒屏幕",
+    }
+    # Face ID 机型不支持的按键
+    UNSUPPORTED_KEYS_FACE_ID = {
+        "HOME": "Face ID 机型无 HOME 键，请使用 LOCK/POWER（侧边按钮）唤醒屏幕",
     }
 
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
@@ -72,6 +107,7 @@ class iOSPlatformManager(PlatformManager):
         self._device_wda: dict[str, dict] = {}  # udid -> {port, mjpeg_port, process, forward_process}
         self._device_clients: dict[str, WDAClient] = {}  # udid -> WDAClient
         self._device_tunnel_info: dict[str, dict] = {}  # udid -> tunnel info
+        self._device_product_types: dict[str, str] = {}  # udid -> product_type（用于判断按键支持）
         self._current_device: str | None = None
         self._unlock_config = unlock_config or {}
 
@@ -255,8 +291,14 @@ class iOSPlatformManager(PlatformManager):
             return ("pending", "Service start in progress")
 
         try:
-            # 0. 获取设备版本
+            # 0. 获取设备版本和型号
             device_version = self._get_device_version(udid)
+            device_info = self._go_ios.get_device_info(udid) if self._go_ios else {}
+            product_type = device_info.get("model", "")
+            if product_type:
+                self._device_product_types[udid] = product_type
+                is_face_id = product_type in self.FACE_ID_MODELS
+                logger.info(f"Device {udid}: product_type={product_type}, Face ID={is_face_id}")
 
             # 1. iOS 17+ 设备获取 tunnel 信息
             if device_version and self._is_ios17_plus(device_version):
@@ -478,13 +520,133 @@ class iOSPlatformManager(PlatformManager):
     # ========== 基础能力实现 ==========
 
     def _convert_coords(self, x: int, y: int) -> tuple[int, int]:
-        """转换物理像素坐标到 WDA 逻辑坐标。"""
-        # iPhone 8 及多数 iPhone 的缩放因子是 2x
-        # 如果坐标超过逻辑分辨率范围，说明是物理坐标，需要转换
-        # iPhone 8 逻辑分辨率: 375x667，物理分辨率: 750x1334
-        if x > 400 or y > 700:  # 明显超过逻辑分辨率
+        """转换物理像素坐标到 WDA 逻辑坐标。
+
+        判断逻辑：
+        - 如果坐标超过设备逻辑分辨率 → 物理坐标，需要按缩放因子转换
+        - 如果坐标在逻辑分辨率范围内 → 假设为逻辑坐标，不转换
+
+        注意：这种方法对于恰好落在逻辑范围内的物理坐标可能出错。
+        建议用户使用物理坐标时确保超过逻辑分辨率阈值。
+        """
+        # 获取当前设备的逻辑分辨率
+        product_type = self._device_product_types.get(self._current_device, "")
+        resolution = self._get_logic_resolution(product_type)
+
+        if resolution:
+            logic_width, logic_height = resolution
+            # 只有当坐标明显超过逻辑分辨率时才转换
+            # 使用 5% 容差避免边界情况
+            if x > logic_width * 1.05 or y > logic_height * 1.05:
+                # 根据机型获取缩放因子
+                scale_factor = self._get_scale_factor(product_type)
+                logger.debug(f"Converting physical coords ({x}, {y}) to logic ({x//scale_factor}, {y//scale_factor}) with scale {scale_factor}x")
+                return (x // scale_factor, y // scale_factor)
+            # 在逻辑范围内，假设是逻辑坐标
+            logger.debug(f"Coords ({x}, {y}) within logic resolution {logic_width}x{logic_height}, no conversion")
+            return (x, y)
+
+        # 未知设备，使用旧逻辑（向后兼容）
+        if x > 400 or y > 700:
             return (x // 2, y // 2)
         return (x, y)
+
+    def _get_scale_factor(self, product_type: str) -> int:
+        """根据 product_type 获取缩放因子。
+
+        iPhone 缩放因子总结：
+        - 2x: iPhone 8, iPhone 8 Plus(约2.6x), iPhone XR, iPhone 11
+        - 3x: iPhone X 及之后所有机型（除上述2x机型），包括全系12/13/14/15/16
+        """
+        # 2x 缩放机型
+        scale_2x = {
+            "iPhone10,1", "iPhone10,2", "iPhone10,4", "iPhone10,5",  # iPhone 8 系列
+            "iPhone11,8",  # iPhone XR
+            "iPhone12,1",  # iPhone 11
+        }
+        # 3x 缩放机型（iPhone X 及之后，除 2x 机型外的所有机型）
+        scale_3x = {
+            "iPhone10,3", "iPhone10,6",  # iPhone X
+            "iPhone11,2", "iPhone11,4", "iPhone11,6",  # iPhone XS/XS Max
+            "iPhone12,3", "iPhone12,5",  # iPhone 11 Pro/Pro Max
+            "iPhone13,1", "iPhone13,2", "iPhone13,3", "iPhone13,4",  # iPhone 12 全系
+            "iPhone14,2", "iPhone14,3", "iPhone14,4", "iPhone14,5",  # iPhone 13 全系
+            "iPhone15,2", "iPhone15,3", "iPhone15,4", "iPhone15,5",  # iPhone 14 全系
+            "iPhone16,1", "iPhone16,2", "iPhone16,3", "iPhone16,4",  # iPhone 15 全系
+            "iPhone17,1", "iPhone17,2", "iPhone17,3", "iPhone17,4",  # iPhone 16 全系
+        }
+
+        if product_type in scale_3x:
+            return 3
+        elif product_type in scale_2x:
+            return 2
+        else:
+            return 2  # 默认 2x
+
+    def _get_logic_resolution(self, product_type: str) -> tuple[int, int] | None:
+        """根据 product_type 获取逻辑分辨率（points）。
+
+        iPhone 逻辑分辨率官方数据：
+        - iPhone 8 系列: 375×667 (8), 414×736 (8 Plus)
+        - iPhone X/XS: 375×812
+        - iPhone XR/11: 414×896
+        - iPhone 11 Pro: 375×812, Pro Max: 414×896
+        - iPhone 12 mini: 360×780, 12/12Pro: 390×844, 12 Pro Max: 428×926
+        - iPhone 13 mini: 360×780, 13/13Pro: 390×844, 13 Pro Max: 428×926
+        - iPhone 14: 390×844, 14 Plus: 428×926, 14 Pro: 393×852, 14 Pro Max: 430×932
+        - iPhone 15: 393×852, 15 Plus: 430×932, 15 Pro: 393×852, 15 Pro Max: 430×932
+        - iPhone 16: 393×852, 16 Plus: 430×932, 16 Pro: 393×852, 16 Pro Max: 430×932
+
+        缩放因子：
+        - 2x: iPhone 8, 8 Plus(约2.6x), XR, 11
+        - 3x: iPhone X 及之后所有机型（除上述2x机型）
+        """
+        # iPhone 逻辑分辨率映射（points）
+        logic_res_map = {
+            # iPhone 8 系列（2x 缩放，8 Plus 实际约 2.6x）
+            "iPhone10,1": (375, 667),   # iPhone 8
+            "iPhone10,2": (414, 736),   # iPhone 8 Plus（物理 1080×1920，约 2.6x）
+            "iPhone10,4": (375, 667),   # iPhone 8 (GSM)
+            "iPhone10,5": (414, 736),   # iPhone 8 Plus (GSM)
+            # iPhone X（3x 缩放）
+            "iPhone10,3": (375, 812),   # iPhone X
+            "iPhone10,6": (375, 812),   # iPhone X (GSM)
+            # iPhone XS/XR 系列
+            "iPhone11,2": (375, 812),   # iPhone XS（3x）
+            "iPhone11,4": (414, 896),   # iPhone XS Max（3x）
+            "iPhone11,6": (414, 896),   # iPhone XS Max (GSM)（3x）
+            "iPhone11,8": (414, 896),   # iPhone XR（2x）
+            # iPhone 11 系列
+            "iPhone12,1": (414, 896),   # iPhone 11（2x）
+            "iPhone12,3": (375, 812),   # iPhone 11 Pro（3x）
+            "iPhone12,5": (414, 896),   # iPhone 11 Pro Max（3x）
+            # iPhone 12 系列（全系 3x）
+            "iPhone13,1": (360, 780),   # iPhone 12 mini（3x）
+            "iPhone13,2": (390, 844),   # iPhone 12（3x）
+            "iPhone13,3": (390, 844),   # iPhone 12 Pro（3x）
+            "iPhone13,4": (428, 926),   # iPhone 12 Pro Max（3x）
+            # iPhone 13 系列（全系 3x）
+            "iPhone14,2": (390, 844),   # iPhone 13 Pro（3x）
+            "iPhone14,3": (428, 926),   # iPhone 13 Pro Max（3x）
+            "iPhone14,4": (360, 780),   # iPhone 13 mini（3x）
+            "iPhone14,5": (390, 844),   # iPhone 13（3x）
+            # iPhone 14 系列（全系 3x）
+            "iPhone15,2": (393, 852),   # iPhone 14 Pro（3x）
+            "iPhone15,3": (430, 932),   # iPhone 14 Pro Max（3x）
+            "iPhone15,4": (390, 844),   # iPhone 14（3x）
+            "iPhone15,5": (428, 926),   # iPhone 14 Plus（3x）
+            # iPhone 15 系列（全系 3x）
+            "iPhone16,1": (393, 852),   # iPhone 15 Pro（3x）
+            "iPhone16,2": (430, 932),   # iPhone 15 Pro Max（3x）
+            "iPhone16,3": (393, 852),   # iPhone 15（3x）
+            "iPhone16,4": (430, 932),   # iPhone 15 Plus（3x）
+            # iPhone 16 系列（全系 3x）
+            "iPhone17,1": (393, 852),   # iPhone 16 Pro（3x）
+            "iPhone17,2": (430, 932),   # iPhone 16 Pro Max（3x）
+            "iPhone17,3": (393, 852),   # iPhone 16（3x）
+            "iPhone17,4": (430, 932),   # iPhone 16 Plus（3x）
+        }
+        return logic_res_map.get(product_type)
 
     def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
         """点击指定坐标，支持长按。
@@ -595,24 +757,36 @@ class iOSPlatformManager(PlatformManager):
 
         iOS 支持的按键取决于设备型号：
         - iPhone 8 (Touch ID): HOME, VOLUME_UP, VOLUME_DOWN
-        - iPhone X+ (Face ID): 可能支持更多按键
+        - iPhone X+ (Face ID): LOCK（侧边按钮），VOLUME_UP，VOLUME_DOWN（无 HOME 键）
         """
         client = context or self._device_clients.get(self._current_device)
         if client:
             key_upper = key.upper()
 
-            # 检查是否在不支持的按键列表中
-            if key_upper in self.UNSUPPORTED_KEYS:
-                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
+            # 获取当前设备的 product_type
+            product_type = self._device_product_types.get(self._current_device, "")
+            is_face_id = product_type in self.FACE_ID_MODELS
+
+            # 根据机型选择按键映射
+            key_map = self.KEY_MAP_FACE_ID if is_face_id else self.KEY_MAP_TOUCH_ID
+            unsupported_keys = self.UNSUPPORTED_KEYS_FACE_ID if is_face_id else self.UNSUPPORTED_KEYS_TOUCH_ID
+
+            # 检查是否在通用的不支持按键列表中
+            if key_upper in self.UNSUPPORTED_KEYS_COMMON:
+                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS_COMMON[key_upper]}")
+
+            # 检查是否在机型特定的不支持按键列表中
+            if key_upper in unsupported_keys:
+                raise ValueError(f"Unsupported key '{key}' for iOS. {unsupported_keys[key_upper]}")
 
             # 按键名映射
-            wda_key = self.KEY_MAP.get(key_upper)
+            wda_key = key_map.get(key_upper)
             if wda_key:
                 success = client.press_button(wda_key)
                 if not success:
                     raise RuntimeError(f"Press button failed: {key}")
             else:
-                supported = ", ".join(sorted(self.KEY_MAP.keys()))
+                supported = ", ".join(sorted(key_map.keys()))
                 raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
