@@ -330,6 +330,10 @@ class Worker:
             )
             self.device_monitor.on_device_change = self._on_device_change
 
+            # 设置帧捕获失败回调
+            from worker.screen.manager import set_capture_failed_callback
+            set_capture_failed_callback(self._on_capture_failed)
+
     def _init_reporter(self) -> None:
         """初始化上报客户端。"""
         if self.config.platform_api:
@@ -396,8 +400,9 @@ class Worker:
         # 获取设备信息 - 从 DeviceMonitor 获取最新的设备状态
         if self.device_monitor:
             devices = self.device_monitor.get_all_devices()
-            android_udids = [d["udid"] for d in devices.get("android", [])]
-            ios_udids = [d["udid"] for d in devices.get("ios", [])]
+            # 使用 set 去重，防止重复上报
+            android_udids = list(set([d["udid"] for d in devices.get("android", [])]))
+            ios_udids = list(set([d["udid"] for d in devices.get("ios", [])]))
         else:
             # DeviceMonitor 未启动时，使用启动时发现的设备列表
             android_udids = [d.udid for d in self.android_devices]
@@ -496,6 +501,21 @@ class Worker:
         logger.info(f"Device status changed: {devices}")
         # 设备变化时重新上报
         self._report_devices()
+
+    def _on_capture_failed(self, device_id: str) -> None:
+        """帧捕获失败回调（由 ScreenManager 调用）。"""
+        logger.warning(f"Frame capture failed for device: {device_id}")
+
+        if not self.device_monitor:
+            return
+
+        # 判断设备平台并标记离线
+        # iOS 设备 UDID 格式：00008120-001E0CA601800032（8-4-4-4-12）
+        # Android 设备 UDID：通常是纯字母数字或短格式
+        is_ios = "-" in device_id and len(device_id) == 36
+
+        platform = "ios" if is_ios else "android"
+        self.device_monitor.mark_device_offline(platform, device_id)
 
     # ========== API 方法 ==========
 

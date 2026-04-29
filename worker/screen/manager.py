@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from queue import Queue, Empty
-from typing import Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from worker.screen.frame_source import FrameSource
 
@@ -17,11 +17,20 @@ logger = logging.getLogger(__name__)
 # 全局缓存
 _screen_managers: dict[str, "ScreenManager"] = {}
 
+# 帧捕获失败回调（全局）
+_on_capture_failed: Optional[Callable[[str], None]] = None
+
+
+def set_capture_failed_callback(callback: Callable[[str], None]) -> None:
+    """设置帧捕获失败回调（由 Worker 初始化时调用）。"""
+    global _on_capture_failed
+    _on_capture_failed = callback
+
 
 def get_screen_manager(device_id: str, frame_source: FrameSource) -> "ScreenManager":
     """获取或创建 ScreenManager（按设备 ID 缓存）。"""
     if device_id not in _screen_managers:
-        manager = ScreenManager(frame_source)
+        manager = ScreenManager(frame_source, device_id)
         manager.start_capture()
         _screen_managers[device_id] = manager
         logger.info(f"ScreenManager created for device: {device_id}")
@@ -47,8 +56,9 @@ def close_all_screen_managers() -> None:
 class ScreenManager:
     """统一管理截图/录屏/推流。"""
 
-    def __init__(self, frame_source: FrameSource):
+    def __init__(self, frame_source: FrameSource, device_id: str = ""):
         self._frame_source = frame_source
+        self._device_id = device_id  # 用于失败通知
         self._frame_queue: Queue[bytes] = Queue(maxsize=30)
         self._capture_thread: Optional[threading.Thread] = None
         self._running: bool = False
@@ -110,6 +120,9 @@ class ScreenManager:
                     logger.warning(f"Frame capture error: {e}")
                 elif consecutive_errors == max_consecutive_errors:
                     logger.error(f"Frame capture failed {max_consecutive_errors} times, stopping capture")
+                    # 通知设备监控
+                    if _on_capture_failed and self._device_id:
+                        _on_capture_failed(self._device_id)
                     break
 
                 # 连续错误时增加延迟，避免快速循环

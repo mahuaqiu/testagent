@@ -161,12 +161,16 @@ class DeviceMonitor:
                     self._faulty_android_devices = [
                         d for d in self._faulty_android_devices if d["udid"] != udid
                     ]
-                    self._android_devices.append({"udid": udid})
+                    # 添加到正常列表（避免重复）
+                    if udid not in [d["udid"] for d in self._android_devices]:
+                        self._android_devices.append({"udid": udid})
                 else:
                     self._faulty_ios_devices = [
                         d for d in self._faulty_ios_devices if d["udid"] != udid
                     ]
-                    self._ios_devices.append({"udid": udid})
+                    # 添加到正常列表（避免重复）
+                    if udid not in [d["udid"] for d in self._ios_devices]:
+                        self._ios_devices.append({"udid": udid})
 
                 logger.info(f"Device service started: {udid}")
                 return
@@ -191,32 +195,62 @@ class DeviceMonitor:
         self._check_online_devices()
 
     def _check_online_devices(self) -> None:
-        """检查在线设备状态。"""
+        """检查在线设备状态（物理检测 + 内存状态）。"""
+        # 物理检测：获取实际连接的设备列表
+        physical_android_udids = set()
+        physical_ios_udids = set()
+
+        if self._android_manager:
+            try:
+                from worker.discovery.android import AndroidDiscoverer
+                devices = AndroidDiscoverer.discover()
+                physical_android_udids = {d.udid for d in devices}
+            except Exception as e:
+                logger.error(f"Android physical detection failed: {e}")
+
+        if self._ios_manager:
+            try:
+                from worker.discovery.ios import iOSDiscoverer
+                physical_ios_udids = set(iOSDiscoverer.list_devices())
+            except Exception as e:
+                logger.error(f"iOS physical detection failed: {e}")
+
+        # 检查 Android 设备
         if self._android_manager:
             for device in self._android_devices[:]:
                 udid = device["udid"]
-                manager_devices = self._android_manager.get_online_devices()
-                if udid not in manager_devices:
-                    # 设备离线时关闭 ScreenManager
-                    from worker.screen.manager import close_screen_manager
-                    close_screen_manager(udid)
+                # 物理检测优先：设备不在物理列表中则标记离线
+                if udid not in physical_android_udids:
+                    self._mark_device_offline_internal("android", udid)
+                    logger.warning(f"Android device physically disconnected: {udid}")
 
-                    self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
-                    self._faulty_android_devices.append({"udid": udid})
-                    logger.warning(f"Android device went offline: {udid}")
-
+        # 检查 iOS 设备
         if self._ios_manager:
             for device in self._ios_devices[:]:
                 udid = device["udid"]
-                manager_devices = self._ios_manager.get_online_devices()
-                if udid not in manager_devices:
-                    # 设备离线时关闭 ScreenManager
-                    from worker.screen.manager import close_screen_manager
-                    close_screen_manager(udid)
+                # 物理检测优先：设备不在物理列表中则标记离线
+                if udid not in physical_ios_udids:
+                    self._mark_device_offline_internal("ios", udid)
+                    logger.warning(f"iOS device physically disconnected: {udid}")
 
-                    self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
-                    self._faulty_ios_devices.append({"udid": udid})
-                    logger.warning(f"iOS device went offline: {udid}")
+    def _mark_device_offline_internal(self, platform: str, udid: str) -> None:
+        """内部方法：将设备标记为离线（不含物理检测，避免循环）。"""
+        # 关闭 ScreenManager
+        from worker.screen.manager import close_screen_manager
+        close_screen_manager(udid)
+
+        if platform == "android":
+            # 从正常列表移除
+            self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
+            # 添加到 faulty 列表（避免重复）
+            if udid not in [d["udid"] for d in self._faulty_android_devices]:
+                self._faulty_android_devices.append({"udid": udid})
+        else:
+            # 从正常列表移除
+            self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
+            # 添加到 faulty 列表（避免重复）
+            if udid not in [d["udid"] for d in self._faulty_ios_devices]:
+                self._faulty_ios_devices.append({"udid": udid})
 
     def get_all_devices(self) -> Dict[str, Any]:
         """获取所有设备状态。"""
@@ -258,3 +292,34 @@ class DeviceMonitor:
             if udid not in [d["udid"] for d in self._ios_devices]:
                 self._ios_devices.append({"udid": udid})
                 logger.info(f"Device marked online: {udid}")
+    def mark_device_offline(self, platform: str, udid: str) -> None:
+        """将设备标记为离线（供外部调用，如帧捕获失败时）。
+
+        Args:
+            platform: 平台类型 ("android" 或 "ios")
+            udid: 设备 UDID
+        """
+        if platform == "android":
+            # 关闭 ScreenManager
+            from worker.screen.manager import close_screen_manager
+            close_screen_manager(udid)
+
+            # 从正常列表移除
+            self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
+
+            # 添加到 faulty 列表（避免重复）
+            if udid not in [d["udid"] for d in self._faulty_android_devices]:
+                self._faulty_android_devices.append({"udid": udid})
+                logger.warning(f"Device marked offline: {udid}")
+        else:
+            # 关闭 ScreenManager
+            from worker.screen.manager import close_screen_manager
+            close_screen_manager(udid)
+
+            # 从正常列表移除
+            self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
+
+            # 添加到 faulty 列表（避免重复）
+            if udid not in [d["udid"] for d in self._faulty_ios_devices]:
+                self._faulty_ios_devices.append({"udid": udid})
+                logger.warning(f"Device marked offline: {udid}")

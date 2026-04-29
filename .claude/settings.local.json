@@ -195,7 +195,21 @@
       "Bash(D:/code/autotest/tools/go-ios/ios.exe *)",
       "Read(//c/mingw64/bin/**)",
       "Read(//c/msys64/ucrt64/bin/**)",
-      "Read(//c/msys64/mingw64/bin/**)"
+      "Read(//c/msys64/mingw64/bin/**)",
+      "Bash(./tools/go-ios/ios.exe --help)",
+      "Bash(./tools/go-ios/ios.exe activate *)",
+      "Bash(./tools/go-ios/ios.exe list *)",
+      "Bash(ios.exe image *)",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe image *)",
+      "Bash(sc query *)",
+      "Bash(findstr /i \"Apple\")",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe list *)",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe pair *)",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe readpair *)",
+      "Bash(D:/code/autotest/tools/go-ios/ios.exe info *)",
+      "Bash(findstr -i \"Apple\")",
+      "Bash(findstr -i \"Mobile\")",
+      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" list *)"
     ]
   }
 }
