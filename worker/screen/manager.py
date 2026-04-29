@@ -81,7 +81,9 @@ class ScreenManager:
         """停止所有资源（截图线程、录屏、推流）。"""
         self._running = False
         if self._capture_thread:
-            self._capture_thread.join(timeout=5)
+            # 如果是当前线程调用 stop（如帧捕获线程检测失败后），则不 join（避免死锁）
+            if self._capture_thread != threading.current_thread():
+                self._capture_thread.join(timeout=5)
         self.stop_recording()
         if self._streamer:
             self._streamer.stop()

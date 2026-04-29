@@ -4,10 +4,12 @@ iOS 平台执行引擎。
 基于 go-ios + WDA 直连实现，支持 OCR/图像识别定位。
 """
 
+import json
 import logging
-import time
+import os
 import subprocess
 import threading
+import time
 from typing import Any, Callable, Optional
 
 from common.utils import run_cmd
@@ -106,6 +108,11 @@ class iOSPlatformManager(PlatformManager):
         # 设备服务启动锁（防止重复启动）
         self._service_locks: dict[str, threading.Lock] = {}
 
+        # 端口映射持久化文件路径
+        import sys
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        self._ports_file = os.path.join(base_dir, "data", "ios_ports.json")
+
     def set_on_agent_ready(self, callback: Callable[[], None]) -> None:
         """设置 agent 就绪回调。"""
         self._on_agent_ready = callback
@@ -115,6 +122,126 @@ class iOSPlatformManager(PlatformManager):
         if udid not in self._service_locks:
             self._service_locks[udid] = threading.Lock()
         return self._service_locks[udid]
+
+    # ========== 端口映射持久化 ==========
+
+    def _load_ports_mapping(self) -> dict[str, dict]:
+        """加载端口映射持久化文件。"""
+        try:
+            if os.path.exists(self._ports_file):
+                with open(self._ports_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    logger.info(f"Loaded ports mapping from {self._ports_file}: {data}")
+                    return data
+        except Exception as e:
+            logger.warning(f"Failed to load ports mapping: {e}")
+        return {}
+
+    def _save_ports_mapping(self) -> None:
+        """保存端口映射到持久化文件。"""
+        try:
+            # 确保 data 目录存在
+            data_dir = os.path.dirname(self._ports_file)
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir, exist_ok=True)
+
+            # 只保存端口信息（不保存进程引用）
+            ports_data = {}
+            for udid, info in self._device_wda.items():
+                ports_data[udid] = {
+                    "port": info.get("port"),
+                    "mjpeg_port": info.get("mjpeg_port"),
+                }
+
+            with open(self._ports_file, "w", encoding="utf-8") as f:
+                json.dump(ports_data, f, indent=2)
+                logger.info(f"Saved ports mapping to {self._ports_file}: {ports_data}")
+        except Exception as e:
+            logger.warning(f"Failed to save ports mapping: {e}")
+
+    def _cleanup_stale_ports(self) -> None:
+        """清理残留端口（启动时检查）。
+
+        检查逻辑：
+        1. 加载持久化的端口映射
+        2. 获取当前物理连接的设备列表
+        3. 对于每个持久化的端口：
+           - 如果设备不在物理列表中 → 杀掉端口进程
+           - 如果设备在物理列表中但端口被其他进程占用 → 杀掉进程（可能残留）
+        """
+        # 加载持久化映射
+        saved_ports = self._load_ports_mapping()
+        if not saved_ports:
+            return
+
+        # 获取当前物理设备列表
+        physical_udids = set()
+        ios17_plus_udids = set()  # iOS 17+ 设备列表
+        try:
+            # 不依赖 /ready，直接尝试获取设备列表
+            # 对于只有 iOS 16.x 设备的情况，/ready 会返回 503，但 list devices 仍然可用
+            if self._go_ios:
+                # 等待 agent 进程运行（检查 /health 而不是 /ready）
+                start = time.time()
+                while time.time() - start < 10:
+                    if self._go_ios.check_agent_health():
+                        break
+                    time.sleep(1)
+
+                devices = self._go_ios.list_devices()
+                physical_udids = {d["udid"] for d in devices}
+                # 检查哪些是 iOS 17+
+                for d in devices:
+                    version = d.get("version", "")
+                    if version and self._is_ios17_plus(version):
+                        ios17_plus_udids.add(d["udid"])
+                logger.info(f"Physical devices: {physical_udids}, iOS 17+: {ios17_plus_udids}")
+        except Exception as e:
+            logger.warning(f"Failed to get physical device list: {e}")
+
+        # 如果没有 iOS 17+ 设备，杀掉 tunnel 进程（节省资源）
+        if not ios17_plus_udids:
+            logger.info("No iOS 17+ devices connected, killing tunnel process")
+            self._kill_agent_processes()
+
+        # 检查每个持久化的端口
+        for udid, port_info in saved_ports.items():
+            wda_port = port_info.get("port")
+            mjpeg_port = port_info.get("mjpeg_port")
+
+            # 设备不在物理列表中 → 清理端口
+            if udid not in physical_udids:
+                logger.info(f"Device {udid} not physically connected, cleaning up ports")
+                if wda_port:
+                    self._kill_port_process(wda_port)
+                if mjpeg_port:
+                    self._kill_port_process(mjpeg_port)
+                continue
+
+            # 设备在物理列表中，检查端口是否被占用
+            # 如果被占用但不是我们启动的进程，也需要清理
+            if wda_port and self._check_port_occupied(wda_port):
+                # 尝试连接 WDA 验证是否可用
+                try:
+                    probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+                    if not probe_client.health_check():
+                        logger.info(f"Port {wda_port} occupied but WDA not responding, killing")
+                        self._kill_port_process(wda_port)
+                        if mjpeg_port:
+                            self._kill_port_process(mjpeg_port)
+                except Exception as e:
+                    logger.warning(f"Failed to probe WDA on port {wda_port}: {e}, killing")
+                    self._kill_port_process(wda_port)
+                    if mjpeg_port:
+                        self._kill_port_process(mjpeg_port)
+
+        # 清空持久化文件（下次启动重新建立映射）
+        try:
+            if os.path.exists(self._ports_file):
+                os.remove(self._ports_file)
+                logger.info(f"Cleared stale ports file: {self._ports_file}")
+        except Exception as e:
+            logger.warning(f"Failed to clear ports file: {e}")
 
     @property
     def platform(self) -> str:
@@ -149,9 +276,11 @@ class iOSPlatformManager(PlatformManager):
         logger.info("iOS platform started (go-ios + WDA mode, agent starting in background)")
 
     def _ensure_agent_running_async(self) -> None:
-        """后台确保 go-ios agent 运行，成功后触发设备发现。"""
+        """后台确保 go-ios agent 运行，成功后触发设备发现和清理残留端口。"""
         try:
             self._ensure_agent_running()
+            # Agent 启动成功后，清理残留端口
+            self._cleanup_stale_ports()
             # Agent 启动成功后，触发回调（如触发设备发现）
             if self._on_agent_ready:
                 logger.info("Calling agent ready callback")
@@ -183,28 +312,49 @@ class iOSPlatformManager(PlatformManager):
     # ========== Agent 管理 ==========
 
     def _ensure_agent_running(self) -> None:
-        """确保 go-ios agent 正在运行，异常则重启。"""
-        # 1. 先检查健康状态
+        """确保 go-ios agent 正在运行。
+
+        注意：对于只有 iOS 16.x 设备的情况，不需要 tunnel。
+        go-ios agent 的 /health 检查进程运行，/ready 检查 tunnel 就绪。
+        iOS 16.x 设备不需要 tunnel，所以只检查 /health。
+        """
+        # 1. 先检查进程健康状态（不检查 tunnel）
         if self._go_ios.check_agent_health():
-            logger.info("go-ios agent already running, reusing")
+            logger.info("go-ios agent already running (health check passed)")
             return
 
         # 2. 健康检查失败，先杀掉可能占用端口的进程
         logger.info("go-ios agent health check failed, checking port occupation...")
         self._kill_agent_processes()
 
-        # 3. 启动新 agent
-        logger.info("go-ios agent not running, starting...")
-        self._agent_process = self._go_ios.start_agent()
+        # 3. 检测是否有 iOS 17+ 设备连接
+        ios17_plus_devices = []
+        try:
+            # 先尝试通过 go-ios list 获取设备信息（不依赖 agent）
+            devices = self._go_ios.list_devices()
+            for d in devices:
+                version = d.get("version", "")
+                if version and self._is_ios17_plus(version):
+                    ios17_plus_devices.append(d["udid"])
+        except Exception as e:
+            logger.warning(f"Failed to check device versions before agent start: {e}")
 
-        # 4. 等待就绪
-        if not self._go_ios.wait_agent_ready(timeout=30):
-            logger.error("go-ios agent failed to start within 30s")
-            # 再次尝试杀掉进程
-            self._kill_agent_processes()
-            raise RuntimeError("go-ios agent failed to start")
+        # 4. 启动 agent（只有 iOS 17+ 设备才需要 tunnel）
+        if ios17_plus_devices:
+            logger.info(f"iOS 17+ devices detected: {ios17_plus_devices}, starting tunnel agent...")
+            self._agent_process = self._go_ios.start_agent()
 
-        logger.info("go-ios agent started successfully")
+            # 等待 agent 就绪（检查 /ready，因为需要 tunnel）
+            if not self._go_ios.wait_agent_ready(timeout=30):
+                logger.error("go-ios tunnel agent failed to start within 30s")
+                self._kill_agent_processes()
+                raise RuntimeError("go-ios tunnel agent failed to start")
+        else:
+            # 只有 iOS 16.x 设备或没有设备，不启动 tunnel
+            # go-ios 命令（runwda, forward）在 iOS 16.x 上可以直接工作
+            logger.info("No iOS 17+ devices, skipping tunnel agent (iOS 16.x works without tunnel)")
+
+        logger.info("go-ios agent setup completed")
 
     def _kill_agent_processes(self) -> None:
         """杀掉 go-ios agent 相关进程。"""
@@ -270,6 +420,33 @@ class iOSPlatformManager(PlatformManager):
 
     def ensure_device_service(self, udid: str) -> tuple[str, str]:
         """确保 WDA 服务可用。"""
+        # 快速检查：如果 client 已存在且可用，直接返回（不需要锁）
+        client = self._device_clients.get(udid)
+        if client and client.health_check():
+            logger.info(f"WDA already running (cached): {udid}")
+            return ("online", "OK")
+
+        # 快速检查：如果端口被占用且 WDA 可用，直接复用（不需要锁）
+        wda_port, mjpeg_port = self._allocate_ports(udid)
+        if self._check_port_occupied(wda_port):
+            try:
+                probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+                if probe_client.health_check():
+                    logger.info(f"Found existing WDA on port {wda_port}, reusing (no lock needed)")
+                    self._device_clients[udid] = probe_client
+                    # 补充 MJPEG 端口转发
+                    mjpeg_process = self._ensure_mjpeg_forward(udid, mjpeg_port)
+                    self._device_wda[udid] = {
+                        "port": wda_port,
+                        "mjpeg_port": mjpeg_port,
+                        "process": None,
+                        "forward_process": mjpeg_process,
+                    }
+                    self._save_ports_mapping()
+                    return ("online", "OK")
+            except Exception as e:
+                logger.warning(f"Probe WDA on port {wda_port} failed: {e}")
+
         # 获取锁防止重复启动
         lock = self._get_service_lock(udid)
         if not lock.acquire(blocking=False):
@@ -277,7 +454,27 @@ class iOSPlatformManager(PlatformManager):
             return ("pending", "Service start in progress")
 
         try:
-            # 0. 获取设备版本和型号
+            # 0. 物理设备检测：获取当前连接的设备列表
+            physical_udids = set()
+            try:
+                from worker.discovery.ios import iOSDiscoverer
+                physical_udids = set(iOSDiscoverer.list_devices())
+            except Exception as e:
+                logger.warning(f"Failed to get physical device list: {e}")
+
+            # 0.1 检查请求的设备是否在物理列表中
+            if physical_udids and udid not in physical_udids:
+                logger.warning(f"Device {udid} not found in physical devices: {physical_udids}")
+                return ("faulty", f"Device {udid} not physically connected")
+
+            # 0.2 清理已拔掉设备的端口转发进程
+            # 如果有缓存的设备不在物理列表中，杀掉其端口
+            for cached_udid in list(self._device_wda.keys()):
+                if cached_udid != udid and cached_udid not in physical_udids:
+                    logger.info(f"Cleaning up disconnected device: {cached_udid}")
+                    self._cleanup_device_ports(cached_udid)
+
+            # 0.3 获取设备版本和型号
             device_version = self._get_device_version(udid)
             device_info = self._go_ios.get_device_info(udid) if self._go_ios else {}
             product_type = device_info.get("model", "")
@@ -293,42 +490,7 @@ class iOSPlatformManager(PlatformManager):
                     return ("faulty", f"iOS 17+ device {udid} tunnel not established")
                 logger.info(f"Tunnel info for {udid}: address={tunnel_info.get('address')}, rsdPort={tunnel_info.get('rsdPort')}")
 
-            # 2. 检查已有的 client 是否可用
-            client = self._device_clients.get(udid)
-            if client and client.health_check():
-                logger.info(f"WDA already running: {udid}")
-                return ("online", "OK")
-
-            # 3. 分配端口
-            wda_port, mjpeg_port = self._allocate_ports(udid)
-
-            # 4. 检查端口是否被占用
-            port_occupied = self._check_port_occupied(wda_port)
-
-            if port_occupied:
-                # 端口被占用，探测是否有可用的 WDA
-                probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
-                retry_count = 5
-                for i in range(retry_count):
-                    if probe_client.health_check():
-                        logger.info(f"Found existing WDA on port {wda_port}, reusing")
-                        self._device_clients[udid] = probe_client
-                        # 补充 MJPEG 端口转发（如未启动）
-                        mjpeg_process = self._start_mjpeg_forward(udid, mjpeg_port)
-                        self._device_wda[udid] = {
-                            "port": wda_port,
-                            "mjpeg_port": mjpeg_port,
-                            "process": None,  # WDA 进程不是我们启动的
-                            "forward_process": mjpeg_process,
-                        }
-                        return ("online", "OK")
-                    time.sleep(1)
-
-                # 重试后仍失败，杀掉占用端口的进程
-                logger.warning(f"Port {wda_port} occupied but WDA not responding, killing process")
-                self._kill_port_process(wda_port)
-
-            # 5. 启动新的 WDA
+            # 2. 端口已在前面分配，启动新的 WDA
             return self._start_wda(udid, wda_port, mjpeg_port)
 
         except Exception as e:
@@ -380,6 +542,8 @@ class iOSPlatformManager(PlatformManager):
                     "mjpeg_process": mjpeg_process,
                 }
                 self._device_clients[udid] = client
+                # 保存端口映射
+                self._save_ports_mapping()
                 logger.info(f"WDA started: {udid} on port {wda_port}, MJPEG on port {mjpeg_port}")
                 return ("online", "OK")
             else:
@@ -399,12 +563,89 @@ class iOSPlatformManager(PlatformManager):
             device_port=9100,
         )
 
+    def _ensure_mjpeg_forward(self, udid: str, mjpeg_port: int) -> subprocess.Popen:
+        """确保 MJPEG 端口转发可用（检测并重启）。
+
+        Args:
+            udid: 设备 UDID
+            mjpeg_port: MJPEG 端口
+
+        Returns:
+            subprocess.Popen: MJPEG 端口转发进程
+        """
+        # 检查端口是否被监听
+        if self._check_port_occupied(mjpeg_port):
+            # 尝试连接 MJPEG 流验证是否可用
+            try:
+                import httpx
+                client = httpx.Client(timeout=5)
+                # 发送一个简单请求验证流是否可用
+                resp = client.get(f"http://127.0.0.1:{mjpeg_port}", timeout=3)
+                client.close()
+                # 只要能连接就认为可用（MJPEG 流会持续返回数据）
+                logger.info(f"MJPEG port {mjpeg_port} is accessible, no need to restart")
+                # 返回已有的进程引用（可能为 None，但端口可用）
+                wda_info = self._device_wda.get(udid, {})
+                return wda_info.get("mjpeg_process")
+            except Exception as e:
+                # ⚠️ 关键修复：检查设备是否正在执行任务
+                # 如果设备忙碌，不要杀掉端口转发进程，避免中断正在执行的任务
+                if self.is_device_busy(udid):
+                    logger.warning(f"MJPEG port {mjpeg_port} not accessible but device is busy, skipping kill to avoid interrupting task: {e}")
+                    # 返回已有的进程引用，让任务继续执行
+                    wda_info = self._device_wda.get(udid, {})
+                    return wda_info.get("mjpeg_process")
+
+                logger.warning(f"MJPEG port {mjpeg_port} occupied but not accessible: {e}, will restart")
+                # 端口被占用但无法访问，杀掉占用进程
+                self._kill_port_process(mjpeg_port)
+
+        # 启动新的 MJPEG 端口转发
+        logger.info(f"Starting MJPEG forward for {udid} on port {mjpeg_port}")
+        return self._start_mjpeg_forward(udid, mjpeg_port)
+
     def _stop_wda(self, udid: str) -> None:
         """停止 WDA 相关进程（不主动停止，保留引用清理）。"""
         if udid in self._device_wda:
             # 不主动停止进程，只清理引用
             # 进程使用 DETACHED_PROCESS 独立运行，会在设备断开时自动退出
             del self._device_wda[udid]
+
+    def _cleanup_device_ports(self, udid: str) -> None:
+        """清理已拔掉设备的端口转发进程。
+
+        当物理设备拔掉后，端口转发进程不会自动退出，需要手动杀掉。
+
+        Args:
+            udid: 已拔掉的设备 UDID
+        """
+        wda_info = self._device_wda.get(udid)
+        if not wda_info:
+            return
+
+        # 获取已分配的端口
+        wda_port = wda_info.get("port")
+        mjpeg_port = wda_info.get("mjpeg_port")
+
+        # 杀掉占用 WDA 端口的进程
+        if wda_port:
+            self._kill_port_process(wda_port)
+
+        # 杀掉占用 MJPEG 端口的进程
+        if mjpeg_port:
+            self._kill_port_process(mjpeg_port)
+
+        # 清理缓存
+        if udid in self._device_wda:
+            del self._device_wda[udid]
+        if udid in self._device_clients:
+            del self._device_clients[udid]
+        if udid in self._device_product_types:
+            del self._device_product_types[udid]
+        if udid in self._device_tunnel_info:
+            del self._device_tunnel_info[udid]
+
+        logger.info(f"Cleaned up ports for disconnected device: {udid} (wda={wda_port}, mjpeg={mjpeg_port})")
 
     def _check_port_occupied(self, port: int) -> bool:
         """检查端口是否被占用。"""

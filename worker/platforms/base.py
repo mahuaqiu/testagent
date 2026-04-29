@@ -62,6 +62,31 @@ class PlatformManager(ABC):
         self._started = False
         # 存储当前活跃的执行上下文（driver/context）
         self._contexts: Dict[str, Any] = {}
+        # TaskScheduler 引用（用于检查设备忙碌状态）
+        self._scheduler = None
+
+    def set_scheduler(self, scheduler) -> None:
+        """
+        设置 TaskScheduler 引用（由 Worker 初始化时调用）。
+
+        Args:
+            scheduler: TaskScheduler 实例
+        """
+        self._scheduler = scheduler
+
+    def is_device_busy(self, device_id: str) -> bool:
+        """
+        检查设备是否忙碌。
+
+        Args:
+            device_id: 设备 ID
+
+        Returns:
+            bool: 是否正在被占用
+        """
+        if self._scheduler:
+            return self._scheduler.is_busy(self.platform, device_id)
+        return False
 
     @property
     @abstractmethod

@@ -92,6 +92,25 @@ class TaskScheduler:
         except RuntimeError:
             pass  # 锁已被释放
 
+    def is_busy(self, platform: str, device_id: str | None = None) -> bool:
+        """
+        检查设备是否忙碌。
+
+        Args:
+            platform: 平台名称
+            device_id: 设备 ID
+
+        Returns:
+            bool: 是否正在被占用
+        """
+        lock = self._get_lock(platform, device_id)
+        # 尝试非阻塞获取锁，如果成功获取说明不忙碌，立即释放
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            lock.release()
+            return False
+        return True
+
     def _get_lock(self, platform: str, device_id: str | None) -> threading.Lock:
         """获取对应的锁。"""
         if platform in self.platform_locks:
@@ -316,6 +335,8 @@ class Worker:
                     continue
 
                 self.platform_managers[platform] = manager
+                # 设置 TaskScheduler 引用，用于检查设备忙碌状态
+                manager.set_scheduler(self.scheduler)
                 logger.info(f"Platform manager initialized: {platform}")
 
             except Exception as e:
@@ -509,13 +530,20 @@ class Worker:
         if not self.device_monitor:
             return
 
-        # 判断设备平台并标记离线
-        # iOS 设备 UDID 格式：00008120-001E0CA601800032（8-4-4-4-12）
-        # Android 设备 UDID：通常是纯字母数字或短格式
-        is_ios = "-" in device_id and len(device_id) == 36
+        # 处理带前缀的 device_id（如 "ios/9f39664c476539deff6d5f425e4bb4a53457cc24"）
+        # ScreenManager 的 device_id 可能包含平台前缀
+        if "/" in device_id:
+            platform_prefix, udid = device_id.split("/", 1)
+            platform = platform_prefix.lower()
+        else:
+            # 旧格式：纯 UDID，根据格式判断平台
+            # iOS 设备 UDID 格式：00008120-001E0CA601800032（8-4-4-4-12）
+            # Android 设备 UDID：通常是纯字母数字或短格式
+            udid = device_id
+            is_ios = "-" in udid and len(udid) == 36
+            platform = "ios" if is_ios else "android"
 
-        platform = "ios" if is_ios else "android"
-        self.device_monitor.mark_device_offline(platform, device_id)
+        self.device_monitor.mark_device_offline(platform, udid)
 
     # ========== API 方法 ==========
 
