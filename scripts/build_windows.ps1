@@ -40,7 +40,7 @@ if ($nuitkaInstalled -ne "ok") {
 # MSVC compiler heap optimization (fix C1002 heap memory error)
 if (-not $UseMingw) {
     Write-Host "Setting MSVC compiler heap limit (2x default)..."
-    $env:_CL_ = "/Zm8000"
+    $env:_CL_ = "/Zm4000"
 }
 
 $mingwBinPath = ""
