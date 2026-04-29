@@ -31,18 +31,11 @@ class iOSPlatformManager(PlatformManager):
     SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen", "pinch"}
 
     # iOS 按键映射：标准按键名 → WDA 按键名
-    # Touch ID 机型（iPhone 8, SE 等）：支持 home, volumeup, volumedown
-    # Face ID 机型（iPhone X~15）：支持 lock（侧边按钮），volumeup, volumedown（无 home 键）
-    KEY_MAP_TOUCH_ID = {
-        "HOME": "home",
-        "VOLUME_UP": "volumeup",
-        "VOLUMEUP": "volumeup",
-        "VOLUME_DOWN": "volumedown",
-        "VOLUMEDOWN": "volumedown",
-    }
-    KEY_MAP_FACE_ID = {
-        "LOCK": "lock",
-        "POWER": "lock",  # 侧边按钮（电源键）
+    # WDA 实际支持的按键：home, volumeup, volumedown（所有机型统一）
+    # 注意：WDA 虚拟化了 HOME 键功能，Face ID 机型也可以使用
+    # lock 按键 WDA 不支持，需要通过其他方式唤醒屏幕
+    KEY_MAP = {
+        "HOME": "home",  # WDA 虚拟 HOME 键（所有机型可用）
         "VOLUME_UP": "volumeup",
         "VOLUMEUP": "volumeup",
         "VOLUME_DOWN": "volumedown",
@@ -69,7 +62,7 @@ class iOSPlatformManager(PlatformManager):
     }
 
     # WDA 不支持的按键（用于错误提示）
-    UNSUPPORTED_KEYS_COMMON = {
+    UNSUPPORTED_KEYS = {
         "BACK": "iOS 无物理返回键，请使用 OCR 点击导航栏返回按钮",
         "ENTER": "iOS 无物理回车键，请使用 OCR 点击键盘上的完成/搜索按钮",
         "ESCAPE": "iOS 无 ESC 键",
@@ -78,15 +71,8 @@ class iOSPlatformManager(PlatformManager):
         "ARROWDOWN": "iOS 无方向键",
         "ARROWLEFT": "iOS 无方向键",
         "ARROWRIGHT": "iOS 无方向键",
-    }
-    # Touch ID 机型不支持的按键
-    UNSUPPORTED_KEYS_TOUCH_ID = {
-        "LOCK": "Touch ID 机型无侧边按钮（LOCK），请使用 HOME 键唤醒屏幕",
-        "POWER": "Touch ID 机型无侧边按钮（POWER），请使用 HOME 键唤醒屏幕",
-    }
-    # Face ID 机型不支持的按键
-    UNSUPPORTED_KEYS_FACE_ID = {
-        "HOME": "Face ID 机型无 HOME 键，请使用 LOCK/POWER（侧边按钮）唤醒屏幕",
+        "LOCK": "WDA 不支持 LOCK 按键，请使用 HOME 键唤醒屏幕或 unlock_screen 动作",
+        "POWER": "WDA 不支持 POWER 按键，请使用 HOME 键唤醒屏幕或 unlock_screen 动作",
     }
 
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
@@ -755,38 +741,29 @@ class iOSPlatformManager(PlatformManager):
     def press(self, key: str, context: Any = None) -> None:
         """按键。
 
-        iOS 支持的按键取决于设备型号：
-        - iPhone 8 (Touch ID): HOME, VOLUME_UP, VOLUME_DOWN
-        - iPhone X+ (Face ID): LOCK（侧边按钮），VOLUME_UP，VOLUME_DOWN（无 HOME 键）
+        iOS 支持的按键（WDA 统一支持）：
+        - HOME：虚拟 HOME 键（所有机型可用）
+        - VOLUME_UP：音量加
+        - VOLUME_DOWN：音量减
+
+        注意：LOCK/POWER 按键 WDA 不支持，需通过其他方式唤醒屏幕。
         """
         client = context or self._device_clients.get(self._current_device)
         if client:
             key_upper = key.upper()
 
-            # 获取当前设备的 product_type
-            product_type = self._device_product_types.get(self._current_device, "")
-            is_face_id = product_type in self.FACE_ID_MODELS
-
-            # 根据机型选择按键映射
-            key_map = self.KEY_MAP_FACE_ID if is_face_id else self.KEY_MAP_TOUCH_ID
-            unsupported_keys = self.UNSUPPORTED_KEYS_FACE_ID if is_face_id else self.UNSUPPORTED_KEYS_TOUCH_ID
-
-            # 检查是否在通用的不支持按键列表中
-            if key_upper in self.UNSUPPORTED_KEYS_COMMON:
-                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS_COMMON[key_upper]}")
-
-            # 检查是否在机型特定的不支持按键列表中
-            if key_upper in unsupported_keys:
-                raise ValueError(f"Unsupported key '{key}' for iOS. {unsupported_keys[key_upper]}")
+            # 检查是否在不支持的按键列表中
+            if key_upper in self.UNSUPPORTED_KEYS:
+                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
 
             # 按键名映射
-            wda_key = key_map.get(key_upper)
+            wda_key = self.KEY_MAP.get(key_upper)
             if wda_key:
                 success = client.press_button(wda_key)
                 if not success:
                     raise RuntimeError(f"Press button failed: {key}")
             else:
-                supported = ", ".join(sorted(key_map.keys()))
+                supported = ", ".join(sorted(self.KEY_MAP.keys()))
                 raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
