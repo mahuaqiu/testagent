@@ -210,7 +210,16 @@
       "Bash(findstr -i \"Apple\")",
       "Bash(findstr -i \"Mobile\")",
       "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" list *)",
-      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" --help)"
+      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" --help)",
+      "Bash(findstr \":9100\")",
+      "Bash(findstr \":8100\")",
+      "Bash(tasklist *)",
+      "Bash(ios list *)",
+      "Bash(./ios.exe list *)",
+      "Bash(clcache --clear-cache)",
+      "Bash(./build_env_nuitka/Scripts/python.exe -m nuitka --help-plugins)",
+      "Bash(./build_env_nuitka/Scripts/python.exe -m nuitka --help)",
+      "Bash(findstr \":8100 :9100\")"
     ]
   }
 }

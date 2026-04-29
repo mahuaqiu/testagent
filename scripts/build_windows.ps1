@@ -37,11 +37,11 @@ if ($nuitkaInstalled -ne "ok") {
     pip install nuitka ordered-set zstandard
 }
 
-# MSVC compiler heap optimization (fix C1002 heap memory error)
-if (-not $UseMingw) {
-    Write-Host "Setting MSVC compiler heap limit (2x default)..."
-    $env:_CL_ = "/Zm4000"
-}
+# MSVC compiler heap optimization disabled due to D8000/D9014 errors
+# The _CL_ environment variable causes issues with Nuitka's build process
+# if (-not $UseMingw) {
+#     Write-Host "Note: MSVC heap optimization disabled (was causing D8000 errors)"
+# }
 
 $mingwBinPath = ""
 if ($UseMingw) {
@@ -88,7 +88,14 @@ Write-Host "[4/6] Checking Playwright..."
 $ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
 if (-not (Test-Path $ChromiumPath)) { playwright install chromium }
 
-Write-Host "[5/6] Building with Nuitka..."
+Write-Host "[5/6] Cleaning old build artifacts..."
+$NuitkaBuildDir = "dist\nuitka_build"
+if (Test-Path $NuitkaBuildDir) {
+    Remove-Item -Recurse -Force $NuitkaBuildDir
+    Write-Host "  Cleaned: $NuitkaBuildDir"
+}
+
+Write-Host "[6/6] Building with Nuitka..."
 
 $nuitkaArgs = @(
     "--mode=standalone"
@@ -101,6 +108,7 @@ $nuitkaArgs = @(
     "--include-data-dir=assets=assets"
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
+    # Disable clcache to avoid D8000 errors (cache corruption issues)
     "--include-package=uvicorn"
     "--include-package=fastapi"
     "--include-package=starlette"
@@ -160,13 +168,12 @@ if ($UseMingw) { $nuitkaArgs += "--mingw64" }
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Nuitka build failed!"
     Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
-    deactivate
     exit 1
 }
 
 Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
 
-Write-Host "[6/6] Creating release package..."
+Write-Host "[7/6] Creating release package..."
 $PackageDir = "$OutputDir\test-worker"
 if (Test-Path $PackageDir) { Remove-Item -Recurse -Force $PackageDir }
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
@@ -176,7 +183,6 @@ if (Test-Path $BuildDir) {
     Move-Item "$BuildDir\*" $PackageDir
 } else {
     Write-Error "Build directory not found: $BuildDir"
-    deactivate
     exit 1
 }
 
@@ -204,8 +210,6 @@ if ($ChromiumDir) {
 
 Set-Content -Path "$PackageDir\start.bat" -Value "@echo off`nchcp 65001 >nul 2>&1`ncd /d `%~dp0`ntest-worker.exe`npause" -Encoding ASCII
 Set-Content -Path "$PackageDir\README.txt" -Value "Test Worker - Windows (Nuitka Build)`nBuild Version: $BuildVersion" -Encoding UTF8
-
-deactivate
 
 Write-Host "=========================================="
 Write-Host "Build complete!"
