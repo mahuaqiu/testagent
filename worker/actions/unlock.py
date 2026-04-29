@@ -67,24 +67,19 @@ class UnlockScreenAction(ActionExecutor):
         action: Action,
         context: object | None = None
     ) -> ActionResult:
-        """执行解锁屏幕动作。"""
+        """执行解锁屏幕动作。
+
+        支持两种场景：
+        - 无密码设备：唤醒屏幕 + 滑动解锁
+        - 有密码设备：唤醒屏幕 + 滑动 + 输入密码
+        """
         start_time = time.time()
 
-        # 获取密码
+        # 获取密码（可选，无密码设备不需要）
         password = action.value or getattr(action, "password", None)
-        if not password:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error="password is required",
-            )
 
         # 获取点击间隔（毫秒）
         click_interval = self._get_click_interval(platform)
-
-        # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
-        keypad_coords = self._get_keypad_coords(platform, context)
 
         # 获取设备分辨率和缩放因子（用于 iOS 坐标转换）
         resolution = self._get_device_resolution(platform, context)
@@ -129,18 +124,46 @@ class UnlockScreenAction(ActionExecutor):
                         error="Screen still off after wake attempt",
                     )
 
-                # 3.2 如果提供了密码，直接执行解锁流程（信任用户意图）
-                # 不需要检测是否需要密码，用户传密码就说明需要解锁
-                if password:
-                    logger.info("Password provided, proceeding with unlock flow")
-
-            # 4. 触发密码界面（根据机型配置选择方式）
+            # 4. 触发解锁界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
             self._trigger_password_screen(platform, context, unlock_method)
-            time.sleep(1.0)  # 等待密码界面出现
+            time.sleep(1.0)  # 等待解锁界面出现
 
-            # 5. 输入密码（固定坐标点击，带间隔）
+            # 5. 根据是否有密码，执行不同的解锁流程
+            if not password:
+                # 无密码场景：只需唤醒 + 滑动，等待解锁完成
+                logger.info("No password provided, performing swipe unlock only")
+                duration_ms = int((time.time() - start_time) * 1000)
+
+                # 等待解锁完成
+                time.sleep(1.5)
+
+                # 验证解锁成功
+                is_locked_after = self._check_locked(platform, context)
+                if not is_locked_after:
+                    logger.info("Screen unlocked successfully (no password needed)")
+                    return ActionResult(
+                        number=0,
+                        action_type=self.name,
+                        status=ActionStatus.SUCCESS,
+                        duration_ms=duration_ms,
+                        output="Unlocked without password (swipe only)",
+                    )
+                else:
+                    logger.warning("Screen still locked after swipe - device may require password")
+                    return ActionResult(
+                        number=0,
+                        action_type=self.name,
+                        status=ActionStatus.FAILED,
+                        duration_ms=duration_ms,
+                        error="Screen still locked after swipe - device may require password",
+                    )
+
+            # 有密码场景：输入密码
+            # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
+            keypad_coords = self._get_keypad_coords(platform, context)
+
             for digit in password:
                 if digit not in keypad_coords:
                     logger.warning(f"Invalid password digit: {digit}, skipping")
