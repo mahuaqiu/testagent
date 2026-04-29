@@ -209,7 +209,8 @@
       "Bash(D:/code/autotest/tools/go-ios/ios.exe info *)",
       "Bash(findstr -i \"Apple\")",
       "Bash(findstr -i \"Mobile\")",
-      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" list *)"
+      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" list *)",
+      "Bash(\"D:/code/autotest/tools/go-ios/ios.exe\" --help)"
     ]
   }
 }
