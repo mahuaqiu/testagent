@@ -14,6 +14,8 @@ import uvicorn
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from common.packaging import is_packaged, get_app_dir
+
 # 过滤 pymobiledevice3/tidevice3 的垃圾日志（在导入前设置）
 os.environ["PYMOBILEDEVICE3_LOG_LEVEL"] = "ERROR"
 
@@ -86,8 +88,8 @@ def suppress_pymobiledevice3_logs():
 def main():
     """主函数。"""
     # EXE 运行时设置 Playwright 浏览器路径
-    if getattr(sys, 'frozen', False):
-        app_dir = os.path.dirname(sys.executable)
+    if is_packaged():
+        app_dir = get_app_dir()
         playwright_path = os.path.join(app_dir, 'playwright')
         os.environ['PLAYWRIGHT_BROWSERS_PATH'] = playwright_path
 

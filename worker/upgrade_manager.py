@@ -15,6 +15,7 @@ from typing import Optional
 from datetime import datetime
 
 from common.utils import SUBPROCESS_HIDE_WINDOW
+from common.packaging import is_packaged, get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -233,12 +234,7 @@ class UpgradeManager:
         Returns:
             str: 当前安装目录路径
         """
-        if getattr(sys, 'frozen', False):
-            # PyInstaller 打包后，使用 exe 所在目录
-            return os.path.dirname(sys.executable)
-        else:
-            # 开发模式，返回项目根目录
-            return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        return get_base_dir()
 
 
 class DownloadError(Exception):

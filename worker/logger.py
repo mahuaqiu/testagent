@@ -11,6 +11,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from common.request_context import get_request_id
+from common.packaging import is_packaged, get_app_dir
 
 
 class RequestIdFormatter(logging.Formatter):
@@ -26,20 +27,13 @@ def get_default_log_path() -> str:
     """
     获取默认日志文件路径。
 
-    - 打包环境 (PyInstaller)：exe 所在目录下的 worker.log
+    - 打包环境：exe 所在目录下的 worker.log
     - 普通环境：当前工作目录下的 worker.log
 
     Returns:
         str: 默认日志文件路径
     """
-    if getattr(sys, 'frozen', False):
-        # PyInstaller 打包环境
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        # 普通环境
-        base_dir = os.getcwd()
-
-    return os.path.join(base_dir, "worker.log")
+    return os.path.join(get_app_dir(), "worker.log")
 
 
 def setup_logging(

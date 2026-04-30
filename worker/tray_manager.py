@@ -13,6 +13,8 @@ from typing import Callable, Optional
 import pystray
 from PIL import Image
 
+from common.packaging import is_packaged, get_base_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,12 +104,7 @@ class TrayManager:
     def _on_log_click(self):
         """日志菜单点击。"""
         # 获取日志文件所在目录（与日志文件同级）
-        if getattr(sys, "frozen", False):
-            # EXE 运行
-            app_dir = os.path.dirname(sys.executable)
-        else:
-            # 源码运行
-            app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        app_dir = get_base_dir()
 
         # 日志文件在根目录（worker.log），直接打开根目录
         if sys.platform == "win32":

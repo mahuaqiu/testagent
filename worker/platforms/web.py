@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Set
 from PIL import Image
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
+from common.packaging import is_packaged, get_base_dir
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
@@ -112,10 +113,7 @@ class WebPlatformManager(PlatformManager):
 
     def _get_app_dir(self) -> str:
         """获取应用目录（打包后使用 EXE 目录）。"""
-        if getattr(sys, 'frozen', False):
-            return os.path.dirname(sys.executable)
-        # 开发模式使用项目根目录
-        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return get_base_dir()
 
     def _get_user_data_dir(self) -> str:
         """获取用户数据目录的绝对路径。"""

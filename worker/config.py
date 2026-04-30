@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from common.utils import popen_cmd
+from common.packaging import is_packaged, get_base_dir
 from worker.discovery.host import HostDiscoverer
 
 logger = logging.getLogger(__name__)
@@ -230,12 +231,7 @@ def _get_base_dir() -> str:
     Returns:
         str: 基础目录路径
     """
-    if getattr(sys, 'frozen', False):
-        # PyInstaller 打包模式
-        return os.path.dirname(sys.executable)
-    else:
-        # 开发模式
-        return os.path.dirname(os.path.dirname(__file__))
+    return get_base_dir()
 
 
 def get_user_config_path() -> str:
@@ -256,7 +252,7 @@ def get_default_template_path() -> str:
     - 作为用户配置的备份来源
     - 用户配置不存在时自动复制
     """
-    if getattr(sys, 'frozen', False):
+    if is_packaged():
         # 打包模式：模板在 _internal 目录下
         return os.path.join(_get_base_dir(), "_internal", "config", "worker.yaml")
     else:

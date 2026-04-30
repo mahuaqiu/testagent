@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 from common.utils import SUBPROCESS_HIDE_WINDOW
+from common.packaging import is_packaged, get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,7 @@ def get_current_install_dir() -> str:
     Returns:
         str: 当前安装目录路径
     """
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        # 开发模式，返回模拟路径
-        return os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    return get_base_dir()
 
 
 def run_silent_install(installer_path: str, install_dir: str | None = None) -> None:

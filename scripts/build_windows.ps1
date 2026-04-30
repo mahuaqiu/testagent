@@ -4,7 +4,6 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [switch]$Clean,
-    [switch]$UseMingw,  # Use MinGW (needs separate install), default is MSVC
     [switch]$BuildInstaller  # Build installer directly
 )
 
@@ -12,7 +11,7 @@ Write-Host "=========================================="
 Write-Host "Building Test Worker with Nuitka"
 Write-Host "Version: $Version"
 Write-Host "Output: $OutputDir"
-if ($UseMingw) { Write-Host "Compiler: MinGW-w64" } else { Write-Host "Compiler: MSVC (default)" }
+Write-Host "Compiler: MSVC"
 Write-Host "=========================================="
 
 # Python path handling
@@ -37,31 +36,10 @@ if ($nuitkaInstalled -ne "ok") {
     pip install nuitka ordered-set zstandard
 }
 
-# MSVC compiler heap optimization disabled due to D8000/D9014 errors
-# The _CL_ environment variable causes issues with Nuitka's build process
-# if (-not $UseMingw) {
-#     Write-Host "Note: MSVC heap optimization disabled (was causing D8000 errors)"
-# }
-
-$mingwBinPath = ""
-if ($UseMingw) {
-    # Use MinGW
-    $mingwPaths = @("C:\mingw64\bin\gcc.exe", "C:\msys64\ucrt64\bin\gcc.exe")
-    $mingwPath = $mingwPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $mingwPath) {
-        Write-Error "MinGW-w64 GCC not found at C:\mingw64\bin\gcc.exe"
-        Write-Host "Download from: https://github.com/niXman/mingw-builds-binaries/releases"
-        exit 1
-    }
-    $mingwBinPath = Split-Path $mingwPath -Parent
-    Write-Host "MinGW-w64 GCC found: $mingwPath"
-    $env:PATH = "$mingwBinPath;$env:PATH"
-} else {
-    # Default use MSVC, check Visual Studio
-    $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (-not (Test-Path $vsWhere)) {
-        Write-Warning "Visual Studio Installer not found, but Nuitka will auto-detect MSVC"
-    }
+# Check Visual Studio
+$vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path $vsWhere)) {
+    Write-Warning "Visual Studio Installer not found, but Nuitka will auto-detect MSVC"
 }
 
 $VenvPath = "build_env_nuitka"
@@ -96,6 +74,7 @@ if (Test-Path $NuitkaBuildDir) {
 }
 
 Write-Host "[6/6] Building with Nuitka..."
+Write-Host "  Memory optimization: --low-memory --jobs=4"
 
 $nuitkaArgs = @(
     "--mode=standalone"
@@ -108,6 +87,8 @@ $nuitkaArgs = @(
     "--include-data-dir=assets=assets"
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
+    "--low-memory"
+    "--jobs=4"
     # Disable clcache to avoid D8000 errors (cache corruption issues)
     "--include-package=uvicorn"
     "--include-package=fastapi"
@@ -121,6 +102,8 @@ $nuitkaArgs = @(
     "--include-package=numpy"
     "--include-package=pydantic"
     "--include-package=pystray"
+    "--include-module=pystray._win32"
+    "--include-package=six"
     "--include-package=uiautomator2"
     # go-ios switched, removed tidevice3
     "--include-module=uvicorn.logging"
@@ -136,10 +119,7 @@ $nuitkaArgs = @(
     "--nofollow-import-to=pytest"
     "--nofollow-import-to=allure"
     "--nofollow-import-to=faker"
-    # Exclude Playwright large generated modules (fix MSVC C1002 heap error)
-    "--nofollow-import-to=playwright.sync_api._generated"
-    "--nofollow-import-to=playwright.async_api._generated"
-    "--nofollow-import-to=playwright._impl._generated"
+    # Note: Do NOT exclude playwright._generated modules - they are required at runtime
     # Exclude large package test modules to reduce compile time
     "--nofollow-import-to=numpy._core.tests"
     "--nofollow-import-to=numpy.tests"
@@ -160,8 +140,6 @@ $nuitkaArgs = @(
     "--output-dir=dist\nuitka_build"
     "--show-progress"
 )
-
-if ($UseMingw) { $nuitkaArgs += "--mingw64" }
 
 & python -m nuitka $nuitkaArgs
 

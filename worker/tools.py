@@ -10,6 +10,8 @@ import sys
 
 from typing import Optional
 
+from common.packaging import is_packaged, get_base_dir
+
 
 def get_tools_dir() -> str:
     """
@@ -21,13 +23,7 @@ def get_tools_dir() -> str:
     Returns:
         str: tools 目录完整路径
     """
-    if getattr(sys, 'frozen', False):
-        # 打包后：exe 所在目录
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        # 开发时：项目根目录（worker 的上级目录）
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_dir, 'tools')
+    return os.path.join(get_base_dir(), 'tools')
 
 
 def validate_script_name(name: str) -> bool:

@@ -5,43 +5,91 @@ GUI 入口模块。
 """
 
 import sys
-
-# 在导入其他模块之前先创建 QApplication（避免黑框闪烁）
-from PyQt5.QtWidgets import QApplication
-_app = QApplication(sys.argv)
-_app.setQuitOnLastWindowClosed(False)
-
-# 然后再导入其他模块
-import logging
 import os
-import threading
-import tempfile
+import traceback
 
-import uvicorn
-from PyQt5.QtWidgets import (
-    QMessageBox,
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QWidget,
-    QProgressBar,
-)
-from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer
-from PyQt5.QtGui import QIcon, QFont
+# 导入打包检测工具
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from common.packaging import is_packaged, get_app_dir
 
-from worker.config import load_config, WorkerConfig
-from worker.logger import setup_logging
-from worker.worker import Worker
-from worker.server import app, set_worker, set_gui_app
-from worker.single_instance import check_single_instance, release_instance_lock
-from worker.tray_manager import TrayManager
-from worker.upgrade_manager import UpgradeManager, UpgradeInfo, DownloadError, InstallError
-from worker.download_dialog import DownloadDialog
-from worker.settings_window import SettingsWindow
 
-logger = logging.getLogger(__name__)
+# ============ 最早期错误捕获（在任何导入之前） ============
+# 打包后没有控制台窗口，错误会被吞掉，所以写入文件
+def _early_error_log(error_msg):
+    """将早期启动错误写入文件。"""
+    try:
+        log_path = os.path.join(get_app_dir(), "startup_error.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"Startup Error at {__import__('datetime').datetime.now()}\n")
+            f.write(f"{'='*60}\n")
+            f.write(error_msg)
+            f.write("\n")
+    except Exception:
+        pass
+
+
+try:
+    _is_pkg = is_packaged()
+    _app_dir = get_app_dir()
+
+    # ============ PyQt5 插件路径修复 ============
+    # Nuitka 打包后插件路径可能不正确，手动设置
+    if _is_pkg:
+        _qt_plugin_paths = [
+            os.path.join(_app_dir, 'PyQt5', 'Qt', 'plugins'),
+            os.path.join(_app_dir, 'PyQt5', 'qt-plugins'),
+            os.path.join(_app_dir, 'PyQt5', 'Qt5', 'plugins'),
+        ]
+        for _p in _qt_plugin_paths:
+            if os.path.exists(_p):
+                os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = _p
+                break
+
+    # 在导入其他模块之前先创建 QApplication（避免黑框闪烁）
+    from PyQt5.QtWidgets import QApplication
+    _app = QApplication(sys.argv)
+    _app.setQuitOnLastWindowClosed(False)
+
+    import logging
+    import os
+    import threading
+    import tempfile
+
+    import uvicorn
+    from PyQt5.QtWidgets import (
+        QMessageBox,
+        QDialog,
+        QVBoxLayout,
+        QHBoxLayout,
+        QLabel,
+        QPushButton,
+        QWidget,
+        QProgressBar,
+    )
+    from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer
+    from PyQt5.QtGui import QIcon, QFont
+
+    from worker.config import load_config, WorkerConfig
+    from worker.logger import setup_logging
+    from worker.worker import Worker
+    from worker.server import app, set_worker, set_gui_app
+    from worker.single_instance import check_single_instance, release_instance_lock
+    from worker.tray_manager import TrayManager
+    from worker.upgrade_manager import UpgradeManager, UpgradeInfo, DownloadError, InstallError
+    from worker.download_dialog import DownloadDialog
+    from worker.settings_window import SettingsWindow
+
+    logger = logging.getLogger(__name__)
+
+except Exception as e:
+    _early_error_log(f"Failed during initialization:\n{traceback.format_exc()}")
+    sys.exit(1)
+except SystemExit as e:
+    raise
+except BaseException as e:
+    _early_error_log(f"BaseException: {type(e).__name__}: {e}")
+    sys.exit(1)
 
 
 class SplashScreen(QWidget):
@@ -134,8 +182,8 @@ class GUIApp:
     def __init__(self):
         """初始化 GUI 应用。"""
         # EXE 运行时设置 Playwright 浏览器路径（必须在最开始）
-        if getattr(sys, 'frozen', False):
-            app_dir = os.path.dirname(sys.executable)
+        if is_packaged():
+            app_dir = get_app_dir()
             playwright_path = os.path.join(app_dir, 'playwright')
             os.environ['PLAYWRIGHT_BROWSERS_PATH'] = playwright_path
 
@@ -214,9 +262,9 @@ class GUIApp:
 
     def _get_icon_path(self) -> str:
         """获取图标路径（PNG 格式，pystray 需要）。"""
-        if getattr(sys, 'frozen', False):
-            # Nuitka standalone 模式：assets 直接在 exe 同级目录
-            base_dir = os.path.dirname(sys.executable)
+        if is_packaged():
+            # 打包模式：assets 直接在 exe 同级目录
+            base_dir = get_app_dir()
             icon_path = os.path.join(base_dir, "assets", "icon.png")
             if os.path.exists(icon_path):
                 return icon_path
@@ -646,20 +694,25 @@ def main():
     except Exception as e:
         # 启动失败时显示错误提示
         import traceback
-        error_msg = f"启动失败:\n{e}\n\n详细信息:\n{traceback.format_exc()[:500]}"
-        logger.error(f"Startup failed: {e}\n{traceback.format_exc()}")
+        error_msg = f"启动失败:\n{e}\n\n详细信息:\n{traceback.format_exc()}"
+        # 写入文件（最重要，因为没有控制台）
+        _early_error_log(error_msg)
+
+        try:
+            logger.error(f"Startup failed: {e}\n{traceback.format_exc()}")
+        except Exception:
+            pass
 
         # 尝试显示错误对话框
         try:
             from PyQt5.QtWidgets import QMessageBox
             msg = QMessageBox()
             msg.setWindowTitle("启动失败")
-            msg.setText(error_msg)
+            msg.setText(error_msg[:1000])  # 限制长度避免对话框显示问题
             msg.setIcon(QMessageBox.Critical)
             msg.exec_()
         except Exception:
-            # 如果对话框也失败了，打印到控制台
-            print(error_msg)
+            pass
 
         sys.exit(1)
 

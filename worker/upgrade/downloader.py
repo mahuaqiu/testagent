@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from common.packaging import is_packaged, get_base_dir
+
 logger = logging.getLogger(__name__)
 
 # 临时目录名
@@ -28,11 +30,7 @@ def get_temp_dir() -> str:
     Returns:
         str: 临时目录完整路径
     """
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    temp_dir = os.path.join(base_dir, TEMP_DIR)
+    temp_dir = os.path.join(get_base_dir(), TEMP_DIR)
     os.makedirs(temp_dir, exist_ok=True)
     return temp_dir
 

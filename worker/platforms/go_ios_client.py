@@ -14,6 +14,7 @@ from typing import Any, Optional
 import httpx
 
 from common.utils import run_cmd, popen_cmd
+from common.packaging import is_packaged, get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,10 @@ class GoIOSClient:
 
     def _resolve_path(self, path: str) -> str:
         """解析 go-ios 路径（支持相对路径和绝对路径）。"""
-        import sys
         if os.path.isabs(path):
             return path
         # 打包模式下相对于 exe 目录
-        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        return os.path.join(base_dir, path)
+        return os.path.join(get_base_dir(), path)
 
     def _run_cmd(
         self,

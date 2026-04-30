@@ -12,6 +12,7 @@ import sys
 import threading
 from typing import Optional
 
+from common.packaging import is_packaged, get_base_dir
 from worker.upgrade.models import UpgradeState
 
 logger = logging.getLogger(__name__)
@@ -29,13 +30,7 @@ def get_state_file_path() -> str:
     Returns:
         str: 状态文件完整路径
     """
-    if getattr(sys, 'frozen', False):
-        # PyInstaller 打包后，使用 exe 所在目录
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        # 开发模式，使用项目根目录
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    return os.path.join(base_dir, STATE_FILE)
+    return os.path.join(get_base_dir(), STATE_FILE)
 
 
 def save_state(state: UpgradeState) -> None:

@@ -5,7 +5,6 @@ REM   build.bat                          (default)
 REM   build.bat -PythonPath "C:\python\python.exe"
 REM   build.bat -Clean                   (rebuild venv)
 REM   build.bat -BuildInstaller          (build installer directly)
-REM   build.bat -UseMingw                (use MinGW compiler)
 
 setlocal EnableDelayedExpansion
 

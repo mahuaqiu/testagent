@@ -13,6 +13,7 @@ import time
 from typing import Any, Callable, Optional
 
 from common.utils import run_cmd
+from common.packaging import is_packaged, get_base_dir
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
@@ -109,9 +110,7 @@ class iOSPlatformManager(PlatformManager):
         self._service_locks: dict[str, threading.Lock] = {}
 
         # 端口映射持久化文件路径
-        import sys
-        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        self._ports_file = os.path.join(base_dir, "data", "ios_ports.json")
+        self._ports_file = os.path.join(get_base_dir(), "data", "ios_ports.json")
 
     def set_on_agent_ready(self, callback: Callable[[], None]) -> None:
         """设置 agent 就绪回调。"""
