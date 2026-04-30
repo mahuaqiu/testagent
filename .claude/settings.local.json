@@ -219,7 +219,23 @@
       "Bash(clcache --clear-cache)",
       "Bash(./build_env_nuitka/Scripts/python.exe -m nuitka --help-plugins)",
       "Bash(./build_env_nuitka/Scripts/python.exe -m nuitka --help)",
-      "Bash(findstr \":8100 :9100\")"
+      "Bash(findstr \":8100 :9100\")",
+      "Bash(ls -la dist/windows/test-worker/)",
+      "Bash(ls -la dist/nuitka_build/)",
+      "Bash(cmd //c \"test-worker.exe 2>&1\")",
+      "Bash(ls -la logs/)",
+      "Bash(ls -la *.log)",
+      "Bash(cmd //c \"test-worker.exe\")",
+      "Bash(cat worker.log)",
+      "Bash(rm -rf dist/nuitka_build dist/windows/test-worker build_env_nuitka)",
+      "Bash(ls -la dist/windows/test-worker/*.exe)",
+      "Bash(cat dist/windows/test-worker/VERSION)",
+      "Bash(ls -la dist/nuitka_build/__main__.dist/*.exe)",
+      "WebFetch(domain:nuitka.net)",
+      "Read(//c/python/Lib/site-packages/**)",
+      "Read(//c/python/Scripts/**)",
+      "Bash(rm -f C:/python/Scripts/test-worker.exe)",
+      "Bash(rm -f C:/python/Scripts/test-worker-script.py)"
     ]
   }
 }
