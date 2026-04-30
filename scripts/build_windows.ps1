@@ -74,7 +74,7 @@ if (Test-Path $NuitkaBuildDir) {
 }
 
 Write-Host "[6/6] Building with Nuitka..."
-Write-Host "  Memory optimization: --low-memory --jobs=4"
+Write-Host "  Memory optimization: --low-memory --jobs=10"
 
 $nuitkaArgs = @(
     "--mode=standalone"
@@ -88,7 +88,7 @@ $nuitkaArgs = @(
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
     "--low-memory"
-    "--jobs=4"
+    "--jobs=10"
     # Disable clcache to avoid D8000 errors (cache corruption issues)
     "--include-package=uvicorn"
     "--include-package=fastapi"

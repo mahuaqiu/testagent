@@ -12,7 +12,6 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.packaging import is_packaged, get_app_dir
 
-
 # ============ 最早期错误捕获（在任何导入之前） ============
 # 打包后没有控制台窗口，错误会被吞掉，所以写入文件
 def _early_error_log(error_msg):
@@ -262,17 +261,19 @@ class GUIApp:
 
     def _get_icon_path(self) -> str:
         """获取图标路径（PNG 格式，pystray 需要）。"""
-        if is_packaged():
-            # 打包模式：assets 直接在 exe 同级目录
-            base_dir = get_app_dir()
-            icon_path = os.path.join(base_dir, "assets", "icon.png")
-            if os.path.exists(icon_path):
-                return icon_path
-            # 备选：_internal 目录（某些打包模式）
-            return os.path.join(base_dir, "_internal", "assets", "icon.png")
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            return os.path.join(base_dir, "assets", "icon.png")
+        # 直接使用 get_app_dir() 获取基础目录，不依赖 is_packaged()
+        # get_app_dir() 在打包和开发环境下都能返回正确路径
+        base_dir = get_app_dir()
+        icon_path = os.path.join(base_dir, "assets", "icon.png")
+        if os.path.exists(icon_path):
+            return icon_path
+        # 备选：_internal 目录（某些打包模式）
+        icon_path_internal = os.path.join(base_dir, "_internal", "assets", "icon.png")
+        if os.path.exists(icon_path_internal):
+            return icon_path_internal
+        # 开发环境：从 __file__ 向上查找
+        file_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.join(file_dir, "assets", "icon.png")
 
     def _get_current_version(self) -> str:
         """获取当前版本号。"""

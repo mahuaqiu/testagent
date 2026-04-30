@@ -63,12 +63,19 @@ class TrayManager:
 
     def _load_icon(self) -> Image.Image:
         """加载图标。"""
+        logger.info(f"Loading icon from: {self.icon_path}")
         if os.path.exists(self.icon_path):
-            return Image.open(self.icon_path)
+            try:
+                image = Image.open(self.icon_path)
+                logger.info(f"Icon loaded successfully: {image.size}")
+                return image
+            except Exception as e:
+                logger.error(f"Failed to load icon: {e}")
+                return Image.new("RGB", (64, 64), color="red")
         else:
+            logger.warning(f"Icon file not found: {self.icon_path}")
             # 创建默认图标（红色方块）
-            image = Image.new("RGB", (64, 64), color="red")
-            return image
+            return Image.new("RGB", (64, 64), color="red")
 
     def _get_tooltip(self) -> str:
         """获取托盘提示文本。"""

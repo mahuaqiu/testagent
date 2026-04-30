@@ -8,6 +8,17 @@ import sys
 import os
 
 
+def _find_main_exe(exe_dir):
+    """在目录中查找主程序 exe（非 python.exe）。"""
+    try:
+        for f in os.listdir(exe_dir):
+            if f.lower().endswith('.exe') and f.lower() != 'python.exe':
+                return True
+    except OSError:
+        pass
+    return False
+
+
 def is_packaged():
     """检测是否在打包环境中（支持 Nuitka 和 PyInstaller）。"""
     # Nuitka 打包后会设置 __compiled__ 属性
@@ -16,34 +27,39 @@ def is_packaged():
     # PyInstaller 打包后会设置 sys.frozen
     if getattr(sys, 'frozen', False):
         return True
-    # Nuitka standalone 模式：检查 sys.executable 是否在包含 python.exe 的打包目录中
-    # 打包后目录结构为：test-worker/python.exe, test-worker/test-worker.exe
+    # Nuitka standalone 模式：sys.executable 是 python.exe，目录中有主程序 exe
     exe_dir = os.path.dirname(sys.executable)
     exe_name = os.path.basename(sys.executable).lower()
-    # 如果 sys.executable 是 python.exe，且目录中存在主程序 exe，则认为是打包环境
     if exe_name == 'python.exe':
-        # 检查目录中是否有非 python 的 exe 文件（主程序）
-        try:
-            for f in os.listdir(exe_dir):
-                if f.lower().endswith('.exe') and f.lower() != 'python.exe':
-                    return True
-        except OSError:
-            pass
+        return _find_main_exe(exe_dir)
+    # 如果 sys.executable 不是 python.exe，检查是否在打包目录中
+    # （Nuitka 可能直接使用主程序 exe 作为 sys.executable）
+    if exe_dir and os.path.basename(sys.executable).lower().endswith('.exe'):
+        # 检查目录中是否有 common/packaging.py（打包后会有）
+        # 或者检查是否有 Nuitka 特征文件
+        if os.path.exists(os.path.join(exe_dir, 'python3.dll')):
+            return True
     return False
 
 
+def _resolve_packaged_dir():
+    """解析打包环境的应用目录。"""
+    exe_dir = os.path.dirname(sys.executable)
+    exe_name = os.path.basename(sys.executable).lower()
+    if exe_name == 'python.exe':
+        return exe_dir
+    return exe_dir
+
+
 def get_app_dir():
-    """获取应用目录（兼容 Nuitka 和 PyInstaller）。"""
+    """获取应用目录（打包环境为 exe 所在目录，开发环境为当前工作目录）。"""
     if is_packaged():
-        return os.path.dirname(sys.executable)
-    else:
-        return os.getcwd()
+        return _resolve_packaged_dir()
+    return os.getcwd()
 
 
 def get_base_dir():
     """获取项目根目录（打包环境为 exe 所在目录，开发环境为项目根目录）。"""
     if is_packaged():
-        return os.path.dirname(sys.executable)
-    else:
-        # 开发环境：从当前文件向上两级到项目根目录
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return _resolve_packaged_dir()
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
