@@ -36,6 +36,15 @@ from worker.log_query import (
     LogQueryError,
 )
 
+from worker.performance_monitor import (
+    CollectStartRequest,
+    CollectStopRequest,
+    CollectStatus,
+    get_collector,
+    ProcessInfo,
+    TargetProcess,
+)
+
 from common.request_context import generate_request_id, set_request_id, clear_request_id
 
 logger = logging.getLogger(__name__)
@@ -724,7 +733,130 @@ def _trigger_restart_after_response():
     threading.Thread(target=_do_restart_async, daemon=True).start()
 
 
-# ========== WebSocket 路由 ==========
+# ========== 性能监控 API 端点 ==========
+
+
+@app.get("/api/worker/{device_id}/processes")
+async def get_processes(
+    device_id: str,
+    search: str | None = Query(default=None, description="模糊搜索进程名"),
+):
+    """
+    获取进程列表。
+
+    用于"开始采集"弹窗中显示进程列表，用户勾选目标进程。
+
+    Args:
+        device_id: 设备ID
+        search: 模糊搜索进程名（可选）
+
+    Returns:
+        Dict: 进程列表
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    collector = get_collector(device_id)
+    processes = collector.get_processes(search)
+
+    logger.info(f"Get processes: device_id={device_id}, search={search}, count={len(processes)}")
+
+    return {"processes": [p.model_dump() for p in processes]}
+
+
+@app.post("/api/worker/{device_id}/collect/start")
+async def start_collect(device_id: str, request: CollectStartRequest):
+    """
+    开始性能数据采集。
+
+    Worker 开始定时采集并上报数据。
+
+    Args:
+        device_id: 设备ID
+        request: 开始采集请求
+            - collect_id: 采集记录ID（由后端生成）
+            - interval: 采集频率（秒）
+            - target_processes: 目标进程列表
+
+    Returns:
+        Dict: {"status": "started", "message": "开始采集，频率X秒"}
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    collector = get_collector(device_id)
+
+    # 设置后端地址（使用 platform_api）
+    if worker.config and worker.config.platform_api:
+        collector.set_backend_host(worker.config.platform_api)
+
+    result = collector.start_collect(request)
+
+    logger.info(
+        f"Start collect: device_id={device_id}, "
+        f"collect_id={request.collect_id}, "
+        f"interval={request.interval}s, "
+        f"target_processes={len(request.target_processes)}"
+    )
+
+    return result
+
+
+@app.post("/api/worker/{device_id}/collect/stop")
+async def stop_collect(device_id: str, request: CollectStopRequest | None = None):
+    """
+    停止性能数据采集。
+
+    Args:
+        device_id: 设备ID
+        request: 停止采集请求（可选）
+            - collect_id: 采集记录ID，不传则停止当前所有采集
+
+    Returns:
+        Dict: {"status": "stopped", "message": "采集已停止"}
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    collector = get_collector(device_id)
+    result = collector.stop_collect(request)
+
+    logger.info(f"Stop collect: device_id={device_id}, collect_id={request.collect_id if request else None}")
+
+    return result
+
+
+@app.get("/api/worker/{device_id}/collect/status")
+async def get_collect_status(device_id: str):
+    """
+    获取采集状态。
+
+    用于后端判断当前采集状态，Worker 重连后恢复采集。
+
+    Args:
+        device_id: 设备ID
+
+    Returns:
+        Dict: 采集状态信息
+            - is_collecting: 是否正在采集
+            - collect_id: 当前采集ID
+            - interval: 采集频率（秒）
+            - target_processes: 目标进程列表
+            - start_time: 采集开始时间
+            - elapsed_seconds: 已采集时长（秒）
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    collector = get_collector(device_id)
+    status = collector.get_status()
+
+    logger.debug(f"Get collect status: device_id={device_id}, is_collecting={status.is_collecting}")
+
+    return status.model_dump()
+
+
+# ========== WebSocket 請求 ==========
 
 
 @app.websocket("/ws/screen/{platform}/{device_id}")
