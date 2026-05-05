@@ -36,6 +36,7 @@ class CollectStartRequest(BaseModel):
 
     collect_id: str = Field(..., description="采集记录ID（由后端生成）")
     interval: int = Field(5, description="采集频率（秒）", ge=1, le=60)
+    timeout: int = Field(43200, description="采集超时时间（秒），默认12小时", ge=60, le=86400)
     target_processes: list[TargetProcess] = Field(..., description="目标进程列表")
 
 
@@ -71,12 +72,14 @@ class PerformanceCollector:
         self.device_id = device_id
         self._collect_id: str | None = None
         self._interval: int = 5
+        self._timeout: int = 43200  # 默认 12 小时
         self._target_processes: list[TargetProcess] = []
         self._start_time: datetime | None = None
         self._collecting: bool = False
         self._collect_thread: threading.Thread | None = None
         self._stop_event: threading.Event = threading.Event()
         self._lock: threading.Lock = threading.Lock()
+        self._monitor: Any | None = None  # perfwin Monitor 实例
 
         # 后端上报地址（从配置获取）
         self._backend_host: str | None = None
@@ -116,17 +119,29 @@ class PerformanceCollector:
         """
         with self._lock:
             if self._collecting:
-                # 如果已有采集任务，先停止
-                logger.warning(f"已有采集任务正在进行: {self._collect_id}, 将停止后重新开始")
+                # 检查是否是相同任务
+                if self._is_same_task(request):
+                    logger.info(f"任务已存在且参数相同: {request.collect_id}")
+                    return {"status": "already_started", "message": "任务已开始"}
+                # 参数不同，停止旧任务
+                logger.info(f"新任务参数不同，停止旧任务: {self._collect_id}")
                 self._stop_collect_internal()
 
             # 记录采集配置
             self._collect_id = request.collect_id
             self._interval = request.interval
+            self._timeout = request.timeout
             self._target_processes = request.target_processes
             self._start_time = datetime.now(timezone.utc)
             self._collecting = True
             self._stop_event.clear()
+
+            # 创建 perfwin Monitor
+            try:
+                self._create_monitor(request)
+            except ValueError as e:
+                self._collecting = False
+                return {"status": "error", "message": str(e)}
 
             # 启动采集线程
             self._collect_thread = threading.Thread(
@@ -138,13 +153,79 @@ class PerformanceCollector:
             logger.info(
                 f"开始采集: collect_id={self._collect_id}, "
                 f"interval={self._interval}s, "
+                f"timeout={self._timeout}s, "
                 f"target_processes={len(self._target_processes)}"
             )
 
             return {
                 "status": "started",
-                "message": f"开始采集，频率{self._interval}秒",
+                "message": f"开始采集，频率{self._interval}秒，超时{self._timeout}秒",
             }
+
+    def _is_same_task(self, request: CollectStartRequest) -> bool:
+        """检查新请求是否与当前任务相同。
+
+        Args:
+            request: 新的采集请求
+
+        Returns:
+            是否相同
+        """
+        if self._collect_id != request.collect_id:
+            return False
+        if self._interval != request.interval:
+            return False
+        # timeout 不同可以接受（不影响采集逻辑）
+        if len(self._target_processes) != len(request.target_processes):
+            return False
+        for old, new in zip(self._target_processes, request.target_processes):
+            if old.name != new.name:
+                return False
+            old_pids = set(old.pids or [])
+            new_pids = set(new.pids or [])
+            if old_pids != new_pids:
+                return False
+        return True
+
+    def _create_monitor(self, request: CollectStartRequest) -> None:
+        """创建 perfwin Monitor 实例。
+
+        Args:
+            request: 采集请求
+
+        Raises:
+            ValueError: 不支持混合筛选模式
+        """
+        import perfwin
+
+        # 根据 target_processes 构建 ProcessFilter（不支持混合模式）
+        all_have_pids = all(tp.pids for tp in request.target_processes)
+        all_no_pids = all(not tp.pids for tp in request.target_processes)
+
+        if not all_have_pids and not all_no_pids:
+            raise ValueError("不支持混合筛选模式，请统一指定 PID 或进程名")
+
+        if all_have_pids:
+            # Pids 模式：收集所有指定的 PID
+            pids = []
+            for tp in request.target_processes:
+                pids.extend(tp.pids)
+            process_filter = perfwin.ProcessFilter(pids=pids)
+        else:
+            # Names 模式：收集所有进程名
+            names = [tp.name for tp in request.target_processes]
+            process_filter = perfwin.ProcessFilter(names=names)
+
+        # 设置 duration = timeout（超时后自动停止）
+        self._monitor = perfwin.Monitor(
+            interval=float(request.interval),
+            duration=float(request.timeout),  # 超时后自动停止
+            process_filter=process_filter,
+            top_n_cpu=10,
+            top_n_gpu=10,
+            enable_aggregation=True,
+        )
+        self._monitor.start()
 
     def stop_collect(self, request: CollectStopRequest | None = None) -> dict[str, Any]:
         """停止采集。
@@ -185,6 +266,14 @@ class PerformanceCollector:
         self._collecting = False
         self._stop_event.set()
 
+        # 停止 perfwin Monitor
+        if self._monitor:
+            try:
+                self._monitor.stop()
+            except Exception as e:
+                logger.warning(f"停止 perfwin Monitor 异常: {e}")
+            self._monitor = None
+
         # 等待线程结束
         if self._collect_thread and self._collect_thread.is_alive():
             self._collect_thread.join(timeout=2)
@@ -199,60 +288,190 @@ class PerformanceCollector:
     def _collect_loop(self) -> None:
         """采集循环（后台线程）。"""
         while not self._stop_event.is_set():
-            try:
-                # 采集数据（占位实现）
-                data = self._collect_data()
+            # 等待采集间隔
+            self._stop_event.wait(self._interval)
 
-                # 上报数据（占位实现）
-                self._report_data(data)
+            if self._stop_event.is_set():
+                break
+
+            try:
+                # 从 perfwin buffer 获取增量数据
+                if self._monitor and self._monitor.buffer_len() > 0:
+                    result = self._monitor.get_result()
+                    samples = []
+                    for sample in result.samples:
+                        samples.append(self._convert_sample_to_report(sample))
+
+                    # 上报数组格式
+                    if samples:
+                        self._report_samples(samples)
 
             except Exception as e:
                 logger.error(f"采集异常: {e}", exc_info=True)
 
-            # 等待下一次采集
-            self._stop_event.wait(self._interval)
+            # 检查 perfwin 是否仍在运行（timeout 后自动停止）
+            if self._monitor and not self._monitor.is_running():
+                logger.info(f"perfwin Monitor 已停止（timeout 达到）: {self._collect_id}")
+                self._stop_collect_internal()
+                break
 
-    def _collect_data(self) -> dict[str, Any]:
-        """采集性能数据（占位实现）。"""
-        # 计算相对时间
+    def _convert_sample_to_report(self, sample) -> dict:
+        """将 perfwin Sample 转换为接口上报格式。
+
+        Args:
+            sample: perfwin 样本数据
+
+        Returns:
+            转换后的数据字典
+        """
         relative_time = 0
         if self._start_time:
             relative_time = int((datetime.now(timezone.utc) - self._start_time).total_seconds())
 
-        # 返回占位数据（实际采集逻辑后续实现）
-        return {
-            "collect_id": self._collect_id,
-            "device_id": self.device_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "relative_time": relative_time,
-            "system": {
-                "cpu_usage": 0.0,
-                "gpu_usage": 0.0,
-                "commit_memory": 0.0,
-                "memory_usage": 0.0,
-                "power": 0,
-                "cpu_speed": 0.0,
-                "cpu_temp": 0,
-                "process_handles": 0,
-                "upload_speed": 0.0,
-                "download_speed": 0.0,
-            },
-            "target_processes": [],
-            "top10_cpu": [],
-            "top10_gpu": [],
+        s = sample.system
+
+        # 系统级指标
+        system = {
+            "cpu_usage": s.cpu.percent,
+            "gpu_usage": s.gpu.percent,
+            "commit_memory": s.memory.committed_mb / 1024,  # MB → GB
+            "memory_usage": s.memory.used_mb / 1024,  # MB → GB
+            "power": s.system_power,
+            "cpu_speed": 0.0,  # 占位，后续 perfwin 增加
+            "cpu_temp": s.cpu.temperature or 0,
+            "process_handles": self._get_total_handles(sample),
+            "upload_speed": s.network.upload_speed / 1024,  # bytes/s → KB/s
+            "download_speed": s.network.download_speed / 1024,  # bytes/s → KB/s
         }
 
-    def _report_data(self, data: dict[str, Any]) -> None:
-        """上报数据到后端（占位实现）。"""
-        if not self._backend_host:
-            logger.debug("后端地址未配置，跳过上报")
+        # 构建进程 PID → ProcessInfo 映射（用于获取实例明细）
+        pid_to_proc = {}
+        if sample.processes:
+            for p in sample.processes:
+                pid_to_proc[p.pid] = p
+
+        # 目标进程指标
+        target_processes = []
+        if sample.aggregated:
+            for agg in sample.aggregated:
+                # 构建实例明细
+                instances = []
+                for pid in agg.pids:
+                    proc = pid_to_proc.get(pid)
+                    if proc:
+                        instances.append({
+                            "pid": pid,
+                            "cpu": proc.cpu_percent,
+                            "memory": proc.working_set_mb,
+                            "gpu": proc.gpu_percent,
+                        })
+
+                target_processes.append({
+                    "name": agg.name,
+                    "total_cpu": agg.cpu_percent_total,
+                    "total_memory": agg.working_set_mb_total,
+                    "total_gpu": agg.gpu_percent_total,
+                    "instances": instances,
+                })
+
+        # TOP10 进程
+        top10_cpu = []
+        top10_gpu = []
+        if sample.top_n_cpu:
+            top10_cpu = [
+                {"name": p.name, "cpu": p.cpu_percent, "memory": p.working_set_mb}
+                for p in sample.top_n_cpu[:10]
+            ]
+        if sample.top_n_gpu:
+            top10_gpu = [
+                {"name": p.name, "gpu": p.gpu_percent}
+                for p in sample.top_n_gpu[:10]
+            ]
+
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "relative_time": relative_time,
+            "system": system,
+            "target_processes": target_processes,
+            "top10_cpu": top10_cpu,
+            "top10_gpu": top10_gpu,
+        }
+
+    def _get_total_handles(self, sample) -> int:
+        """获取系统总句柄数。
+
+        Args:
+            sample: perfwin 样本数据
+
+        Returns:
+            总句柄数
+        """
+        total = 0
+        if sample.aggregated:
+            for agg in sample.aggregated:
+                total += agg.handle_count_total
+        elif sample.processes:
+            for p in sample.processes:
+                total += p.handle_count
+        return total
+
+    def _report_samples(self, samples: list[dict]) -> None:
+        """上报样本数组到后端或本地持久化。
+
+        Args:
+            samples: 样本数据列表
+        """
+        if not samples:
             return
 
-        # 占位实现：实际 HTTP 调用后续实现
-        logger.debug(f"上报数据: relative_time={data.get('relative_time')}")
+        payload = {
+            "collect_id": self._collect_id,
+            "device_id": self.device_id,
+            "samples": samples,
+        }
+
+        # 如果后端地址为空，直接持久化
+        if not self._backend_host:
+            self._persist_samples(payload)
+            return
+
+        # 尝试 HTTP 上报
+        try:
+            import requests
+            url = f"{self._backend_host}/api/core/performance-monitor/report"
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code != 200:
+                logger.warning(f"上报失败: {response.status_code}")
+                self._persist_samples(payload)
+        except Exception as e:
+            logger.warning(f"上报异常: {e}")
+            self._persist_samples(payload)
+
+    def _persist_samples(self, payload: dict) -> None:
+        """持久化数据到本地文件。
+
+        Args:
+            payload: 上报数据
+        """
+        from worker.config import get_base_dir
+        import os
+        import json
+
+        # 创建目录
+        perf_dir = os.path.join(get_base_dir(), "data", "performance")
+        os.makedirs(perf_dir, exist_ok=True)
+
+        # 文件路径：{collect_id}.log
+        file_path = os.path.join(perf_dir, f"{self._collect_id}.log")
+
+        # JSON Lines 格式：每行一条上报数据
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+        logger.debug(f"性能数据已持久化: {file_path}, 样本数: {len(payload['samples'])}")
 
     def get_processes(self, search: str | None = None) -> list[ProcessInfo]:
-        """获取进程列表（占位实现）。
+        """获取所有进程列表及其资源使用率。
 
         Args:
             search: 模糊搜索进程名（可选）
@@ -260,24 +479,28 @@ class PerformanceCollector:
         Returns:
             进程列表
         """
-        # 返回占位数据（实际采集逻辑后续实现）
-        # 返回一些示例进程
-        sample_processes = [
-            ProcessInfo(name="chrome.exe", pid=1234, cpu_usage=5.2, memory_usage=120.5, gpu_usage=8.5),
-            ProcessInfo(name="chrome.exe", pid=2345, cpu_usage=4.8, memory_usage=95.2, gpu_usage=5.2),
-            ProcessInfo(name="node.exe", pid=4567, cpu_usage=6.1, memory_usage=80.5, gpu_usage=0),
-            ProcessInfo(name="python.exe", pid=7890, cpu_usage=3.2, memory_usage=50.5, gpu_usage=0),
-            ProcessInfo(name="vscode.exe", pid=5678, cpu_usage=2.5, memory_usage=150.0, gpu_usage=5.2),
-        ]
+        import perfwin
 
-        # 搜索过滤
-        if search:
-            sample_processes = [
-                p for p in sample_processes
-                if search.lower() in p.name.lower()
-            ]
+        # 使用 perfwin.list_processes() 获取所有进程的 PID 和名称
+        all_processes = perfwin.list_processes()
 
-        return sample_processes
+        if not all_processes:
+            return []
+
+        # 转换为接口格式
+        process_list = []
+        for pid, name in all_processes:
+            if search and search.lower() not in name.lower():
+                continue
+            process_list.append(ProcessInfo(
+                name=name,
+                pid=pid,
+                cpu_usage=0.0,  # list_processes 不返回资源使用率，需要单独采集
+                memory_usage=0.0,
+                gpu_usage=0.0,
+            ))
+
+        return process_list
 
 
 # 设备采集器管理（全局单例）
