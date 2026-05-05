@@ -3,6 +3,7 @@ param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
+    [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.1.0-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
     [switch]$Clean,
     [switch]$BuildInstaller  # Build installer directly
 )
@@ -58,6 +59,15 @@ pip install --upgrade pip
 pip install nuitka ordered-set zstandard
 pip install -e ".[all]"
 
+# 安装 perfwin wheel
+if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
+    Write-Host "  Installing perfwin wheel: $PerfwinWheel"
+    pip install $PerfwinWheel
+} else {
+    Write-Warning "perfwin wheel not found at: $PerfwinWheel"
+    Write-Warning "Performance monitoring may not work!"
+}
+
 Write-Host "[3/6] Generating version file..."
 $BuildVersion = Get-Date -Format "yyyyMMddHHmm"
 Set-Content -Path "worker\_version.py" -Value "VERSION = `"$BuildVersion`"" -Encoding UTF8
@@ -87,6 +97,7 @@ $nuitkaArgs = @(
     "--include-data-dir=assets=assets"
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
+    "--include-package-data=perfwin"
     "--low-memory"
     "--jobs=10"
     # Disable clcache to avoid D8000 errors (cache corruption issues)
@@ -177,6 +188,21 @@ Copy-Item -Path "assets" -Destination "$PackageDir\assets" -Recurse -Force
 Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "config" -Destination "$PackageDir\config" -Recurse -Force
+
+# 复制 HWiNFO64.EXE (Nuitka --include-package-data 不包含 .exe 文件)
+Write-Host "Copying HWiNFO64.EXE for perfwin..."
+$HwinfoExe = "$VenvPath\Lib\site-packages\perfwin\HWiNFO64\HWiNFO64.EXE"
+if (Test-Path $HwinfoExe) {
+    $HwinfoTargetDir = "$PackageDir\perfwin\HWiNFO64"
+    if (-not (Test-Path $HwinfoTargetDir)) {
+        New-Item -ItemType Directory -Force -Path $HwinfoTargetDir | Out-Null
+    }
+    Copy-Item -Path $HwinfoExe -Destination "$HwinfoTargetDir\HWiNFO64.EXE" -Force
+    Write-Host "  HWiNFO64.EXE copied successfully"
+} else {
+    Write-Warning "HWiNFO64.EXE not found at: $HwinfoExe"
+    Write-Warning "Performance monitoring may not work!"
+}
 
 Set-Content -Path "$PackageDir\VERSION" -Value $BuildVersion -Encoding UTF8
 
