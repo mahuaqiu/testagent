@@ -243,7 +243,10 @@
       "Bash(cargo build *)",
       "Bash(cargo search *)",
       "Read(//c/Users/Administrator/.cargo/registry/src/**)",
-      "Bash(D:/code/autotest/.venv/Scripts/pip.exe install *)"
+      "Bash(D:/code/autotest/.venv/Scripts/pip.exe install *)",
+      "Bash(D:/code/autotest/.venv/Scripts/python.exe *)",
+      "Bash(ls -la .venv/)",
+      "Bash(ls -la venv/)"
     ]
   }
 }
