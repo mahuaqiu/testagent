@@ -236,7 +236,14 @@
       "Read(//c/python/Scripts/**)",
       "Bash(rm -f C:/python/Scripts/test-worker.exe)",
       "Bash(rm -f C:/python/Scripts/test-worker-script.py)",
-      "Bash(pip3 show *)"
+      "Bash(pip3 show *)",
+      "Bash(grep -r \"impl.*System\" .venv/lib/python*/site-packages/)",
+      "Bash(cargo doc *)",
+      "Bash(rustup doc *)",
+      "Bash(cargo build *)",
+      "Bash(cargo search *)",
+      "Read(//c/Users/Administrator/.cargo/registry/src/**)",
+      "Bash(D:/code/autotest/.venv/Scripts/pip.exe install *)"
     ]
   }
 }
