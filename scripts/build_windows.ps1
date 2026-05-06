@@ -189,6 +189,12 @@ Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "config" -Destination "$PackageDir\config" -Recurse -Force
 
+# Create _internal\config as template backup (for config merging during upgrade)
+Write-Host "Creating _internal\config template..."
+$InternalConfigDir = "$PackageDir\_internal\config"
+New-Item -ItemType Directory -Force -Path $InternalConfigDir | Out-Null
+Copy-Item -Path "config\*" -Destination $InternalConfigDir -Recurse -Force
+
 # 复制 HWiNFO64.EXE (Nuitka --include-package-data 不包含 .exe 文件)
 Write-Host "Copying HWiNFO64.EXE for perfwin..."
 $HwinfoExe = "$VenvPath\Lib\site-packages\perfwin\HWiNFO64\HWiNFO64.EXE"

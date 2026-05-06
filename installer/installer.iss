@@ -15,33 +15,36 @@ OutputDir=..\dist
 OutputBaseFilename=test-worker-installer
 Compression=lzma2/max
 SolidCompression=yes
-; 权限设置：允许普通用户安装（升级时不需要管理员权限）
-; 如果安装到 Program Files，会提示需要管理员权限
-; 如果安装到用户目录，可以普通用户安装
+; Permission settings: allow normal user to install (no admin required for upgrade)
+; If installing to Program Files, will prompt for admin
+; If installing to user directory, normal user can install
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
-; 界面设置
+; UI settings
 WizardStyle=modern
 WizardSizePercent=100
 
-; 静默安装支持
+; Silent install support
 Uninstallable=yes
 CreateUninstallRegKey=yes
 
-; 中文界面
+; Chinese UI
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
-; 自定义窗口标题（显示版本号）
+; Custom window title (show version)
 [Messages]
-SetupWindowTitle=Test Worker {#Version} 安装
+SetupWindowTitle=Test Worker {#Version} Setup
 
 
 [Files]
-; 只排除用户配置目录 config\，不排除默认模板 _internal\config
-; 这样默认模板可以正常安装，用户配置升级时保留
-Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "config\*"
+; Copy all files except root config directory (preserve user config during upgrade)
+; Note: Excludes "config" matches directory name, not path - so _internal\config is also excluded
+; We handle _internal separately below
+Source: "..\dist\windows\test-worker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs; Excludes: "config"
+; Copy _internal directory (includes _internal\config template)
+Source: "..\dist\windows\test-worker\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs
 
 
 [Dirs]
@@ -53,20 +56,20 @@ Name: "{app}\data"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\Test Worker"; Filename: "{app}\test-worker.exe"
-Name: "{group}\卸载 Test Worker"; Filename: "{app}\unins000.exe"
+Name: "{group}\Uninstall Test Worker"; Filename: "{app}\unins000.exe"
 Name: "{autodesktop}\Test Worker"; Filename: "{app}\test-worker.exe"; Tasks: desktopicon
 
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
+Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional options:"
 
 
 [Run]
-; 交互式安装时，用户勾选启动，弹出 UAC 以管理员权限运行
-; skipifsilent: 静默安装时跳过此启动项（由 CurStepChanged 处理）
-; shellexec: 使用 ShellExecute 启动（Verb 参数必需）
-; runas: 以管理员权限运行（弹出 UAC）
-Filename: "{app}\test-worker.exe"; Description: "启动 Test Worker"; Flags: nowait postinstall skipifsilent shellexec; Verb: runas
+; Interactive install: user checks to start, UAC prompt for admin
+; skipifsilent: skip in silent mode (handled by CurStepChanged)
+; shellexec: use ShellExecute (Verb required)
+; runas: run with admin (UAC prompt)
+Filename: "{app}\test-worker.exe"; Description: "Start Test Worker"; Flags: nowait postinstall skipifsilent shellexec; Verb: runas
 
 
 [UninstallRun]
@@ -101,46 +104,46 @@ begin
   end;
 end;
 
-// 通过注册表获取本机 IP 地址，优先选择 10.xx 和 192.xx 网段
+// Get local IP address from registry, prefer 10.xx and 192.xx ranges
 function GetLocalIP: String;
 var
   SubKeyNames: TArrayOfString;
   I: Integer;
   IPValue: String;
   Enabled: String;
-  IP_10: String;      // 10.x.x.x 网段
-  IP_192: String;     // 192.168.x.x 网段
-  IP_172: String;     // 172.16-31.x.x 网段
-  IP_Other: String;   // 其他有效 IP
+  IP_10: String;      // 10.x.x.x range
+  IP_192: String;     // 192.168.x.x range
+  IP_172: String;     // 172.16-31.x.x range
+  IP_Other: String;   // Other valid IP
 begin
-  // 初始化所有 IP 变量
+  // Initialize all IP variables
   IP_10 := '';
   IP_192 := '';
   IP_172 := '';
   IP_Other := '';
 
-  // 查找所有网络适配器
+  // Find all network adapters
   if RegGetSubkeyNames(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces', SubKeyNames) then
   begin
     for I := 0 to GetArrayLength(SubKeyNames) - 1 do
     begin
       IPValue := '';
 
-      // 尝试读取 DHCP IP（优先）
+      // Try DHCP IP first
       if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'DhcpIPAddress', IPValue) then
       begin
-        // DHCP IP 读取成功
+        // DHCP IP read success
       end
       else
       begin
-        // 尝试读取静态 IP
+        // Try static IP
         RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + SubKeyNames[I], 'IPAddress', IPValue);
       end;
 
-      // 检查 IP 是否有效（排除空值、0.0.0.0 和 127.x.x.x）
+      // Check if IP is valid (exclude empty, 0.0.0.0 and 127.x.x.x)
       if (IPValue <> '') and (IPValue <> '0.0.0.0') and (Copy(IPValue, 1, 4) <> '127.') then
       begin
-        // 按优先级分类存储（只存储第一个找到的）
+        // Store by priority (only first found)
         if (IP_10 = '') and (Copy(IPValue, 1, 3) = '10.') then
           IP_10 := IPValue
         else if (IP_192 = '') and (Copy(IPValue, 1, 8) = '192.168.') then
@@ -153,7 +156,7 @@ begin
     end;
   end;
 
-  // 按优先级返回：10.xx > 192.168.xx > 172.xx > 其他 > 127.0.0.1
+  // Return by priority: 10.xx > 192.168.xx > 172.xx > other > 127.0.0.1
   if IP_10 <> '' then
     Result := IP_10
   else if IP_192 <> '' then
@@ -168,7 +171,7 @@ end;
 
 function IsUpgradeInstall: Boolean;
 begin
-  // 检测根目录 config/worker.yaml 是否存在
+  // Check if root config/worker.yaml exists (upgrade vs new install)
   Result := FileExists(ExpandConstant('{app}\config\worker.yaml'));
 end;
 
@@ -188,13 +191,13 @@ begin
   CmdOcrService := GetCmdParam('OCR_SERVICE');
 
   ConfigPage := CreateInputQueryPage(wpSelectDir,
-    '配置 Worker 参数', '请填写以下配置信息',
-    '这些配置将写入 config/worker.yaml 文件');
+    'Configure Worker Parameters', 'Please fill in the following config',
+    'These will be written to config/worker.yaml');
 
-  // IP 地址
+  // IP address
   IpLabel := TLabel.Create(ConfigPage);
   IpLabel.Parent := ConfigPage.Surface;
-  IpLabel.Caption := 'Worker IP 地址:';
+  IpLabel.Caption := 'Worker IP address:';
   IpLabel.Left := ScaleX(0);
   IpLabel.Top := ScaleY(0);
   IpLabel.Width := ScaleX(150);
@@ -209,10 +212,10 @@ begin
   else
     IpEdit.Text := GetLocalIP();
 
-  // 端口
+  // Port
   PortLabel := TLabel.Create(ConfigPage);
   PortLabel.Parent := ConfigPage.Surface;
-  PortLabel.Caption := 'Worker 端口:';
+  PortLabel.Caption := 'Worker port:';
   PortLabel.Left := ScaleX(0);
   PortLabel.Top := ScaleY(44);
   PortLabel.Width := ScaleX(150);
@@ -227,10 +230,10 @@ begin
   else
     PortEdit.Text := '8088';
 
-  // 命名空间
+  // Namespace
   NamespaceLabel := TLabel.Create(ConfigPage);
   NamespaceLabel.Parent := ConfigPage.Surface;
-  NamespaceLabel.Caption := '命名空间 (Namespace):';
+  NamespaceLabel.Caption := 'Namespace:';
   NamespaceLabel.Left := ScaleX(0);
   NamespaceLabel.Top := ScaleY(88);
   NamespaceLabel.Width := ScaleX(150);
@@ -245,10 +248,10 @@ begin
   else
     NamespaceEdit.Text := 'meeting_public';
 
-  // 平台 API
+  // Platform API
   PlatformApiLabel := TLabel.Create(ConfigPage);
   PlatformApiLabel.Parent := ConfigPage.Surface;
-  PlatformApiLabel.Caption := '平台 API 地址:';
+  PlatformApiLabel.Caption := 'Platform API URL:';
   PlatformApiLabel.Left := ScaleX(0);
   PlatformApiLabel.Top := ScaleY(132);
   PlatformApiLabel.Width := ScaleX(150);
@@ -263,10 +266,10 @@ begin
   else
     PlatformApiEdit.Text := 'http://192.168.0.102:8000';
 
-  // OCR 服务
+  // OCR service
   OcrServiceLabel := TLabel.Create(ConfigPage);
   OcrServiceLabel.Parent := ConfigPage.Surface;
-  OcrServiceLabel.Caption := 'OCR 服务地址:';
+  OcrServiceLabel.Caption := 'OCR service URL:';
   OcrServiceLabel.Left := ScaleX(0);
   OcrServiceLabel.Top := ScaleY(176);
   OcrServiceLabel.Width := ScaleX(150);
@@ -285,107 +288,61 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigFile: String;
-  ConfigContent: AnsiString;
+  TemplateFile: String;
+  ConfigLines: TArrayOfString;
+  LineIndex: Integer;
+  LineContent: String;
   ResultCode: Integer;
 begin
   ConfigFile := ExpandConstant('{app}\config\worker.yaml');
+  TemplateFile := ExpandConstant('{app}\_internal\config\worker.yaml');
 
   if CurStep = ssPostInstall then
   begin
-    // 全新安装时：写入默认配置文件（升级时通过 Excludes 保留用户配置）
+    // New install: copy template config, then replace user input values
     if not IsUpgradeInstall then
     begin
+      // Copy template file to user config directory
+      if FileExists(TemplateFile) then
+      begin
+        FileCopy(TemplateFile, ConfigFile, False);
+      end;
 
-      ConfigContent := '# Worker Configuration File' + #13#10 +
-      '# Edit this file after installation based on your environment' + #13#10 +
-        '' + #13#10 +
-        '# Worker Basic Settings' + #13#10 +
-        'worker:' + #13#10 +
-        '  id: null                          # Auto-generated, or specify manually' + #13#10 +
-        '  ip: "' + IpEdit.Text + '"                          # Specify IP address, null means auto-detect' + #13#10 +
-        '  port: ' + PortEdit.Text + '                        # HTTP service port' + #13#10 +
-        '  namespace: ' + NamespaceEdit.Text + '         # Namespace for categorizing Workers' + #13#10 +
-        '  device_check_interval: 300        # Device check interval (seconds), 5 minutes' + #13#10 +
-        '  service_retry_count: 3            # Service startup retry count' + #13#10 +
-        '  service_retry_interval: 10        # Retry interval (seconds)' + #13#10 +
-        '  action_step_delay: 0.5            # Action step delay (seconds)' + #13#10 +
-        '' + #13#10 +
-        '# External Services (Required)' + #13#10 +
-        'external_services:' + #13#10 +
-        '  platform_api: "' + PlatformApiEdit.Text + '"  # Platform API URL' + #13#10 +
-        '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL' + #13#10 +
-        '' + #13#10 +
-        '# Platform Settings' + #13#10 +
-        'platforms:' + #13#10 +
-        '  web:' + #13#10 +
-        '    enabled: null                   # Auto-detect based on system' + #13#10 +
-        '    headless: false                 # Headless mode' + #13#10 +
-        '    browser_type: chromium          # chromium / firefox / webkit' + #13#10 +
-        '    timeout: 30000                  # Timeout (ms)' + #13#10 +
-        '    session_timeout: 300            # Session timeout (seconds)' + #13#10 +
-        '    screenshot_dir: data/screenshots' + #13#10 +
-        '    ignore_https_errors: true       # Ignore HTTPS certificate errors' + #13#10 +
-        '    user_data_dir: data/chrome_profile  # Browser user data directory' + #13#10 +
-        '    permissions:                    # Web permissions' + #13#10 +
-        '      - camera' + #13#10 +
-        '      - microphone' + #13#10 +
-        '    clear_profile_on_start: true' + #13#10 +
-        '    request_blacklist:' + #13#10 +
-        '      - pattern: "uba.js"' + #13#10 +
-        '        action: "404"' + #13#10 +
-        '      - pattern: "tinyReporter.min.js"' + #13#10 +
-        '        action: "404"' + #13#10 +
-        '    token_headers:' + #13#10 +
-        '      - "X-Auth-Token"' + #13#10 +
-        '      - "X-Request-Operator"' + #13#10 +
-        '' + #13#10 +
-        '  android:' + #13#10 +
-        '    enabled: null                   # Only on Windows' + #13#10 +
-        '    u2_port: 7912                   # uiautomator2 port' + #13#10 +
-        '    session_timeout: 300' + #13#10 +
-        '    screenshot_dir: data/screenshots' + #13#10 +
-        '' + #13#10 +
-        '  ios:' + #13#10 +
-        '    enabled: null                   # Only on Windows' + #13#10 +
-        '    wda_base_port: 8100             # WDA base port' + #13#10 +
-        '    wda_ipa_path: wda/WebDriverAgent.ipa' + #13#10 +
-        '    session_timeout: 300' + #13#10 +
-        '    screenshot_dir: data/screenshots' + #13#10 +
-        '' + #13#10 +
-        '  windows:' + #13#10 +
-        '    enabled: null                   # Only on Windows' + #13#10 +
-        '    session_timeout: 300' + #13#10 +
-        '    screenshot_dir: data/screenshots' + #13#10 +
-        '' + #13#10 +
-        '  mac:' + #13#10 +
-        '    enabled: null                   # Only on macOS' + #13#10 +
-        '    session_timeout: 300' + #13#10 +
-        '    screenshot_dir: data/screenshots' + #13#10 +
-        '' + #13#10 +
-        '# Image Matching Settings' + #13#10 +
-        'image_matching:' + #13#10 +
-        '  default_threshold: 0.8            # Default matching threshold' + #13#10 +
-        '  methods:' + #13#10 +
-        '    - template                      # Template matching' + #13#10 +
-        '    - sift                          # Feature point matching' + #13#10 +
-        '' + #13#10 +
-        '# Logging Settings' + #13#10 +
-        'logging:' + #13#10 +
-        '  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR' + #13#10 +
-        '  file: null                        # Log file path' + #13#10 +
-        '  max_size: 52428800                # Max file size, default 50MB' + #13#10 +
-        '  backup_count: 5                   # Number of backup files' + #13#10 +
-        '' + #13#10 +
-        '# Upgrade Settings' + #13#10 +
-        'upgrade:' + #13#10 +
-        '  check_url: ""                     # Upgrade check API URL' + #13#10 +
-        '  check_timeout: 30                 # Check timeout (seconds)' + #13#10 +
-        '  download_timeout: 300             # Download timeout (seconds)' + #13#10 +
-        '' + #13#10;
+      // Read and replace user input values (line by line)
+      if FileExists(ConfigFile) then
+      begin
+        LoadStringsFromFile(ConfigFile, ConfigLines);
 
-      // Delete existing file and write new content with UTF-8 encoding
-      DeleteFile(ConfigFile);
-      SaveStringToFile(ConfigFile, ConfigContent, True);
+        for LineIndex := 0 to GetArrayLength(ConfigLines) - 1 do
+        begin
+          LineContent := ConfigLines[LineIndex];
+
+          // Replace IP address (template uses null as default IP)
+          if Pos('ip: null', LineContent) > 0 then
+            LineContent := '  ip: "' + IpEdit.Text + '"                          # Specify IP address, null means auto-detect';
+
+          // Replace port
+          if Pos('port: 8088', LineContent) > 0 then
+            LineContent := '  port: ' + PortEdit.Text + '                        # HTTP service port';
+
+          // Replace namespace
+          if Pos('namespace: meeting_public', LineContent) > 0 then
+            LineContent := '  namespace: ' + NamespaceEdit.Text + '         # Namespace for categorizing Workers';
+
+          // Replace platform API URL
+          if Pos('platform_api: "http://192.168.0.102:8000"', LineContent) > 0 then
+            LineContent := '  platform_api: "' + PlatformApiEdit.Text + '"  # Platform API URL';
+
+          // Replace OCR service URL
+          if Pos('ocr_service: "http://192.168.0.102:9021"', LineContent) > 0 then
+            LineContent := '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL';
+
+          ConfigLines[LineIndex] := LineContent;
+        end;
+
+        // Write back config file
+        SaveStringsToFile(ConfigFile, ConfigLines, False);
+      end;
     end;
 
     // Auto-start in silent mode (no UAC, run as current user for unattended upgrade)

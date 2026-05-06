@@ -288,14 +288,68 @@ def get_default_config_path() -> str:
     return get_user_config_path()
 
 
+def _merge_missing_config(
+    user_data: Dict[str, Any],
+    template_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    合并缺失配置项：保留用户配置，补充模板中新增的配置项。
+
+    Args:
+        user_data: 用户配置数据（基准）
+        template_data: 模板配置数据（补充来源）
+
+    Returns:
+        dict: 合并后的配置数据
+    """
+    def deep_merge(base: Dict[str, Any], supplement: Dict[str, Any]) -> Dict[str, Any]:
+        """深度合并字典：base 保留，supplement 中新增的 key 补充到 base。"""
+        result = base.copy()
+        for key, value in supplement.items():
+            if key not in result:
+                # base 缺少此 key，从 supplement 补充
+                result[key] = value
+            elif isinstance(value, dict) and isinstance(result[key], dict):
+                # 两个都是字典，递归合并
+                result[key] = deep_merge(result[key], value)
+        return result
+
+    # 以用户配置为基准，从模板补充缺失项
+    return deep_merge(user_data, template_data)
+
+
+def _get_config_template_yaml() -> str:
+    """获取配置模板 YAML 内容。"""
+    template_path = get_default_template_path()
+    if os.path.exists(template_path):
+        with open(template_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+
 def load_config() -> WorkerConfig:
-    """加载 Worker 配置（含版本号）。"""
+    """加载 Worker 配置（含版本号和自动合并缺失配置）。"""
     user_config_path = get_user_config_path()
     default_template_path = get_default_template_path()
 
     # 优先读取用户配置
     if os.path.exists(user_config_path):
         logger.info(f"Loading user config: {user_config_path}")
+        user_data = yaml.safe_load(_read_file_with_encoding(user_config_path)) or {}
+
+        # 检查模板是否存在，合并缺失配置项
+        if os.path.exists(default_template_path):
+            template_data = yaml.safe_load(_read_file_with_encoding(default_template_path)) or {}
+
+            # 检查是否需要合并（模板配置比用户配置多）
+            merged_data = _merge_missing_config(user_data, template_data)
+
+            # 如果合并后有变化，保存回用户配置
+            if merged_data != user_data:
+                logger.info("Merging missing config items from template to user config")
+                _save_user_config(merged_data, user_config_path)
+                user_data = merged_data
+
         config = WorkerConfig.from_yaml(user_config_path)
     elif os.path.exists(default_template_path):
         logger.info(f"User config not found, copying default template to: {user_config_path}")
@@ -309,6 +363,26 @@ def load_config() -> WorkerConfig:
     config.config_version = load_config_version()
 
     return config
+
+
+def _read_file_with_encoding(path: str) -> str:
+    """尝试多种编码读取文件。"""
+    encodings = ["utf-8", "gbk", "gb18030"]
+    for encoding in encodings:
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    return ""
+
+
+def _save_user_config(data: Dict[str, Any], path: str) -> None:
+    """保存用户配置文件。"""
+    config_yaml = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(config_yaml)
 
 
 def get_config_version_path() -> str:
