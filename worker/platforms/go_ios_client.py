@@ -174,10 +174,10 @@ class GoIOSClient:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/health")
-            logger.info(f"Agent health check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/health")
+            logger.debug(f"Agent health check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/health")
             return resp.status_code == 200
         except Exception as e:
-            logger.warning(f"Agent health check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/health")
+            logger.info(f"Agent health check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/health")
             return False
 
     def check_agent_ready(self) -> bool:
@@ -186,10 +186,10 @@ class GoIOSClient:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/ready")
-            logger.info(f"Agent ready check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/ready")
+            logger.debug(f"Agent ready check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/ready")
             return resp.status_code == 200
         except Exception as e:
-            logger.warning(f"Agent ready check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/ready")
+            logger.info(f"Agent ready check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/ready")
             return False
 
     def wait_agent_ready(self, timeout: int = 30) -> bool:

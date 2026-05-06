@@ -177,17 +177,23 @@ class iOSPlatformManager(PlatformManager):
         physical_udids = set()
         ios17_plus_udids = set()  # iOS 17+ 设备列表
         try:
-            # 不依赖 /ready，直接尝试获取设备列表
-            # 对于只有 iOS 16.x 设备的情况，/ready 会返回 503，但 list devices 仍然可用
             if self._go_ios:
-                # 等待 agent 进程运行（检查 /health 而不是 /ready）
-                start = time.time()
-                while time.time() - start < 10:
-                    if self._go_ios.check_agent_health():
-                        break
-                    time.sleep(1)
-
+                # 先直接获取设备列表（不依赖 agent）
                 devices = self._go_ios.list_devices()
+                if not devices:
+                    # 没有设备连接，直接清理所有残留端口
+                    logger.info("No devices connected, cleaning up all saved ports")
+                    for udid, port_info in saved_ports.items():
+                        wda_port = port_info.get("port")
+                        mjpeg_port = port_info.get("mjpeg_port")
+                        if wda_port:
+                            self._kill_port_process(wda_port)
+                        if mjpeg_port:
+                            self._kill_port_process(mjpeg_port)
+                    # 清空持久化文件
+                    self._clear_ports_file()
+                    return
+
                 physical_udids = {d["udid"] for d in devices}
                 # 检查哪些是 iOS 17+
                 for d in devices:
@@ -195,13 +201,35 @@ class iOSPlatformManager(PlatformManager):
                     if version and self._is_ios17_plus(version):
                         ios17_plus_udids.add(d["udid"])
                 logger.info(f"Physical devices: {physical_udids}, iOS 17+: {ios17_plus_udids}")
+
+                # 如果有 iOS 17+ 设备，等待 agent 就绪后获取 tunnel 信息
+                # 如果只有 iOS 16.x 设备，不需要等待 agent
+                if ios17_plus_udids:
+                    # 等待 agent 进程运行（检查 /health）
+                    start = time.time()
+                    while time.time() - start < 10:
+                        if self._go_ios.check_agent_health():
+                            break
+                        time.sleep(1)
+                    logger.info(f"Agent health check completed for iOS 17+ devices")
+
+                # 如果没有 iOS 17+ 设备，杀掉 tunnel 进程（节省资源）
+                if not ios17_plus_udids:
+                    logger.info("No iOS 17+ devices connected, killing tunnel process")
+                    self._kill_agent_processes()
+
         except Exception as e:
             logger.warning(f"Failed to get physical device list: {e}")
-
-        # 如果没有 iOS 17+ 设备，杀掉 tunnel 进程（节省资源）
-        if not ios17_plus_udids:
-            logger.info("No iOS 17+ devices connected, killing tunnel process")
-            self._kill_agent_processes()
+            # 列出设备失败，清理所有残留端口
+            for udid, port_info in saved_ports.items():
+                wda_port = port_info.get("port")
+                mjpeg_port = port_info.get("mjpeg_port")
+                if wda_port:
+                    self._kill_port_process(wda_port)
+                if mjpeg_port:
+                    self._kill_port_process(mjpeg_port)
+            self._clear_ports_file()
+            return
 
         # 检查每个持久化的端口
         for udid, port_info in saved_ports.items():
@@ -235,6 +263,10 @@ class iOSPlatformManager(PlatformManager):
                         self._kill_port_process(mjpeg_port)
 
         # 清空持久化文件（下次启动重新建立映射）
+        self._clear_ports_file()
+
+    def _clear_ports_file(self) -> None:
+        """清空端口持久化文件。"""
         try:
             if os.path.exists(self._ports_file):
                 os.remove(self._ports_file)
@@ -318,66 +350,79 @@ class iOSPlatformManager(PlatformManager):
         iOS 16.x 设备不需要 tunnel，所以只检查 /health。
 
         优化流程：
-        1. 先检查现有 agent 是否可用（/health）
-        2. 不可用时先杀掉端口占用进程
-        3. 启动 agent 后等5秒检查是否启动成功
+        1. 先检查是否有设备连接（通过 list_devices）
+        2. 如果没有设备，直接跳过所有 agent 操作（不检查 health，不启动 agent）
+        3. 如果有设备，检查是否有 iOS 17+ 设备
+        4. 只有 iOS 17+ 设备才需要启动/检查 agent
         """
-        # 1. 先检查进程健康状态（不检查 tunnel）
-        if self._go_ios.check_agent_health():
-            logger.info("go-ios agent already running (health check passed)")
+        # 1. 先检查是否有设备连接（不依赖 agent）
+        try:
+            devices = self._go_ios.list_devices()
+            if not devices:
+                logger.info("No iOS devices connected, skipping agent startup")
+                return
+        except Exception as e:
+            logger.warning(f"Failed to list devices: {e}")
+            # 列出设备失败，可能是 go-ios 工具问题，跳过 agent
             return
 
-        # 2. 健康检查失败，先杀掉可能占用端口的进程
-        logger.info("go-ios agent health check failed, checking port occupation...")
+        # 2. 检测是否有 iOS 17+ 设备
+        ios17_plus_devices = []
+        for d in devices:
+            version = d.get("version", "")
+            if version and self._is_ios17_plus(version):
+                ios17_plus_devices.append(d["udid"])
+
+        # 3. 只有 iOS 17+ 设备才需要 tunnel agent
+        if not ios17_plus_devices:
+            logger.info(f"Only iOS 16.x devices detected ({len(devices)} total), skipping tunnel agent (iOS 16.x works without tunnel)")
+            return
+
+        logger.info(f"iOS 17+ devices detected: {ios17_plus_devices}, need tunnel agent")
+
+        # 4. 检查现有 agent 是否可用（/health）
+        if self._go_ios.check_agent_health():
+            logger.info("go-ios agent already running (health check passed)")
+            # 检查 tunnel 是否就绪（/ready）
+            if not self._go_ios.wait_agent_ready(timeout=5):
+                logger.warning("Agent running but tunnel not ready, will restart")
+                self._kill_agent_processes()
+            else:
+                logger.info("go-ios agent running and tunnel ready")
+                return
+
+        # 5. 健康检查失败或 tunnel 未就绪，杀掉可能占用端口的进程
+        logger.info("go-ios agent health check failed or tunnel not ready, checking port occupation...")
         self._kill_agent_processes()
 
-        # 3. 检测是否有 iOS 17+ 设备连接
-        ios17_plus_devices = []
-        try:
-            # 先尝试通过 go-ios list 获取设备信息（不依赖 agent）
-            devices = self._go_ios.list_devices()
-            for d in devices:
-                version = d.get("version", "")
-                if version and self._is_ios17_plus(version):
-                    ios17_plus_devices.append(d["udid"])
-        except Exception as e:
-            logger.warning(f"Failed to check device versions before agent start: {e}")
+        # 6. 启动 agent
+        logger.info(f"Starting tunnel agent for iOS 17+ devices...")
+        self._agent_process = self._go_ios.start_agent()
 
-        # 4. 启动 agent（只有 iOS 17+ 设备才需要 tunnel）
-        if ios17_plus_devices:
-            logger.info(f"iOS 17+ devices detected: {ios17_plus_devices}, starting tunnel agent...")
-            self._agent_process = self._go_ios.start_agent()
+        # 优化：启动后等5秒再检查是否启动成功
+        logger.info("Waiting 5 seconds for agent to start...")
+        time.sleep(5)
 
-            # 优化：启动后等5秒再检查是否启动成功
-            logger.info("Waiting 5 seconds for agent to start...")
-            time.sleep(5)
+        # 检查进程是否存活（启动失败会直接退出）
+        if not self._go_ios.check_process_alive(self._agent_process):
+            logger.error(f"go-ios agent process exited immediately (PID: {self._agent_process.pid})")
+            self._kill_agent_processes()
+            raise RuntimeError("go-ios agent process failed to start (process exited)")
 
-            # 检查进程是否存活（启动失败会直接退出）
-            if not self._go_ios.check_process_alive(self._agent_process):
-                logger.error(f"go-ios agent process exited immediately (PID: {self._agent_process.pid})")
-                self._kill_agent_processes()
-                raise RuntimeError("go-ios agent process failed to start (process exited)")
+        # 检查 /health 接口是否可用
+        if not self._go_ios.check_agent_health():
+            logger.error("go-ios agent health check failed after 5s wait")
+            self._kill_agent_processes()
+            raise RuntimeError("go-ios agent failed to start (health check failed)")
 
-            # 检查 /health 接口是否可用
-            if not self._go_ios.check_agent_health():
-                logger.error("go-ios agent health check failed after 5s wait")
-                self._kill_agent_processes()
-                raise RuntimeError("go-ios agent failed to start (health check failed)")
+        # 等待 agent 就绪（检查 /ready，因为需要 tunnel）
+        logger.info("Agent process alive, waiting for tunnel ready...")
+        if not self._go_ios.wait_agent_ready(timeout=25):
+            logger.error("go-ios tunnel agent failed to become ready within 25s")
+            self._kill_agent_processes()
+            raise RuntimeError("go-ios tunnel agent failed to start (tunnel not ready)")
 
-            # 等待 agent 就绪（检查 /ready，因为需要 tunnel）
-            logger.info("Agent process alive, waiting for tunnel ready...")
-            if not self._go_ios.wait_agent_ready(timeout=25):
-                logger.error("go-ios tunnel agent failed to become ready within 25s")
-                self._kill_agent_processes()
-                raise RuntimeError("go-ios tunnel agent failed to start (tunnel not ready)")
-
-            logger.info("go-ios agent started successfully and tunnel is ready")
-        else:
-            # 只有 iOS 16.x 设备或没有设备，不启动 tunnel
-            # go-ios 命令（runwda, forward）在 iOS 16.x 上可以直接工作
-            logger.info("No iOS 17+ devices, skipping tunnel agent (iOS 16.x works without tunnel)")
-
-        logger.info("go-ios agent setup completed")
+        logger.info("go-ios agent started successfully and tunnel is ready")
 
     def _kill_agent_processes(self) -> None:
         """杀掉 go-ios agent 相关进程（详细日志）。"""
