@@ -228,6 +228,8 @@ components:
             - Web/Windows/Mac: 不需要填写
             - Android: 填写设备序列号，如 "emulator-5554"
             - iOS: 填写设备 UDID，如 "00008030-001234567890ABCD"
+        window:
+          $ref: "#/components/schemas/WindowSpec"
         user_id:
           type: string
           description: "用户标识，用于追溯和日志记录"
@@ -245,6 +247,9 @@ components:
               y: 0
           - action_type: "screenshot"
             value: "result"
+        # window 参数示例（Windows 平台窗口级截图）
+        # window:
+        #   title: "华为云会议"
 
     TaskConfig:
       type: object
@@ -275,6 +280,22 @@ components:
         screenshot_on_error: true
         slow_motion: 500
         retry_count: 1
+
+    WindowSpec:
+      type: object
+      description: |
+        窗口定位参数（Windows 平台），用于窗口级截图。
+        传了 title 或 class 就会匹配，不传则全屏截图。
+        使用场景：桌面图标/其他窗口太多导致 OCR 识别不准时，通过绑定特定窗口，只截取该窗口区域。
+      properties:
+        title:
+          type: string
+          description: "窗口标题（包含匹配），如 '华为云会议'"
+        class:
+          type: string
+          description: "窗口类名（精确匹配），如 'HwmMainWndClass'"
+      example:
+        title: "华为云会议"
 
     Action:
       type: object

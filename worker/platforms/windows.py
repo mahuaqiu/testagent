@@ -2,22 +2,24 @@
 Windows 桌面平台执行引擎。
 
 基于 pyautogui 实现，支持 OCR/图像识别定位。
+支持窗口级截图（通过 title 或 class 定位窗口）。
 """
 
 import io
 import logging
 import subprocess  # 用于 CalledProcessError 异常类型
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
+import mss
 import pyautogui
 import pyperclip
 
-from common.utils import run_cmd, popen_cmd
+from common.utils import run_cmd
+from worker.actions import ActionRegistry
+from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 from worker.tools import get_tools_dir
 
 logger = logging.getLogger(__name__)
@@ -37,12 +39,15 @@ class WindowsPlatformManager(PlatformManager):
     """
 
     # Windows 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
         self.timeout = config.timeout
         self._current_monitor: int = 1  # 当前操作的显示器：1=主屏幕，2=副屏幕
+        # 窗口绑定参数（任务级别）
+        self._window_handle: int | None = None  # 绑定的窗口句柄
+        self._window_rect: tuple[int, int, int, int] | None = None  # 窗口矩形 (left, top, right, bottom)
 
     @property
     def platform(self) -> str:
@@ -69,64 +74,100 @@ class WindowsPlatformManager(PlatformManager):
 
     # ========== 上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
-        """创建桌面上下文（Windows 不需要特殊上下文）。"""
-        logger.info("Windows context created (no-op)")
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
+        """创建桌面上下文，解析窗口绑定参数。"""
+        logger.info("Windows context created")
+
+        # 解析窗口绑定参数
+        if options:
+            window_info = options.get("window")
+            if window_info:
+                from worker.platforms.win_utils import find_window_handle, get_window_rect
+                self._window_handle = find_window_handle(
+                    title=window_info.get("title"),
+                    class_name=window_info.get("class"),  # API 使用 alias "class"
+                )
+                if self._window_handle:
+                    self._window_rect = get_window_rect(self._window_handle)
+                    logger.info(f"Window bound: handle={self._window_handle}, rect={self._window_rect}")
+                else:
+                    logger.warning("Window not found, fallback to fullscreen screenshot")
+
         return None
 
     def close_context(self, context: Any, close_session: bool = False) -> None:
-        """关闭桌面上下文（Windows 不需要）。"""
-        logger.info("Windows context closed (no-op)")
+        """关闭桌面上下文，清除窗口绑定。"""
+        # 清除窗口绑定
+        self._window_handle = None
+        self._window_rect = None
+        logger.info("Windows context closed, window binding cleared")
 
     # ========== 基础能力实现 ==========
+
+    def _convert_to_global_coords(self, x: int, y: int) -> tuple[int, int]:
+        """将截图相对坐标转换为全局坐标。
+
+        窗口模式：窗口相对坐标 + 窗口位置偏移 = 全局坐标
+        全屏模式：使用显示器坐标转换（convert_to_global_coords）
+
+        Args:
+            x: 截图相对 X 坐标
+            y: 截图相对 Y 坐标
+
+        Returns:
+            Tuple[int, int]: 全局坐标 (global_x, global_y)
+        """
+        if self._window_rect:
+            # 窗口模式：窗口相对坐标 + 窗口左上角偏移
+            global_x = x + self._window_rect[0]
+            global_y = y + self._window_rect[1]
+        else:
+            # 全屏模式：使用显示器坐标转换
+            from worker.screen.monitor_utils import convert_to_global_coords
+            global_x, global_y = convert_to_global_coords(x, y, self._current_monitor)
+        return global_x, global_y
 
     def click(self, x: int, y: int, duration: int = 0, context: Any = None) -> None:
         """点击指定坐标，支持长按。
 
         Args:
-            x: X 坐标
-            y: Y 坐标
+            x: X 坐标（窗口/截图相对坐标）
+            y: Y 坐标（窗口/截图相对坐标）
             duration: 点击持续时间（毫秒），0=普通点击，>0=长按
             context: 执行上下文
 
         Note:
-            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+            自动将窗口/截图相对坐标转换为全局坐标。
         """
-        from worker.screen.monitor_utils import convert_to_global_coords
-        monitor = self._current_monitor
-        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        global_x, global_y = self._convert_to_global_coords(x, y)
 
         if duration > 0:
             duration_sec = duration / 1000.0
             pyautogui.moveTo(global_x, global_y)
             pyautogui.mouseDown()
             pyautogui.mouseUp(duration=duration_sec)
-            logger.info(f"Long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms, monitor={monitor}")
+            logger.info(f"Long click at ({x}, {y}) -> global ({global_x}, {global_y}) for {duration}ms")
         else:
             pyautogui.click(global_x, global_y)
-            logger.info(f"Click at ({x}, {y}) -> global ({global_x}, {global_y}), monitor={monitor}")
+            logger.info(f"Click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def right_click(self, x: int, y: int, context: Any = None) -> None:
         """右键点击指定坐标。
 
         Note:
-            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+            自动将窗口/截图相对坐标转换为全局坐标。
         """
-        from worker.screen.monitor_utils import convert_to_global_coords
-        monitor = self._current_monitor
-        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        global_x, global_y = self._convert_to_global_coords(x, y)
         pyautogui.rightClick(global_x, global_y)
-        logger.info(f"Right click at ({x}, {y}) -> global ({global_x}, {global_y}), monitor={monitor}")
+        logger.info(f"Right click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标。
 
         Note:
-            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+            自动将窗口/截图相对坐标转换为全局坐标。
         """
-        from worker.screen.monitor_utils import convert_to_global_coords
-        monitor = self._current_monitor
-        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        global_x, global_y = self._convert_to_global_coords(x, y)
         pyautogui.doubleClick(global_x, global_y)
         logger.debug(f"Double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
@@ -134,11 +175,9 @@ class WindowsPlatformManager(PlatformManager):
         """移动鼠标到指定坐标。
 
         Note:
-            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+            自动将窗口/截图相对坐标转换为全局坐标。
         """
-        from worker.screen.monitor_utils import convert_to_global_coords
-        monitor = self._current_monitor
-        global_x, global_y = convert_to_global_coords(x, y, monitor)
+        global_x, global_y = self._convert_to_global_coords(x, y)
         pyautogui.moveTo(global_x, global_y)
         logger.debug(f"Move to ({x}, {y}) -> global ({global_x}, {global_y})")
 
@@ -148,11 +187,11 @@ class WindowsPlatformManager(PlatformManager):
         pyautogui.hotkey('ctrl', 'v')
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None) -> None:
         """滑动/拖拽。
 
         Args:
-            start_x: 走始 X 坐标
+            start_x: 起始 X 坐标
             start_y: 起始 Y 坐标
             end_x: 结束 X 坐标
             end_y: 结束 Y 坐标
@@ -162,12 +201,10 @@ class WindowsPlatformManager(PlatformManager):
 
         Note:
             pyautogui 不支持 steps 参数，始终使用 duration 控制滑动时间。
-            Windows 平台使用 pyautogui，需要将截图相对坐标转换为全局坐标。
+            自动将窗口/截图相对坐标转换为全局坐标。
         """
-        from worker.screen.monitor_utils import convert_to_global_coords
-        monitor = self._current_monitor
-        global_start_x, global_start_y = convert_to_global_coords(start_x, start_y, monitor)
-        global_end_x, global_end_y = convert_to_global_coords(end_x, end_y, monitor)
+        global_start_x, global_start_y = self._convert_to_global_coords(start_x, start_y)
+        global_end_x, global_end_y = self._convert_to_global_coords(end_x, end_y)
 
         duration_sec = duration / 1000.0
         pyautogui.moveTo(global_start_x, global_start_y)
@@ -185,11 +222,34 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui.press(key)
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图。"""
-        screenshot = pyautogui.screenshot()
-        buffer = io.BytesIO()
-        screenshot.save(buffer, format="PNG")
-        return buffer.getvalue()
+        """获取截图（支持窗口级截图）。
+
+        如果绑定了窗口句柄，只截取该窗口区域；
+        否则截取全屏（使用 pyautogui）。
+        """
+        if self._window_handle and self._window_rect:
+            # 窗口级截图：使用 mss 截取指定区域
+            from PIL import Image
+            left, top, right, bottom = self._window_rect
+            monitor = {
+                "left": left,
+                "top": top,
+                "width": right - left,
+                "height": bottom - top
+            }
+            with mss.mss() as sct:
+                screenshot = sct.grab(monitor)
+                img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                logger.debug(f"Window screenshot: handle={self._window_handle}, size={screenshot.size}")
+                return buffer.getvalue()
+        else:
+            # 全屏截图（现有逻辑）
+            screenshot = pyautogui.screenshot()
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="PNG")
+            return buffer.getvalue()
 
     def get_screenshot(self, context: Any) -> bytes:
         """获取当前屏幕截图（兼容旧接口）。"""

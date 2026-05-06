@@ -130,12 +130,20 @@ def _format_result_for_log(result: dict[str, Any]) -> dict[str, Any]:
 # Pydantic 模型定义
 
 
+class WindowSpec(BaseModel):
+    """窗口定位参数（Windows 平台专用）。"""
+
+    title: str | None = Field(None, description="窗口标题（包含匹配）")
+    class_: str | None = Field(None, alias="class", description="窗口类名（精确匹配）")
+
+
 class TaskRequest(BaseModel):
     """任务请求。"""
 
     platform: str = Field(..., description="目标平台: web/android/ios/windows/mac")
     actions: list[dict[str, Any]] = Field(..., description="动作列表")
     device_id: str | None = Field(None, description="设备 ID（移动端必填）")
+    window: WindowSpec | None = Field(None, description="窗口定位参数（Windows 平台）")
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -159,6 +167,7 @@ def _format_request_for_log(request: TaskRequest) -> dict[str, Any]:
     log_request = {
         "platform": request.platform,
         "device_id": request.device_id,
+        "window": request.window.model_dump(by_alias=True) if request.window else None,
         "actions": [],
     }
 
@@ -250,6 +259,7 @@ async def execute_task(request: TaskRequest):
             platform=request.platform,
             actions=request.actions,
             device_id=request.device_id,
+            window=request.window.model_dump(by_alias=True) if request.window else None,
         )
 
         # 添加 request_id 到返回结果
@@ -296,6 +306,7 @@ async def execute_task_async(request: TaskRequest):
             platform=request.platform,
             actions=request.actions,
             device_id=request.device_id,
+            window=request.window.model_dump(by_alias=True) if request.window else None,
         )
 
         # 记录任务提交结果

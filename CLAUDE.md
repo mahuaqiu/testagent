@@ -91,6 +91,17 @@ PlatformManager (抽象基类)
 | `/task/{task_id}` | DELETE | 取消任务 |
 | `/devices/refresh` | POST | 刷新设备列表 |
 
+### 任务请求参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `platform` | string | 目标平台：web/android/ios/windows/mac |
+| `actions` | array | 动作列表 |
+| `device_id` | string | 设备 ID（移动端必填） |
+| `window` | object | 窗口定位参数（Windows 平台，可选） |
+
+**window 参数**：`{"title": "窗口标题"}` 或 `{"class": "窗口类名"}`，用于窗口级截图，减少桌面干扰。
+
 ## 动作类型
 
 所有动作基于 OCR/图像识别或坐标定位。核心动作：

@@ -1037,6 +1037,7 @@ class Worker:
         platform: str,
         actions: list[dict[str, Any]],
         device_id: str | None = None,
+        window: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         同步执行任务（不生成 task_id）。
@@ -1045,6 +1046,7 @@ class Worker:
             platform: 目标平台
             actions: 动作列表
             device_id: 设备 ID
+            window: 窗口定位参数（Windows 平台）
 
         Returns:
             Dict: 执行结果（不含 task_id）
@@ -1054,6 +1056,7 @@ class Worker:
             platform=platform,
             actions=actions,
             device_id=device_id,
+            metadata={"window": window} if window else None,
             generate_id=False,  # 不生成 task_id
         )
 
@@ -1072,6 +1075,7 @@ class Worker:
         platform: str,
         actions: list[dict[str, Any]],
         device_id: str | None = None,
+        window: dict[str, Any] | None = None,
     ) -> tuple:
         """
         异步执行任务（生成 task_id）。
@@ -1080,6 +1084,7 @@ class Worker:
             platform: 目标平台
             actions: 动作列表
             device_id: 设备 ID
+            window: 窗口定位参数（Windows 平台）
 
         Returns:
             Tuple[str, str]: (task_id, status)
@@ -1100,6 +1105,7 @@ class Worker:
             platform=platform,
             actions=actions,
             device_id=device_id,
+            metadata={"window": window} if window else None,
             generate_id=True,
         )
 
