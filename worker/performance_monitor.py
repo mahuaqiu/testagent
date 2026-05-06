@@ -363,6 +363,7 @@ class PerformanceCollector:
                             "pid": pid,
                             "cpu": proc.cpu_percent,
                             "memory": proc.working_set_mb,
+                            "committed_memory": proc.committed_memory_mb,
                             "gpu": proc.gpu_percent,
                         })
 
@@ -370,6 +371,7 @@ class PerformanceCollector:
                     "name": agg.name,
                     "total_cpu": agg.cpu_percent_total,
                     "total_memory": agg.working_set_mb_total,
+                    "total_committed_memory": agg.committed_memory_mb_total,
                     "total_gpu": agg.gpu_percent_total,
                     "instances": instances,
                 })
