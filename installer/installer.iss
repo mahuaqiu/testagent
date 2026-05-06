@@ -61,7 +61,7 @@ Name: "{autodesktop}\Test Worker"; Filename: "{app}\test-worker.exe"; Tasks: des
 
 
 [Tasks]
-Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional options:"
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项:"
 
 
 [Run]
@@ -69,7 +69,7 @@ Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "
 ; skipifsilent: skip in silent mode (handled by CurStepChanged)
 ; shellexec: use ShellExecute (Verb required)
 ; runas: run with admin (UAC prompt)
-Filename: "{app}\test-worker.exe"; Description: "Start Test Worker"; Flags: nowait postinstall skipifsilent shellexec; Verb: runas
+Filename: "{app}\test-worker.exe"; Description: "启动 Test Worker"; Flags: nowait postinstall skipifsilent shellexec; Verb: runas
 
 
 [UninstallRun]
@@ -191,13 +191,13 @@ begin
   CmdOcrService := GetCmdParam('OCR_SERVICE');
 
   ConfigPage := CreateInputQueryPage(wpSelectDir,
-    'Configure Worker Parameters', 'Please fill in the following config',
-    'These will be written to config/worker.yaml');
+    '配置 Worker 参数', '请填写以下配置',
+    '这些将写入 config/worker.yaml');
 
   // IP address
   IpLabel := TLabel.Create(ConfigPage);
   IpLabel.Parent := ConfigPage.Surface;
-  IpLabel.Caption := 'Worker IP address:';
+  IpLabel.Caption := 'Worker IP 地址:';
   IpLabel.Left := ScaleX(0);
   IpLabel.Top := ScaleY(0);
   IpLabel.Width := ScaleX(150);
@@ -215,7 +215,7 @@ begin
   // Port
   PortLabel := TLabel.Create(ConfigPage);
   PortLabel.Parent := ConfigPage.Surface;
-  PortLabel.Caption := 'Worker port:';
+  PortLabel.Caption := 'Worker 端口:';
   PortLabel.Left := ScaleX(0);
   PortLabel.Top := ScaleY(44);
   PortLabel.Width := ScaleX(150);
@@ -233,7 +233,7 @@ begin
   // Namespace
   NamespaceLabel := TLabel.Create(ConfigPage);
   NamespaceLabel.Parent := ConfigPage.Surface;
-  NamespaceLabel.Caption := 'Namespace:';
+  NamespaceLabel.Caption := '命名空间:';
   NamespaceLabel.Left := ScaleX(0);
   NamespaceLabel.Top := ScaleY(88);
   NamespaceLabel.Width := ScaleX(150);
@@ -251,7 +251,7 @@ begin
   // Platform API
   PlatformApiLabel := TLabel.Create(ConfigPage);
   PlatformApiLabel.Parent := ConfigPage.Surface;
-  PlatformApiLabel.Caption := 'Platform API URL:';
+  PlatformApiLabel.Caption := '平台 API 地址:';
   PlatformApiLabel.Left := ScaleX(0);
   PlatformApiLabel.Top := ScaleY(132);
   PlatformApiLabel.Width := ScaleX(150);
@@ -269,7 +269,7 @@ begin
   // OCR service
   OcrServiceLabel := TLabel.Create(ConfigPage);
   OcrServiceLabel.Parent := ConfigPage.Surface;
-  OcrServiceLabel.Caption := 'OCR service URL:';
+  OcrServiceLabel.Caption := 'OCR 服务地址:';
   OcrServiceLabel.Left := ScaleX(0);
   OcrServiceLabel.Top := ScaleY(176);
   OcrServiceLabel.Width := ScaleX(150);
