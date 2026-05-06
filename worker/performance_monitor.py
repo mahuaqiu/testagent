@@ -337,7 +337,7 @@ class PerformanceCollector:
             "commit_memory": s.memory.committed_mb / 1024,  # MB → GB
             "memory_usage": s.memory.used_mb / 1024,  # MB → GB
             "power": s.system_power,
-            "cpu_speed": 0.0,  # 占位，后续 perfwin 增加
+            "cpu_speed": s.cpu.clock_speed,  # GHz
             "cpu_temp": s.cpu.temperature or 0,
             "process_handles": self._get_total_handles(sample),
             "upload_speed": s.network.upload_speed / 1024,  # bytes/s → KB/s
