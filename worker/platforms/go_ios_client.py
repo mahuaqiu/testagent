@@ -87,6 +87,68 @@ class GoIOSClient:
             logger.error(f"Failed to parse go-ios JSON output: {e}")
             return None
 
+    def check_process_alive(self, process: subprocess.Popen) -> bool:
+        """检查进程是否存活（用于判断 WDA/端口转发进程启动成功）。
+
+        Args:
+            process: 进程对象
+
+        Returns:
+            bool: True 表示进程存活（启动成功），False 表示进程已退出（启动失败）
+        """
+        if process is None:
+            return False
+        # poll() 返回 None 表示进程仍在运行，返回退出码表示已退出
+        is_alive = process.poll() is None
+        logger.info(f"Process alive check: PID={process.pid}, alive={is_alive}, exit_code={process.poll()}")
+        return is_alive
+
+    def wait_process_alive(self, process: subprocess.Popen, timeout: int = 5) -> bool:
+        """等待进程稳定运行（用于判断 WDA 进程启动成功）。
+
+        Args:
+            process: 进程对象
+            timeout: 等待时间（秒）
+
+        Returns:
+            bool: True 表示进程存活，False 表示进程已退出
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            if not self.check_process_alive(process):
+                logger.warning(f"Process {process.pid} exited during wait period")
+                return False
+            time.sleep(0.5)
+        logger.info(f"Process {process.pid} is stable after {timeout}s wait")
+        return True
+
+    def check_port_forward_ready(self, local_port: int, timeout: int = 2) -> bool:
+        """检查端口转发是否就绪（通过检查本地端口是否被监听）。
+
+        Args:
+            local_port: 本地端口
+            timeout: 超时时间（秒）
+
+        Returns:
+            bool: True 表示端口已监听，False 表示端口未监听
+        """
+        import socket
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('127.0.0.1', local_port))
+                sock.close()
+                if result == 0:
+                    logger.info(f"Port forward ready check: port {local_port} is listening")
+                    return True
+            except Exception as e:
+                logger.debug(f"Port forward check error: {e}")
+            time.sleep(0.5)
+        logger.warning(f"Port forward ready check: port {local_port} is not listening after {timeout}s")
+        return False
+
     # ========== Agent 管理 ==========
 
     def start_agent(self) -> subprocess.Popen:
@@ -112,9 +174,10 @@ class GoIOSClient:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/health")
+            logger.info(f"Agent health check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/health")
             return resp.status_code == 200
         except Exception as e:
-            logger.debug(f"Agent health check failed: {e}")
+            logger.warning(f"Agent health check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/health")
             return False
 
     def check_agent_ready(self) -> bool:
@@ -123,18 +186,23 @@ class GoIOSClient:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/ready")
+            logger.info(f"Agent ready check: status={resp.status_code}, url=http://{self.agent_host}:{self.agent_port}/ready")
             return resp.status_code == 200
         except Exception as e:
-            logger.debug(f"Agent ready check failed: {e}")
+            logger.warning(f"Agent ready check failed: {e}, url=http://{self.agent_host}:{self.agent_port}/ready")
             return False
 
     def wait_agent_ready(self, timeout: int = 30) -> bool:
         """等待 agent 就绪。"""
         start = time.time()
+        logger.info(f"Waiting for agent ready (timeout={timeout}s)...")
         while time.time() - start < timeout:
             if self.check_agent_ready():
+                elapsed = int(time.time() - start)
+                logger.info(f"Agent ready after {elapsed}s")
                 return True
             time.sleep(1)
+        logger.warning(f"Agent not ready after {timeout}s timeout")
         return False
 
     def get_tunnel_info(self, udid: str) -> Optional[dict]:
@@ -150,12 +218,16 @@ class GoIOSClient:
         try:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
-            resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/tunnel/{udid}")
+            url = f"http://{self.agent_host}:{self.agent_port}/tunnel/{udid}"
+            resp = self._http_client.get(url)
+            logger.info(f"Get tunnel info: status={resp.status_code}, udid={udid}, url={url}")
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                logger.info(f"Tunnel info for {udid}: address={data.get('address')}, rsdPort={data.get('rsdPort')}")
+                return data
             return None
         except Exception as e:
-            logger.debug(f"Failed to get tunnel info for {udid}: {e}")
+            logger.warning(f"Failed to get tunnel info for {udid}: {e}")
             return None
 
     def list_tunnels(self) -> list[dict]:
@@ -163,12 +235,16 @@ class GoIOSClient:
         try:
             if not self._http_client:
                 self._http_client = httpx.Client(timeout=5, trust_env=False)
-            resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/tunnels")
+            url = f"http://{self.agent_host}:{self.agent_port}/tunnels"
+            resp = self._http_client.get(url)
+            logger.info(f"List tunnels: status={resp.status_code}, url={url}")
             if resp.status_code == 200:
-                return resp.json()
+                tunnels = resp.json()
+                logger.info(f"Found {len(tunnels)} active tunnels")
+                return tunnels
             return []
         except Exception as e:
-            logger.debug(f"Failed to list tunnels: {e}")
+            logger.warning(f"Failed to list tunnels: {e}")
             return []
 
     def close(self) -> None:

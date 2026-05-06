@@ -316,6 +316,11 @@ class iOSPlatformManager(PlatformManager):
         注意：对于只有 iOS 16.x 设备的情况，不需要 tunnel。
         go-ios agent 的 /health 检查进程运行，/ready 检查 tunnel 就绪。
         iOS 16.x 设备不需要 tunnel，所以只检查 /health。
+
+        优化流程：
+        1. 先检查现有 agent 是否可用（/health）
+        2. 不可用时先杀掉端口占用进程
+        3. 启动 agent 后等5秒检查是否启动成功
         """
         # 1. 先检查进程健康状态（不检查 tunnel）
         if self._go_ios.check_agent_health():
@@ -343,11 +348,30 @@ class iOSPlatformManager(PlatformManager):
             logger.info(f"iOS 17+ devices detected: {ios17_plus_devices}, starting tunnel agent...")
             self._agent_process = self._go_ios.start_agent()
 
-            # 等待 agent 就绪（检查 /ready，因为需要 tunnel）
-            if not self._go_ios.wait_agent_ready(timeout=30):
-                logger.error("go-ios tunnel agent failed to start within 30s")
+            # 优化：启动后等5秒再检查是否启动成功
+            logger.info("Waiting 5 seconds for agent to start...")
+            time.sleep(5)
+
+            # 检查进程是否存活（启动失败会直接退出）
+            if not self._go_ios.check_process_alive(self._agent_process):
+                logger.error(f"go-ios agent process exited immediately (PID: {self._agent_process.pid})")
                 self._kill_agent_processes()
-                raise RuntimeError("go-ios tunnel agent failed to start")
+                raise RuntimeError("go-ios agent process failed to start (process exited)")
+
+            # 检查 /health 接口是否可用
+            if not self._go_ios.check_agent_health():
+                logger.error("go-ios agent health check failed after 5s wait")
+                self._kill_agent_processes()
+                raise RuntimeError("go-ios agent failed to start (health check failed)")
+
+            # 等待 agent 就绪（检查 /ready，因为需要 tunnel）
+            logger.info("Agent process alive, waiting for tunnel ready...")
+            if not self._go_ios.wait_agent_ready(timeout=25):
+                logger.error("go-ios tunnel agent failed to become ready within 25s")
+                self._kill_agent_processes()
+                raise RuntimeError("go-ios tunnel agent failed to start (tunnel not ready)")
+
+            logger.info("go-ios agent started successfully and tunnel is ready")
         else:
             # 只有 iOS 16.x 设备或没有设备，不启动 tunnel
             # go-ios 命令（runwda, forward）在 iOS 16.x 上可以直接工作
@@ -356,17 +380,24 @@ class iOSPlatformManager(PlatformManager):
         logger.info("go-ios agent setup completed")
 
     def _kill_agent_processes(self) -> None:
-        """杀掉 go-ios agent 相关进程。"""
+        """杀掉 go-ios agent 相关进程（详细日志）。"""
         try:
             # 通过端口查找并杀掉进程
             result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
+            logger.info(f"Checking agent port {self.agent_port} occupation...")
+            found_process = False
             for line in result.stdout.splitlines():
                 if f":{self.agent_port}" in line and "LISTENING" in line:
                     parts = line.split()
                     if len(parts) >= 5:
                         pid = parts[-1]
+                        logger.info(f"Found agent process PID {pid} on port {self.agent_port}")
+                        found_process = True
                         logger.info(f"Killing agent process {pid}")
                         run_cmd(["taskkill", "/F", "/PID", pid], check=True, timeout=10)
+                        time.sleep(1)
+            if not found_process:
+                logger.info(f"No agent process found on port {self.agent_port}")
         except Exception as e:
             logger.warning(f"Failed to kill agent processes: {e}")
 
@@ -473,7 +504,85 @@ class iOSPlatformManager(PlatformManager):
                     logger.info(f"Cleaning up disconnected device: {cached_udid}")
                     self._cleanup_device_ports(cached_udid)
 
-            # 0.3 获取设备版本和型号
+            # ========== 0.3 检查已有进程是否可用 ==========
+            # 如果已有 WDA 进程和端口转发进程，检查是否可用
+            wda_info = self._device_wda.get(udid)
+            if wda_info:
+                wda_process = wda_info.get("process")
+                forward_process = wda_info.get("forward_process")
+                mjpeg_process = wda_info.get("mjpeg_process")
+                existing_port = wda_info.get("port")
+                existing_mjpeg_port = wda_info.get("mjpeg_port")
+
+                # 检查 WDA 进程是否存活
+                if wda_process and self._go_ios.check_process_alive(wda_process):
+                    logger.info(f"WDA process {wda_process.pid} is alive for {udid}")
+                    # 检查端口转发进程是否存活
+                    if forward_process and self._go_ios.check_process_alive(forward_process):
+                        logger.info(f"WDA forward process {forward_process.pid} is alive")
+                        # 检查 WDA 服务是否可用
+                        if existing_port:
+                            try:
+                                probe_client = WDAClient(f"http://127.0.0.1:{existing_port}")
+                                if probe_client.health_check():
+                                    logger.info(f"WDA service is available on port {existing_port}, reusing existing setup")
+                                    self._device_clients[udid] = probe_client
+                                    # 确保 MJPEG 端口转发可用
+                                    if mjpeg_process and self._go_ios.check_process_alive(mjpeg_process):
+                                        logger.info(f"MJPEG forward process {mjpeg_process.pid} is alive")
+                                    else:
+                                        # MJPEG 进程不可用，重新启动
+                                        logger.warning(f"MJPEG forward process not alive, restarting...")
+                                        self._kill_port_process(existing_mjpeg_port)
+                                        mjpeg_process = self._start_mjpeg_forward(udid, existing_mjpeg_port)
+                                        wda_info["mjpeg_process"] = mjpeg_process
+                                    return ("online", "OK")
+                                else:
+                                    logger.warning(f"WDA health check failed on port {existing_port}, will restart")
+                            except Exception as e:
+                                logger.warning(f"WDA probe failed on port {existing_port}: {e}, will restart")
+                    else:
+                        logger.warning(f"WDA forward process not alive, will restart")
+
+                # 进程不可用，清理异常进程
+                logger.info(f"Existing processes not available, cleaning up...")
+                if existing_port:
+                    self._kill_port_process(existing_port)
+                if existing_mjpeg_port:
+                    self._kill_port_process(existing_mjpeg_port)
+                # 清理缓存
+                if udid in self._device_wda:
+                    del self._device_wda[udid]
+                if udid in self._device_clients:
+                    del self._device_clients[udid]
+                logger.info(f"Cleaned up stale processes for {udid}")
+
+            # 0.4 检查端口是否被异常进程占用（启动前）
+            if self._check_port_occupied(wda_port):
+                logger.info(f"Port {wda_port} occupied before start, checking WDA availability...")
+                try:
+                    probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+                    if probe_client.health_check():
+                        logger.info(f"Port {wda_port} has running WDA, reusing existing service")
+                        self._device_clients[udid] = probe_client
+                        # 确保 MJPEG 端口转发
+                        mjpeg_process = self._ensure_mjpeg_forward(udid, mjpeg_port)
+                        self._device_wda[udid] = {
+                            "port": wda_port,
+                            "mjpeg_port": mjpeg_port,
+                            "process": None,
+                            "forward_process": mjpeg_process,
+                        }
+                        self._save_ports_mapping()
+                        return ("online", "OK")
+                    else:
+                        logger.warning(f"Port {wda_port} occupied but WDA not available, killing process")
+                        self._kill_port_process(wda_port)
+                except Exception as e:
+                    logger.warning(f"Port {wda_port} occupied but probe failed: {e}, killing process")
+                    self._kill_port_process(wda_port)
+
+            # 0.5 获取设备版本和型号
             device_version = self._get_device_version(udid)
             device_info = self._go_ios.get_device_info(udid) if self._go_ios else {}
             product_type = device_info.get("model", "")
@@ -499,13 +608,20 @@ class iOSPlatformManager(PlatformManager):
             lock.release()
 
     def _start_wda(self, udid: str, wda_port: int, mjpeg_port: int) -> tuple[str, str]:
-        """启动 WDA 服务（含端口转发）。"""
+        """启动 WDA 服务（含端口转发）。
+
+        优化流程：
+        1. 先启动 WDA 进程，等待2秒检查是否启动成功（进程是否存活）
+        2. 启动 8100 端口转发，等2秒检查是否成功，失败则检查端口占用并杀掉
+        3. 启动 9100 端口转发，等2秒检查是否成功，失败则检查端口占用并杀掉
+        4. 等待 WDA 服务就绪
+        """
         try:
             # 清理已有进程
             if udid in self._device_wda:
                 self._stop_wda(udid)
 
-            # 启动 WDA（不手动传递 tunnel 参数，让 go-ios 自动从 agent 获取）
+            # ========== 1. 启动 WDA 进程 ==========
             logger.info(f"Starting WDA for {udid} on port {wda_port}")
             wda_process = self._go_ios.start_wda(
                 udid=udid,
@@ -514,24 +630,103 @@ class iOSPlatformManager(PlatformManager):
                 xctest_config=self.wda_xctest_config,
             )
 
-            # 等待 WDA 在设备上初始化（1-2秒）
-            logger.info(f"WDA process started, waiting 2 seconds for initialization...")
+            # 优化：等待2秒检查进程是否存活
+            # WDA 启动成功会阻塞运行，失败会直接退出
+            logger.info(f"WDA process started (PID: {wda_process.pid}), waiting 2 seconds to check if alive...")
             time.sleep(2)
 
+            if not self._go_ios.check_process_alive(wda_process):
+                logger.error(f"WDA process {wda_process.pid} exited immediately, startup failed")
+                return ("faulty", "WDA process failed to start (process exited)")
+            logger.info(f"WDA process {wda_process.pid} is alive, proceeding with port forwarding")
+
+            # ========== 2. 启动 WDA 端口转发 (8100) ==========
+            # 先检查端口是否可用
+            if self._check_port_occupied(wda_port):
+                logger.warning(f"WDA port {wda_port} is occupied, checking if WDA is accessible...")
+                # 尝试连接验证是否可用
+                try:
+                    probe_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+                    if probe_client.health_check():
+                        logger.info(f"Port {wda_port} has running WDA, will reuse existing port")
+                        # 不需要启动新的端口转发，直接使用现有的
+                    else:
+                        logger.warning(f"Port {wda_port} occupied but WDA not responding, killing process")
+                        self._kill_port_process(wda_port)
+                except Exception as e:
+                    logger.warning(f"Port {wda_port} occupied but probe failed: {e}, killing process")
+                    self._kill_port_process(wda_port)
+
             # 启动 WDA 端口转发（设备 8100 -> 本地 wda_port）
+            logger.info(f"Starting WDA port forward: {wda_port} -> 8100")
             forward_process = self._go_ios.forward_port(
                 udid=udid,
                 local_port=wda_port,
                 device_port=8100,
             )
 
-            # 启动 MJPEG 端口转发（设备 9100 -> 本地 mjpeg_port）
+            # 等待2秒检查端口转发是否成功
+            logger.info(f"WDA forward process started (PID: {forward_process.pid}), waiting 2 seconds to check...")
+            time.sleep(2)
+
+            if not self._go_ios.check_process_alive(forward_process):
+                logger.warning(f"WDA forward process {forward_process.pid} exited, checking port occupation...")
+                # 端口转发进程退出，检查端口是否被占用
+                if self._check_port_occupied(wda_port):
+                    logger.info(f"Port {wda_port} is occupied by another process, killing it")
+                    self._kill_port_process(wda_port)
+                return ("faulty", "WDA port forward failed (process exited)")
+
+            # 检查端口是否就绪（可连接）
+            if not self._go_ios.check_port_forward_ready(wda_port, timeout=2):
+                logger.warning(f"WDA port {wda_port} not ready after forward, checking occupation...")
+                if self._check_port_occupied(wda_port):
+                    logger.info(f"Port {wda_port} occupied but forward failed, killing process")
+                    self._kill_port_process(wda_port)
+                return ("faulty", f"WDA port {wda_port} forward failed (port not ready)")
+            logger.info(f"WDA port forward ready: {wda_port}")
+
+            # ========== 3. 启动 MJPEG 端口转发 (9100) ==========
+            # 先检查端口是否可用
+            if self._check_port_occupied(mjpeg_port):
+                logger.warning(f"MJPEG port {mjpeg_port} is occupied, checking if accessible...")
+                try:
+                    import httpx
+                    probe_client = httpx.Client(timeout=5, trust_env=False)
+                    resp = probe_client.get(f"http://127.0.0.1:{mjpeg_port}", timeout=3)
+                    probe_client.close()
+                    logger.info(f"Port {mjpeg_port} has running MJPEG, will reuse existing port")
+                except Exception as e:
+                    logger.warning(f"Port {mjpeg_port} occupied but not accessible: {e}, killing process")
+                    self._kill_port_process(mjpeg_port)
+
+            logger.info(f"Starting MJPEG port forward: {mjpeg_port} -> 9100")
             mjpeg_process = self._start_mjpeg_forward(udid, mjpeg_port)
 
+            # 等待2秒检查端口转发是否成功
+            logger.info(f"MJPEG forward process started (PID: {mjpeg_process.pid}), waiting 2 seconds to check...")
+            time.sleep(2)
+
+            if not self._go_ios.check_process_alive(mjpeg_process):
+                logger.warning(f"MJPEG forward process {mjpeg_process.pid} exited, checking port occupation...")
+                if self._check_port_occupied(mjpeg_port):
+                    logger.info(f"Port {mjpeg_port} occupied by another process, killing it")
+                    self._kill_port_process(mjpeg_port)
+                return ("faulty", "MJPEG port forward failed (process exited)")
+
+            if not self._go_ios.check_port_forward_ready(mjpeg_port, timeout=2):
+                logger.warning(f"MJPEG port {mjpeg_port} not ready after forward")
+                if self._check_port_occupied(mjpeg_port):
+                    logger.info(f"Port {mjpeg_port} occupied but forward failed, killing process")
+                    self._kill_port_process(mjpeg_port)
+                return ("faulty", f"MJPEG port {mjpeg_port} forward failed (port not ready)")
+            logger.info(f"MJPEG port forward ready: {mjpeg_port}")
+
+            # ========== 4. 等待 WDA 服务就绪 ==========
             base_url = f"http://127.0.0.1:{wda_port}"
             client = WDAClient(base_url)
 
-            logger.info(f"WDA process started on port {wda_port}, waiting for ready...")
+            logger.info(f"WDA port forwarding established, waiting for WDA service ready...")
             if client.wait_ready(timeout=30):
                 self._device_wda[udid] = {
                     "port": wda_port,
@@ -543,12 +738,12 @@ class iOSPlatformManager(PlatformManager):
                 self._device_clients[udid] = client
                 # 保存端口映射
                 self._save_ports_mapping()
-                logger.info(f"WDA started: {udid} on port {wda_port}, MJPEG on port {mjpeg_port}")
+                logger.info(f"WDA started successfully: {udid} on port {wda_port}, MJPEG on port {mjpeg_port}")
                 return ("online", "OK")
             else:
-                logger.warning(f"WDA failed to become ready on port {wda_port}")
+                logger.warning(f"WDA service failed to become ready on port {wda_port}")
                 # 不主动杀进程，让其保持运行以便下次复用或手动清理
-                return ("faulty", "WDA failed to start")
+                return ("faulty", "WDA service failed to become ready")
 
         except Exception as e:
             logger.error(f"Failed to start WDA: {e}")
@@ -647,19 +842,7 @@ class iOSPlatformManager(PlatformManager):
         logger.info(f"Cleaned up ports for disconnected device: {udid} (wda={wda_port}, mjpeg={mjpeg_port})")
 
     def _check_port_occupied(self, port: int) -> bool:
-        """检查端口是否被占用。"""
-        try:
-            result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
-            for line in result.stdout.splitlines():
-                if f":{port}" in line and "LISTENING" in line:
-                    return True
-            return False
-        except Exception as e:
-            logger.warning(f"Failed to check port: {e}")
-            return False
-
-    def _kill_port_process(self, port: int) -> None:
-        """杀掉占用指定端口的进程（Windows）。"""
+        """检查端口是否被占用（详细日志）。"""
         try:
             result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
             for line in result.stdout.splitlines():
@@ -667,11 +850,43 @@ class iOSPlatformManager(PlatformManager):
                     parts = line.split()
                     if len(parts) >= 5:
                         pid = parts[-1]
-                        logger.info(f"Killing process {pid} occupying port {port}")
+                        logger.info(f"Port {port} is occupied by PID {pid} (LISTENING)")
+                        return True
+            logger.info(f"Port {port} is not occupied (no LISTENING process found)")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check port occupation: {e}")
+            return False
+
+    def _kill_port_process(self, port: int) -> None:
+        """杀掉占用指定端口的进程（详细日志）。"""
+        try:
+            result = run_cmd(["netstat", "-ano"], check=True, timeout=10)
+            logger.debug(f"Checking netstat output for port {port}")
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        logger.info(f"Killing process PID {pid} occupying port {port}")
                         run_cmd(["taskkill", "/F", "/PID", pid], check=True, timeout=10)
                         time.sleep(1)
+                        # 再次检查是否成功杀掉
+                        if self._check_port_occupied(port):
+                            logger.warning(f"Port {port} still occupied after kill, retrying...")
+                            # 再次查找并杀掉
+                            result2 = run_cmd(["netstat", "-ano"], check=True, timeout=10)
+                            for line2 in result2.stdout.splitlines():
+                                if f":{port}" in line2 and "LISTENING" in line2:
+                                    parts2 = line2.split()
+                                    if len(parts2) >= 5:
+                                        pid2 = parts2[-1]
+                                        logger.info(f"Retrying kill for PID {pid2} on port {port}")
+                                        run_cmd(["taskkill", "/F", "/PID", pid2], check=True, timeout=10)
+                        else:
+                            logger.info(f"Successfully killed process on port {port}")
                         return
-            logger.info(f"No process found occupying port {port}")
+            logger.info(f"No process found occupying port {port}, skip killing")
         except Exception as e:
             logger.warning(f"Failed to kill port process: {e}")
 
