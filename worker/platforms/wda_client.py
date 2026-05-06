@@ -19,7 +19,7 @@ class WDAClient:
     def __init__(self, base_url: str, timeout: int = 30):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.session = httpx.Client(timeout=timeout)
+        self.session = httpx.Client(timeout=timeout, trust_env=False)
         self._session_id: str | None = None
 
     def health_check(self) -> bool:

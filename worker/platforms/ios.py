@@ -577,7 +577,7 @@ class iOSPlatformManager(PlatformManager):
             # 尝试连接 MJPEG 流验证是否可用
             try:
                 import httpx
-                client = httpx.Client(timeout=5)
+                client = httpx.Client(timeout=5, trust_env=False)
                 # 发送一个简单请求验证流是否可用
                 resp = client.get(f"http://127.0.0.1:{mjpeg_port}", timeout=3)
                 client.close()

@@ -110,7 +110,7 @@ class GoIOSClient:
         """检查 agent 进程是否运行（/health 接口）。"""
         try:
             if not self._http_client:
-                self._http_client = httpx.Client(timeout=5)
+                self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/health")
             return resp.status_code == 200
         except Exception as e:
@@ -121,7 +121,7 @@ class GoIOSClient:
         """检查 agent 是否就绪（/ready 接口，包括设备连接）。"""
         try:
             if not self._http_client:
-                self._http_client = httpx.Client(timeout=5)
+                self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/ready")
             return resp.status_code == 200
         except Exception as e:
@@ -149,7 +149,7 @@ class GoIOSClient:
         """
         try:
             if not self._http_client:
-                self._http_client = httpx.Client(timeout=5)
+                self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/tunnel/{udid}")
             if resp.status_code == 200:
                 return resp.json()
@@ -162,7 +162,7 @@ class GoIOSClient:
         """列出所有已建立的 tunnel。"""
         try:
             if not self._http_client:
-                self._http_client = httpx.Client(timeout=5)
+                self._http_client = httpx.Client(timeout=5, trust_env=False)
             resp = self._http_client.get(f"http://{self.agent_host}:{self.agent_port}/tunnels")
             if resp.status_code == 200:
                 return resp.json()
