@@ -3,7 +3,7 @@
 
 param(
     [string]$Version = "",
-    [string]$PyInstallerOutput = "..\dist\windows\test-worker"
+    [string]$BuildOutput = "..\dist\windows\test-worker"
 )
 
 Write-Host "=========================================="
@@ -27,10 +27,10 @@ if (-not $InnoPath -or -not (Test-Path $InnoPath)) {
     exit 1
 }
 
-# Check PyInstaller output
-$OutputDir = Join-Path $PSScriptRoot $PyInstallerOutput
+# Check build output
+$OutputDir = Join-Path $PSScriptRoot $BuildOutput
 if (-not (Test-Path $OutputDir)) {
-    Write-Error "PyInstaller output not found: $OutputDir"
+    Write-Error "Build output not found: $OutputDir"
     Write-Host "Please run scripts/build_windows.ps1 first"
     exit 1
 }

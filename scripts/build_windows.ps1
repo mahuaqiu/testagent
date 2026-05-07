@@ -98,6 +98,8 @@ $nuitkaArgs = @(
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
     "--include-package-data=perfwin"
+    # uiautomator2 assets (u2.jar, app-uiautomator.apk)
+    "--include-package-data=uiautomator2"
     "--low-memory"
     "--jobs=10"
     # Disable clcache to avoid D8000 errors (cache corruption issues)
@@ -188,6 +190,18 @@ Copy-Item -Path "assets" -Destination "$PackageDir\assets" -Recurse -Force
 Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "config" -Destination "$PackageDir\config" -Recurse -Force
+
+# 复制 minicap 二进制文件（Nuitka --include-data-dir 可能遗漏）
+Write-Host "Copying minicap static files..."
+# Nuitka --include-data-dir 会创建根目录下的目录，但可能不完整
+# 手动复制确保 minicap-shared 目录（包含 .so 文件）也被包含
+$MinicapSrcDir = "worker\platforms\minicap\static"
+$MinicapTargetDir = "$PackageDir\worker\platforms\minicap\static"
+if (-not (Test-Path $MinicapTargetDir)) {
+    New-Item -ItemType Directory -Force -Path $MinicapTargetDir | Out-Null
+}
+Copy-Item -Path "$MinicapSrcDir\*" -Destination $MinicapTargetDir -Recurse -Force
+Write-Host "  minicap files copied successfully"
 
 # Create _internal\config as template backup (for config merging during upgrade)
 Write-Host "Creating _internal\config template..."

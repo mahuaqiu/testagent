@@ -76,9 +76,8 @@ autotest/
 │   └── worker.yaml            # Worker 配置
 │
 ├── scripts/                    # 打包脚本
-│   ├── build_windows.ps1      # Windows 打包
-│   ├── build_mac.sh           # Mac 打包
-│   └── pyinstaller.spec       # PyInstaller 配置
+│   ├── build_windows.ps1      # Windows 打包 (Nuitka)
+│   └── build_mac.sh           # Mac 打包 (Nuitka)
 │
 └── pyproject.toml             # 依赖管理
 ```

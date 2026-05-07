@@ -1,7 +1,7 @@
 """
 打包环境检测工具模块。
 
-支持 Nuitka 和 PyInstaller 两种打包方式。
+支持 Nuitka 打包方式。
 """
 
 import sys
@@ -9,22 +9,17 @@ import os
 
 
 def is_packaged():
-    """检测是否在打包环境中（支持 Nuitka 和 PyInstaller）。
+    """检测是否在 Nuitka 打包环境中。
 
     检测逻辑：
     1. Nuitka 打包后会设置 __compiled__ 属性
-    2. PyInstaller 打包后会设置 sys.frozen = True
-    3. 其他情况一律视为普通 Python 环境
+    2. 其他情况视为普通 Python 环境
 
     Returns:
         bool: True 表示打包环境，False 表示普通 Python 环境
     """
     # Nuitka 打包后会设置 __compiled__ 属性
     if hasattr(sys, '__compiled__'):
-        return True
-
-    # PyInstaller 打包后会设置 sys.frozen = True
-    if getattr(sys, 'frozen', False):
         return True
 
     return False
