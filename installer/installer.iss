@@ -104,10 +104,11 @@ begin
   Exec('taskkill.exe', '/f /im test-worker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   // Use PowerShell to kill ios/adb/ffmpeg processes ONLY from this install directory
+  // Use double quotes in PowerShell for easier Pascal string handling
   PowerShellScript :=
     '$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; ' +
     'foreach ($x in $p) { ' +
-    '  if ($x.Path -like ''' + AppDir + '\*''') { ' +
+    '  if ($x.Path.StartsWith("' + AppDir + '")) { ' +
     '    $x.Kill(); ' +
     '  } ' +
     '}';
