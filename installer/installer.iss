@@ -94,22 +94,14 @@ var
 procedure KillToolsProcesses;
 var
   ResultCode: Integer;
-  PowerShellScript: String;
 begin
-  // Kill test-worker.exe directly (only one instance expected)
-  Log('Killing test-worker.exe...');
+  // Kill all project-related processes with taskkill
+  Log('Killing processes...');
   Exec('taskkill.exe', '/f /im test-worker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-
-  // Use PowerShell to kill processes only from this install directory
-  PowerShellScript :=
-    '$appDir = ''' + ExpandConstant('{app}') + ''';' +
-    'Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase) } | ' +
-    'Stop-Process -Force;';
-
-  Log('Killing tools processes from install directory...');
-  Exec('powershell.exe', '-Command "' + PowerShellScript + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('Tools processes cleanup done.');
+  Exec('taskkill.exe', '/f /im ios.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/f /im adb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/f /im ffmpeg.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Processes killed.');
 end;
 
 // Delete playwright directory to avoid upgrade issues
