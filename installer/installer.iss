@@ -89,6 +89,48 @@ var
   IpEdit, PortEdit, NamespaceEdit, PlatformApiEdit, OcrServiceEdit: TNewEdit;
   CmdIp, CmdPort, CmdNamespace, CmdPlatformApi, CmdOcrService: String;
 
+// Kill processes from tools directory (only those running from install dir)
+procedure KillToolsProcesses;
+var
+  ResultCode: Integer;
+  PowerShellScript: String;
+begin
+  // Use PowerShell to find and kill processes running from install directory
+  // Only kills adb.exe, ios.exe, ffmpeg.exe etc. that are started from {app}\tools\
+  PowerShellScript :=
+    '$toolsDir = ''' + ExpandConstant('{app}\tools') + ''';' +
+    'if (Test-Path $toolsDir) {' +
+    '  $exes = Get-ChildItem -Path $toolsDir -Filter *.exe -Recurse;' +
+    '  foreach ($exe in $exes) {' +
+    '    $name = $exe.Name.Replace('.exe', '''');' +
+    '    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue;' +
+    '    foreach ($p in $procs) {' +
+    '      if ($p.Path -and $p.Path.StartsWith(''' + ExpandConstant('{app}') + ''', [System.StringComparison]::OrdinalIgnoreCase)) {' +
+    '        Stop-Process -Id $p.Id -Force;' +
+    '      }' +
+    '    }' +
+    '  }' +
+    '}';
+
+  Log('Cleaning up tools processes...');
+  Exec('powershell.exe', '-Command "' + PowerShellScript + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Tools processes cleanup done.');
+end;
+
+// Delete playwright directory to avoid upgrade issues
+procedure DeletePlaywrightDir;
+var
+  PlaywrightDir: String;
+begin
+  PlaywrightDir := ExpandConstant('{app}\playwright');
+  if DirExists(PlaywrightDir) then
+  begin
+    Log('Deleting playwright directory: ' + PlaywrightDir);
+    DelTree(PlaywrightDir, True, True, True);
+    Log('Playwright directory deleted.');
+  end;
+end;
+
 function GetCmdParam(Name: String): String;
 var
   I: Integer;
@@ -294,6 +336,15 @@ var
   LineContent: String;
   ResultCode: Integer;
 begin
+  // Pre-install cleanup: kill processes and delete playwright
+  if CurStep = ssInstall then
+  begin
+    Log('Pre-install cleanup starting...');
+    KillToolsProcesses;
+    DeletePlaywrightDir;
+    Log('Pre-install cleanup completed.');
+  end;
+
   ConfigFile := ExpandConstant('{app}\config\worker.yaml');
   TemplateFile := ExpandConstant('{app}\_internal\config\worker.yaml');
 
