@@ -248,6 +248,7 @@ class GUIApp:
         # HTTP Server 状态
         self._server_running = False
         self._server_thread: threading.Thread = None
+        self._uvicorn_server: uvicorn.Server = None  # 保存 server 实例
 
         # 打印启动信息
         logger.info("=" * 50)
@@ -347,8 +348,8 @@ class GUIApp:
                 log_config=log_config,
                 access_log=False,
             )
-            server = uvicorn.Server(config)
-            server.run()
+            self._uvicorn_server = uvicorn.Server(config)
+            self._uvicorn_server.run()
         except Exception as e:
             logger.error(f"HTTP Server error: {e}")
             self._server_running = False
@@ -360,6 +361,11 @@ class GUIApp:
             logger.warning("Worker not running")
             return
 
+        # 先停止 uvicorn server
+        if self._uvicorn_server:
+            logger.info("Stopping uvicorn server...")
+            self._uvicorn_server.should_exit = True
+
         if self.worker:
             try:
                 self.worker.stop()
@@ -368,6 +374,7 @@ class GUIApp:
 
         self.worker = None
         self._server_running = False
+        self._uvicorn_server = None
 
         logger.info("Worker stopped")
         self.tray_manager.update_tooltip()

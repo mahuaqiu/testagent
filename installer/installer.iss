@@ -96,20 +96,18 @@ var
   ResultCode: Integer;
   PowerShellScript: String;
 begin
-  // Method 1: Use taskkill to kill processes directly
-  Log('Killing processes with taskkill...');
+  // Kill test-worker.exe directly (only one instance expected)
+  Log('Killing test-worker.exe...');
   Exec('taskkill.exe', '/f /im test-worker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill.exe', '/f /im ios.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill.exe', '/f /im adb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec('taskkill.exe', '/f /im ffmpeg.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('taskkill done.');
 
-  // Method 2: Use PowerShell to find and kill any remaining processes from install dir
+  // Use PowerShell to kill processes only from this install directory
   PowerShellScript :=
     '$appDir = ''' + ExpandConstant('{app}') + ''';' +
-    'Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force;';
+    'Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase) } | ' +
+    'Stop-Process -Force;';
 
-  Log('Cleaning up remaining processes from install directory...');
+  Log('Killing tools processes from install directory...');
   Exec('powershell.exe', '-Command "' + PowerShellScript + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('Tools processes cleanup done.');
 end;
