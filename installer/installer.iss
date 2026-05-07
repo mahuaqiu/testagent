@@ -87,6 +87,7 @@ var
   ConfigPage: TInputQueryWizardPage;
   IpLabel, PortLabel, NamespaceLabel, PlatformApiLabel, OcrServiceLabel: TLabel;
   IpEdit, PortEdit, NamespaceEdit, PlatformApiEdit, OcrServiceEdit: TNewEdit;
+  DiscoverAndroidCheckbox, DiscoverIosCheckbox: TNewCheckBox;
   CmdIp, CmdPort, CmdNamespace, CmdPlatformApi, CmdOcrService: String;
 
 // Kill processes from tools directory (only those running from install dir)
@@ -325,6 +326,22 @@ begin
     OcrServiceEdit.Text := CmdOcrService
   else
     OcrServiceEdit.Text := 'http://192.168.0.102:9021';
+
+  // Android 设备发现
+  DiscoverAndroidCheckbox := TNewCheckBox.Create(ConfigPage);
+  DiscoverAndroidCheckbox.Parent := ConfigPage.Surface;
+  DiscoverAndroidCheckbox.Caption := '发现 Android 设备';
+  DiscoverAndroidCheckbox.Left := ScaleX(0);
+  DiscoverAndroidCheckbox.Top := ScaleY(220);
+  DiscoverAndroidCheckbox.Checked := False;
+
+  // iOS 设备发现
+  DiscoverIosCheckbox := TNewCheckBox.Create(ConfigPage);
+  DiscoverIosCheckbox.Parent := ConfigPage.Surface;
+  DiscoverIosCheckbox.Caption := '发现 iOS 设备';
+  DiscoverIosCheckbox.Left := ScaleX(180);
+  DiscoverIosCheckbox.Top := ScaleY(220);
+  DiscoverIosCheckbox.Checked := False;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -387,6 +404,24 @@ begin
           // Replace OCR service URL
           if Pos('ocr_service: "http://192.168.0.102:9021"', LineContent) > 0 then
             LineContent := '  ocr_service: "' + OcrServiceEdit.Text + '"   # OCR service URL';
+
+          // Replace discover_android_devices
+          if Pos('discover_android_devices:', LineContent) > 0 then
+          begin
+            if DiscoverAndroidCheckbox.Checked then
+              LineContent := '  discover_android_devices: true   # 是否发现 Android 设备（关闭则跳过所有 Android 相关逻辑）'
+            else
+              LineContent := '  discover_android_devices: false  # 是否发现 Android 设备（关闭则跳过所有 Android 相关逻辑）';
+          end;
+
+          // Replace discover_ios_devices
+          if Pos('discover_ios_devices:', LineContent) > 0 then
+          begin
+            if DiscoverIosCheckbox.Checked then
+              LineContent := '  discover_ios_devices: true       # 是否发现 iOS 设备（关闭则跳过所有 iOS 相关逻辑）'
+            else
+              LineContent := '  discover_ios_devices: false      # 是否发现 iOS 设备（关闭则跳过所有 iOS 相关逻辑）';
+          end;
 
           ConfigLines[LineIndex] := LineContent;
         end;
