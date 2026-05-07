@@ -6,7 +6,8 @@
 
 import logging
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from worker.config import WorkerConfig
 
@@ -31,21 +32,21 @@ class DeviceMonitor:
         self.retry_interval = config.service_retry_interval
 
         # 设备列表
-        self._android_devices: List[Dict[str, Any]] = []
-        self._ios_devices: List[Dict[str, Any]] = []
-        self._faulty_android_devices: List[Dict[str, Any]] = []
-        self._faulty_ios_devices: List[Dict[str, Any]] = []
+        self._android_devices: list[dict[str, Any]] = []
+        self._ios_devices: list[dict[str, Any]] = []
+        self._faulty_android_devices: list[dict[str, Any]] = []
+        self._faulty_ios_devices: list[dict[str, Any]] = []
 
         # 平台管理器引用
-        self._android_manager: Optional[Any] = None
-        self._ios_manager: Optional[Any] = None
+        self._android_manager: Any | None = None
+        self._ios_manager: Any | None = None
 
         # 线程控制
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # 回调
-        self.on_device_change: Optional[Callable[[Dict], None]] = None
+        self.on_device_change: Callable[[dict], None] | None = None
 
     def set_platform_managers(self, android_manager=None, ios_manager=None) -> None:
         """设置平台管理器引用。"""
@@ -138,7 +139,7 @@ class DeviceMonitor:
             except Exception as e:
                 logger.error(f"iOS device detection failed: {e}")
 
-    def _add_device(self, platform: str, device_info: Dict[str, Any]) -> None:
+    def _add_device(self, platform: str, device_info: dict[str, Any]) -> None:
         """添加新设备到异常列表，立即尝试启动服务。"""
         if platform == "android":
             self._faulty_android_devices.append(device_info)
@@ -148,11 +149,69 @@ class DeviceMonitor:
         self._try_start_service(platform, device_info["udid"])
 
     def _try_start_service(self, platform: str, udid: str) -> None:
-        """尝试启动设备服务。"""
+        """尝试启动设备服务。
+
+        优化流程：
+        1. 先检查物理设备是否连接
+        2. 未连接则直接清理端口并从 faulty 列表移除（不进入重连流程）
+        3. 已连接则正常尝试启动服务
+        """
         manager = self._android_manager if platform == "android" else self._ios_manager
         if not manager:
             return
 
+        # ===== 前置物理检测：设备不连接则直接清理 =====
+        physical_udids = set()
+        try:
+            if platform == "android":
+                from worker.discovery.android import AndroidDiscoverer
+                devices = AndroidDiscoverer.discover()
+                physical_udids = {d.udid for d in devices}
+            else:
+                from worker.discovery.ios import iOSDiscoverer
+                physical_udids = set(iOSDiscoverer.list_devices())
+        except Exception as e:
+            logger.warning(f"Physical detection failed for {platform}: {e}")
+
+        # 设备不在物理列表中：直接清理并从 faulty 列表移除
+        if physical_udids and udid not in physical_udids:
+            logger.warning(f"Device {udid} not physically connected, cleaning up and removing from faulty list")
+
+            # 清理端口和资源
+            if platform == "android":
+                # Android: 清理 minicap 实例
+                if hasattr(manager, '_minicap_instances'):
+                    minicap = manager._minicap_instances.get(udid)
+                    if minicap:
+                        try:
+                            minicap.stop_stream()
+                            del manager._minicap_instances[udid]
+                            logger.info(f"Android minicap cleaned up: {udid}")
+                        except Exception as e:
+                            logger.warning(f"Failed to cleanup minicap for {udid}: {e}")
+
+                # 清理设备客户端缓存
+                if hasattr(manager, 'mark_device_faulty'):
+                    manager.mark_device_faulty(udid)
+
+                # 从 faulty 列表移除
+                self._faulty_android_devices = [
+                    d for d in self._faulty_android_devices if d["udid"] != udid
+                ]
+            else:
+                # iOS: 清理端口转发进程和更新持久化文件
+                if hasattr(manager, 'cleanup_disconnected_device'):
+                    manager.cleanup_disconnected_device(udid)
+
+                # 从 faulty 列表移除
+                self._faulty_ios_devices = [
+                    d for d in self._faulty_ios_devices if d["udid"] != udid
+                ]
+
+            logger.info(f"Device {udid} removed from faulty list (not physically connected)")
+            return  # 不进入重连流程
+
+        # ===== 设备物理连接，正常尝试启动服务 =====
         for attempt in range(self.retry_count):
             status, message = manager.ensure_device_service(udid)
 
@@ -240,19 +299,38 @@ class DeviceMonitor:
         close_screen_manager(udid)
 
         if platform == "android":
+            # Android: 清理 minicap 实例
+            if self._android_manager and hasattr(self._android_manager, '_minicap_instances'):
+                minicap = self._android_manager._minicap_instances.get(udid)
+                if minicap:
+                    try:
+                        minicap.stop_stream()
+                        del self._android_manager._minicap_instances[udid]
+                        logger.info(f"Android minicap cleaned up: {udid}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup minicap for {udid}: {e}")
+
+            # 清理设备客户端缓存
+            if self._android_manager and hasattr(self._android_manager, 'mark_device_faulty'):
+                self._android_manager.mark_device_faulty(udid)
+
             # 从正常列表移除
             self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
             # 添加到 faulty 列表（避免重复）
             if udid not in [d["udid"] for d in self._faulty_android_devices]:
                 self._faulty_android_devices.append({"udid": udid})
         else:
+            # iOS: 清理端口转发进程和更新持久化文件
+            if self._ios_manager and hasattr(self._ios_manager, 'cleanup_disconnected_device'):
+                self._ios_manager.cleanup_disconnected_device(udid)
+
             # 从正常列表移除
             self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
             # 添加到 faulty 列表（避免重复）
             if udid not in [d["udid"] for d in self._faulty_ios_devices]:
                 self._faulty_ios_devices.append({"udid": udid})
 
-    def get_all_devices(self) -> Dict[str, Any]:
+    def get_all_devices(self) -> dict[str, Any]:
         """获取所有设备状态。"""
         return {
             "android": self._android_devices,
@@ -261,7 +339,7 @@ class DeviceMonitor:
             "faulty_ios": self._faulty_ios_devices,
         }
 
-    def get_online_devices(self, platform: str) -> List[str]:
+    def get_online_devices(self, platform: str) -> list[str]:
         """获取在线设备 UDID 列表。"""
         if platform == "android":
             return [d["udid"] for d in self._android_devices]

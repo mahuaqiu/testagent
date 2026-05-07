@@ -10,10 +10,11 @@ import os
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
+from common.packaging import get_base_dir
 from common.utils import run_cmd
-from common.packaging import is_packaged, get_base_dir
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
@@ -90,7 +91,7 @@ class iOSPlatformManager(PlatformManager):
         self.wda_xctest_config = config.wda_xctest_config or "WebDriverAgentRunner.xctest"
 
         # GoIOSClient 实例
-        self._go_ios: Optional[GoIOSClient] = None
+        self._go_ios: GoIOSClient | None = None
 
         # 设备状态管理
         self._device_wda: dict[str, dict] = {}  # udid -> {port, mjpeg_port, process, forward_process}
@@ -104,7 +105,7 @@ class iOSPlatformManager(PlatformManager):
         self._agent_process: subprocess.Popen | None = None
 
         # Agent 就绪回调（供外部设置，如 Worker 设置触发设备发现）
-        self._on_agent_ready: Optional[Callable[[], None]] = None
+        self._on_agent_ready: Callable[[], None] | None = None
 
         # 设备服务启动锁（防止重复启动）
         self._service_locks: dict[str, threading.Lock] = {}
@@ -128,7 +129,7 @@ class iOSPlatformManager(PlatformManager):
         """加载端口映射持久化文件。"""
         try:
             if os.path.exists(self._ports_file):
-                with open(self._ports_file, "r", encoding="utf-8") as f:
+                with open(self._ports_file, encoding="utf-8") as f:
                     data = json.load(f)
                     logger.info(f"Loaded ports mapping from {self._ports_file}: {data}")
                     return data
@@ -211,7 +212,7 @@ class iOSPlatformManager(PlatformManager):
                         if self._go_ios.check_agent_health():
                             break
                         time.sleep(1)
-                    logger.info(f"Agent health check completed for iOS 17+ devices")
+                    logger.info("Agent health check completed for iOS 17+ devices")
 
                 # 如果没有 iOS 17+ 设备，杀掉 tunnel 进程（节省资源）
                 if not ios17_plus_udids:
@@ -396,7 +397,7 @@ class iOSPlatformManager(PlatformManager):
         self._kill_agent_processes()
 
         # 6. 启动 agent
-        logger.info(f"Starting tunnel agent for iOS 17+ devices...")
+        logger.info("Starting tunnel agent for iOS 17+ devices...")
         self._agent_process = self._go_ios.start_agent()
 
         # 优化：启动后等5秒再检查是否启动成功
@@ -475,7 +476,7 @@ class iOSPlatformManager(PlatformManager):
         mjpeg_port = self.mjpeg_base_port + index
         return wda_port, mjpeg_port
 
-    def _get_tunnel_info(self, udid: str, timeout: int = 30) -> Optional[dict]:
+    def _get_tunnel_info(self, udid: str, timeout: int = 30) -> dict | None:
         """获取 iOS 17+ 设备的 tunnel 信息（等待建立）。"""
         # 先检查是否已缓存
         if udid in self._device_tunnel_info:
@@ -577,7 +578,7 @@ class iOSPlatformManager(PlatformManager):
                                         logger.info(f"MJPEG forward process {mjpeg_process.pid} is alive")
                                     else:
                                         # MJPEG 进程不可用，重新启动
-                                        logger.warning(f"MJPEG forward process not alive, restarting...")
+                                        logger.warning("MJPEG forward process not alive, restarting...")
                                         self._kill_port_process(existing_mjpeg_port)
                                         mjpeg_process = self._start_mjpeg_forward(udid, existing_mjpeg_port)
                                         wda_info["mjpeg_process"] = mjpeg_process
@@ -587,10 +588,10 @@ class iOSPlatformManager(PlatformManager):
                             except Exception as e:
                                 logger.warning(f"WDA probe failed on port {existing_port}: {e}, will restart")
                     else:
-                        logger.warning(f"WDA forward process not alive, will restart")
+                        logger.warning("WDA forward process not alive, will restart")
 
                 # 进程不可用，清理异常进程
-                logger.info(f"Existing processes not available, cleaning up...")
+                logger.info("Existing processes not available, cleaning up...")
                 if existing_port:
                     self._kill_port_process(existing_port)
                 if existing_mjpeg_port:
@@ -771,7 +772,7 @@ class iOSPlatformManager(PlatformManager):
             base_url = f"http://127.0.0.1:{wda_port}"
             client = WDAClient(base_url)
 
-            logger.info(f"WDA port forwarding established, waiting for WDA service ready...")
+            logger.info("WDA port forwarding established, waiting for WDA service ready...")
             if client.wait_ready(timeout=30):
                 self._device_wda[udid] = {
                     "port": wda_port,
@@ -941,6 +942,31 @@ class iOSPlatformManager(PlatformManager):
             del self._device_clients[udid]
         self._stop_wda(udid)
         logger.info(f"iOS device marked faulty: {udid}")
+
+    def cleanup_disconnected_device(self, udid: str) -> None:
+        """清理已物理断开的设备（杀掉端口转发进程、清理缓存、更新持久化文件）。
+
+        Args:
+            udid: 已断开的设备 UDID
+
+        用于 DeviceMonitor 在检测到设备物理断开时调用。
+        """
+        self._cleanup_device_ports(udid)
+        # 更新持久化文件：移除已断开设备的端口映射
+        saved_ports = self._load_ports_mapping()
+        if udid in saved_ports:
+            del saved_ports[udid]
+            try:
+                # 确保 data 目录存在
+                data_dir = os.path.dirname(self._ports_file)
+                if not os.path.exists(data_dir):
+                    os.makedirs(data_dir, exist_ok=True)
+                with open(self._ports_file, "w", encoding="utf-8") as f:
+                    json.dump(saved_ports, f, indent=2)
+                logger.info(f"Updated ios_ports.json: removed {udid}")
+            except Exception as e:
+                logger.warning(f"Failed to update ios_ports.json: {e}")
+        logger.info(f"iOS device cleaned up: {udid}")
 
     def get_online_devices(self) -> list[str]:
         """获取在线设备列表。"""
@@ -1185,7 +1211,7 @@ class iOSPlatformManager(PlatformManager):
                 raise RuntimeError(f"Send keys failed: {text}")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None) -> None:
         """滑动，支持 duration 参数。
 
         Args:

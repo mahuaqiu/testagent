@@ -17,7 +17,20 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from common.request_context import clear_request_id, generate_request_id, set_request_id
 from worker.config import load_config_version, merge_config_with_ip_protection, save_config_with_version
+from worker.log_query import (
+    LogQueryError,
+    query_by_lines,
+    query_by_request_id,
+    query_by_time_range,
+    validate_query_params,
+)
+from worker.performance_monitor import (
+    CollectStartRequest,
+    CollectStopRequest,
+    get_collector,
+)
 from worker.tools import (
     get_script_version,
     save_script,
@@ -27,25 +40,6 @@ from worker.tools import (
 )
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
-
-from worker.log_query import (
-    query_by_lines,
-    query_by_request_id,
-    query_by_time_range,
-    validate_query_params,
-    LogQueryError,
-)
-
-from worker.performance_monitor import (
-    CollectStartRequest,
-    CollectStopRequest,
-    CollectStatus,
-    get_collector,
-    ProcessInfo,
-    TargetProcess,
-)
-
-from common.request_context import generate_request_id, set_request_id, clear_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -701,7 +695,7 @@ async def update_worker_script(request: ScriptUpdateRequest):
                 status_code=400,
                 content={"status": "error", "message": f"脚本保存失败: {e}"}
             )
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Script save IO failed: {e}")
             return JSONResponse(
                 status_code=500,
@@ -916,17 +910,12 @@ async def screen_stream(
 
     try:
         # 获取 ScreenManager
-        from worker.screen.manager import get_screen_manager, _screen_managers
-        from worker.screen.frame_source import (
-            WindowsFrameSource,
-            MJPEGFrameSource,
-            MinicapFrameSource,
-        )
+        from worker.screen.manager import _screen_managers, get_screen_manager
 
         # iOS/Android: 检查设备是否已注册（有 WDA/minicap 服务）
         if platform == "ios":
             if not worker or not worker.ios_manager:
-                logger.warning(f"WebSocket rejected: iOS platform not initialized")
+                logger.warning("WebSocket rejected: iOS platform not initialized")
                 await websocket.close(code=1008, reason="iOS platform not initialized")
                 return
             wda_client = worker.ios_manager._device_clients.get(device_id)
@@ -936,7 +925,7 @@ async def screen_stream(
                 return
         elif platform == "android":
             if not worker or not worker.android_manager:
-                logger.warning(f"WebSocket rejected: Android platform not initialized")
+                logger.warning("WebSocket rejected: Android platform not initialized")
                 await websocket.close(code=1008, reason="Android platform not initialized")
                 return
             minicap = worker.android_manager._minicap_instances.get(device_id)
@@ -977,8 +966,16 @@ async def screen_stream(
     finally:
         # 确保减少连接计数
         _ws_connections[conn_key] = _ws_connections.get(conn_key, 1) - 1
+
+        # 当连接计数降至 0 时，关闭 ScreenManager 以停止后台帧捕获线程
         if _ws_connections[conn_key] <= 0:
             del _ws_connections[conn_key]
+            # 关闭 ScreenManager（停止后台线程，避免资源泄漏）
+            from worker.screen.manager import close_screen_manager
+            close_screen_manager(conn_key)
+            log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+            logger.info(f"ScreenManager closed: conn_key={conn_key}, last WebSocket disconnected")
+
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
 
@@ -995,9 +992,9 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         FrameSource 实例
     """
     from worker.screen.frame_source import (
-        WindowsFrameSource,
-        MJPEGFrameSource,
         MinicapFrameSource,
+        MJPEGFrameSource,
+        WindowsFrameSource,
     )
 
     if platform == "ios":
