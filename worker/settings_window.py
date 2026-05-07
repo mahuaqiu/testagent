@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QComboBox,
     QPushButton,
+    QCheckBox,
     QGridLayout,
     QFrame,
     QWidget,
@@ -116,7 +117,7 @@ class SettingsWindow(QDialog):
         """设置界面。"""
         self.setWindowTitle("设置")
         self.setMinimumWidth(500)
-        self.setMinimumHeight(420)
+        self.setMinimumHeight(520)
         self.setModal(True)
 
         # 移除右上角问号按钮，保留关闭按钮
@@ -195,6 +196,18 @@ class SettingsWindow(QDialog):
         self.log_level_combo = QComboBox()
         self.log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         grid.addWidget(self.log_level_combo, row, 1)
+        row += 1
+
+        # Android 设备发现
+        self.discover_android_checkbox = QCheckBox("发现 Android 设备")
+        self.discover_android_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        grid.addWidget(self.discover_android_checkbox, row, 0)
+        row += 1
+
+        # iOS 设备发现
+        self.discover_ios_checkbox = QCheckBox("发现 iOS 设备")
+        self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        grid.addWidget(self.discover_ios_checkbox, row, 0)
 
         layout.addLayout(grid)
 
@@ -330,6 +343,13 @@ class SettingsWindow(QDialog):
         if index >= 0:
             self.log_level_combo.setCurrentIndex(index)
 
+        # 设备发现开关
+        discover_android = worker.get("discover_android_devices", False)
+        self.discover_android_checkbox.setChecked(discover_android)
+
+        discover_ios = worker.get("discover_ios_devices", False)
+        self.discover_ios_checkbox.setChecked(discover_ios)
+
     def _validate(self) -> bool:
         """验证输入。"""
         port_text = self.port_input.text().strip()
@@ -412,6 +432,8 @@ class SettingsWindow(QDialog):
             original_content = self._update_yaml_value(original_content, "platform_api", self.platform_api_input.text().strip())
             original_content = self._update_yaml_value(original_content, "ocr_service", self.ocr_service_input.text().strip())
             original_content = self._update_yaml_value(original_content, "level", self.log_level_combo.currentText())
+            original_content = self._update_yaml_value(original_content, "discover_android_devices", "true" if self.discover_android_checkbox.isChecked() else "false")
+            original_content = self._update_yaml_value(original_content, "discover_ios_devices", "true" if self.discover_ios_checkbox.isChecked() else "false")
 
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
@@ -428,6 +450,8 @@ class SettingsWindow(QDialog):
             self._config["worker"]["ip"] = self.ip_input.text().strip() or None
             self._config["worker"]["port"] = int(self.port_input.text().strip())
             self._config["worker"]["namespace"] = self.namespace_input.text().strip()
+            self._config["worker"]["discover_android_devices"] = self.discover_android_checkbox.isChecked()
+            self._config["worker"]["discover_ios_devices"] = self.discover_ios_checkbox.isChecked()
 
             self._config.setdefault("external_services", {})
             self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()
