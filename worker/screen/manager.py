@@ -38,7 +38,11 @@ def get_screen_manager(device_id: str, frame_source: FrameSource) -> "ScreenMana
 
 
 def close_screen_manager(device_id: str) -> None:
-    """关闭指定设备的 ScreenManager。"""
+    """关闭指定设备的 ScreenManager。
+
+    注意：只关闭 HTTP 流连接和后台线程，不清理端口转发进程。
+    端口转发进程的生命周期由 iOSPlatformManager 管理，与设备连接状态绑定。
+    """
     if device_id in _screen_managers:
         manager = _screen_managers[device_id]
         manager.stop()

@@ -537,9 +537,16 @@ class iOSPlatformManager(PlatformManager):
                 physical_udids = set(iOSDiscoverer.list_devices())
             except Exception as e:
                 logger.warning(f"Failed to get physical device list: {e}")
+                # 设备发现失败时，直接返回错误（不继续执行）
+                return ("faulty", f"Failed to get device list: {e}")
 
             # 0.1 检查请求的设备是否在物理列表中
-            if physical_udids and udid not in physical_udids:
+            if not physical_udids:
+                # 物理设备列表为空，直接返回错误
+                logger.warning(f"No physical devices found, device {udid} may be offline")
+                return ("faulty", f"No physical devices found, device {udid} may be offline")
+
+            if udid not in physical_udids:
                 logger.warning(f"Device {udid} not found in physical devices: {physical_udids}")
                 return ("faulty", f"Device {udid} not physically connected")
 
@@ -629,13 +636,21 @@ class iOSPlatformManager(PlatformManager):
                     self._kill_port_process(wda_port)
 
             # 0.5 获取设备版本和型号
-            device_version = self._get_device_version(udid)
-            device_info = self._go_ios.get_device_info(udid) if self._go_ios else {}
-            product_type = device_info.get("model", "")
-            if product_type:
-                self._device_product_types[udid] = product_type
-                is_face_id = product_type in self.FACE_ID_MODELS
-                logger.info(f"Device {udid}: product_type={product_type}, Face ID={is_face_id}")
+            device_version = ""
+            product_type = ""
+            try:
+                device_version = self._get_device_version(udid)
+                device_info = self._go_ios.get_device_info(udid) if self._go_ios else None
+                if device_info:
+                    product_type = device_info.get("model", "")
+                    if product_type:
+                        self._device_product_types[udid] = product_type
+                        is_face_id = product_type in self.FACE_ID_MODELS
+                        logger.info(f"Device {udid}: product_type={product_type}, Face ID={is_face_id}")
+                else:
+                    logger.warning(f"Failed to get device info for {udid} (device may be offline)")
+            except Exception as e:
+                logger.warning(f"Error getting device info for {udid}: {e}")
 
             # 1. iOS 17+ 设备获取 tunnel 信息
             if device_version and self._is_ios17_plus(device_version):
@@ -739,9 +754,21 @@ class iOSPlatformManager(PlatformManager):
                 try:
                     import httpx
                     probe_client = httpx.Client(timeout=5, trust_env=False)
-                    resp = probe_client.get(f"http://127.0.0.1:{mjpeg_port}", timeout=3)
-                    probe_client.close()
-                    logger.info(f"Port {mjpeg_port} has running MJPEG, will reuse existing port")
+                    # 验证是否返回实际的 MJPEG 数据
+                    with probe_client.stream("GET", f"http://127.0.0.1:{mjpeg_port}", timeout=3) as response:
+                        if response.status_code == 200:
+                            chunk = next(response.iter_bytes(chunk_size=1024), None)
+                            if chunk and (b"BoundaryString" in chunk or len(chunk) > 100):
+                                logger.info(
+                                    f"Port {mjpeg_port} has running MJPEG "
+                                    "with valid data, will reuse existing port"
+                                )
+                            else:
+                                logger.warning(f"Port {mjpeg_port} returned empty or invalid data, killing process")
+                                self._kill_port_process(mjpeg_port)
+                        else:
+                            logger.warning(f"Port {mjpeg_port} returned status {response.status_code}, killing process")
+                            self._kill_port_process(mjpeg_port)
                 except Exception as e:
                     logger.warning(f"Port {mjpeg_port} occupied but not accessible: {e}, killing process")
                     self._kill_port_process(mjpeg_port)
@@ -815,18 +842,32 @@ class iOSPlatformManager(PlatformManager):
         """
         # 检查端口是否被监听
         if self._check_port_occupied(mjpeg_port):
-            # 尝试连接 MJPEG 流验证是否可用
+            # 尝试连接 MJPEG 流并读取实际数据验证是否可用
+            # 注意：MJPEG 流是 multipart 格式，需要读取到 boundary 才认为可用
             try:
                 import httpx
                 client = httpx.Client(timeout=5, trust_env=False)
-                # 发送一个简单请求验证流是否可用
-                resp = client.get(f"http://127.0.0.1:{mjpeg_port}", timeout=3)
-                client.close()
-                # 只要能连接就认为可用（MJPEG 流会持续返回数据）
-                logger.info(f"MJPEG port {mjpeg_port} is accessible, no need to restart")
-                # 返回已有的进程引用（可能为 None，但端口可用）
-                wda_info = self._device_wda.get(udid, {})
-                return wda_info.get("mjpeg_process")
+                # 使用 stream=True 获取流式响应
+                with client.stream("GET", f"http://127.0.0.1:{mjpeg_port}", timeout=3) as response:
+                    if response.status_code == 200:
+                        # 尝试读取前 1024 字节，验证是否真的返回 MJPEG 数据
+                        # MJPEG 流以 --BoundaryString 开头
+                        chunk = next(response.iter_bytes(chunk_size=1024), None)
+                        if chunk and b"BoundaryString" in chunk or len(chunk) > 100:
+                            logger.info(
+                                f"MJPEG port {mjpeg_port} is accessible "
+                                "with valid data, reusing existing forward"
+                            )
+                            client.close()
+                            # 返回已有的进程引用（可能为 None，但端口可用）
+                            wda_info = self._device_wda.get(udid, {})
+                            return wda_info.get("mjpeg_process")
+                        else:
+                            logger.warning(f"MJPEG port {mjpeg_port} returned empty or invalid data, will restart")
+                            client.close()
+                    else:
+                        logger.warning(f"MJPEG port {mjpeg_port} returned status {response.status_code}, will restart")
+                        client.close()
             except Exception as e:
                 # ⚠️ 关键修复：检查设备是否正在执行任务
                 # 如果设备忙碌，不要杀掉端口转发进程，避免中断正在执行的任务
