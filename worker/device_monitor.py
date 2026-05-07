@@ -144,13 +144,17 @@ class DeviceMonitor:
                 logger.error(f"iOS device detection failed: {e}")
 
     def _add_device(self, platform: str, device_info: dict[str, Any]) -> None:
-        """添加新设备到异常列表，立即尝试启动服务。"""
+        """添加新设备到异常列表。
+
+        注意：不在这里启动服务，由 _maintain_services() 统一处理，
+        避免重复调用 _try_start_service()。
+        """
         if platform == "android":
             self._faulty_android_devices.append(device_info)
+            logger.info(f"New Android device added to faulty list: {device_info['udid']}")
         else:
             self._faulty_ios_devices.append(device_info)
-
-        self._try_start_service(platform, device_info["udid"])
+            logger.info(f"New iOS device added to faulty list: {device_info['udid']}")
 
     def _try_start_service(self, platform: str, udid: str) -> None:
         """尝试启动设备服务。

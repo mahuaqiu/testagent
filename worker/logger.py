@@ -36,6 +36,20 @@ def get_default_log_path() -> str:
     return os.path.join(get_app_dir(), "worker.log")
 
 
+def _clear_all_loggers() -> None:
+    """清除所有 logger 的处理器（包括 root logger 和子 logger）。"""
+    # 清除 root logger
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+
+    # 清除所有已创建的子 logger
+    # logging.Logger.manager.loggerDict 包含所有已创建的 logger
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        logger_instance = logging.getLogger(name)
+        if hasattr(logger_instance, 'handlers'):
+            logger_instance.handlers.clear()
+
+
 def setup_logging(
     level: str = "INFO",
     log_file: Optional[str] = None,
@@ -67,11 +81,11 @@ def setup_logging(
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
 
+    # 清除所有 logger 的处理器（避免重复添加）
+    _clear_all_loggers()
+
     # 获取根日志器
     root_logger = logging.getLogger()
-
-    # 清除现有处理器（避免重复添加）
-    root_logger.handlers.clear()
 
     # 设置日志级别
     log_level = getattr(logging, level.upper(), logging.INFO)
