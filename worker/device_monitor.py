@@ -27,6 +27,8 @@ class DeviceMonitor:
 
     def __init__(self, config: WorkerConfig):
         self.config = config
+        self.discover_android = config.discover_android_devices
+        self.discover_ios = config.discover_ios_devices
         self.check_interval = config.device_check_interval
         self.retry_count = config.service_retry_count
         self.retry_interval = config.service_retry_interval
@@ -50,8 +52,10 @@ class DeviceMonitor:
 
     def set_platform_managers(self, android_manager=None, ios_manager=None) -> None:
         """设置平台管理器引用。"""
-        self._android_manager = android_manager
-        self._ios_manager = ios_manager
+        if self.discover_android:
+            self._android_manager = android_manager
+        if self.discover_ios:
+            self._ios_manager = ios_manager
 
     def start(self) -> None:
         """启动监控。"""
@@ -99,7 +103,7 @@ class DeviceMonitor:
     def _detect_physical_devices(self) -> None:
         """检测物理设备连接。"""
         # Android 设备检测
-        if self._android_manager:
+        if self._android_manager and self.discover_android:
             try:
                 from worker.discovery.android import AndroidDiscoverer
                 devices = AndroidDiscoverer.discover()
@@ -119,7 +123,7 @@ class DeviceMonitor:
                 logger.error(f"Android device detection failed: {e}")
 
         # iOS 设备检测
-        if self._ios_manager:
+        if self._ios_manager and self.discover_ios:
             try:
                 from worker.discovery.ios import iOSDiscoverer
                 devices = iOSDiscoverer.discover()
@@ -245,11 +249,13 @@ class DeviceMonitor:
 
     def _maintain_services(self) -> None:
         """维护服务状态，检查异常设备恢复。"""
-        for device in self._faulty_android_devices[:]:
-            self._try_start_service("android", device["udid"])
+        if self.discover_android:
+            for device in self._faulty_android_devices[:]:
+                self._try_start_service("android", device["udid"])
 
-        for device in self._faulty_ios_devices[:]:
-            self._try_start_service("ios", device["udid"])
+        if self.discover_ios:
+            for device in self._faulty_ios_devices[:]:
+                self._try_start_service("ios", device["udid"])
 
         self._check_online_devices()
 
@@ -259,7 +265,7 @@ class DeviceMonitor:
         physical_android_udids = set()
         physical_ios_udids = set()
 
-        if self._android_manager:
+        if self._android_manager and self.discover_android:
             try:
                 from worker.discovery.android import AndroidDiscoverer
                 devices = AndroidDiscoverer.discover()
@@ -267,7 +273,7 @@ class DeviceMonitor:
             except Exception as e:
                 logger.error(f"Android physical detection failed: {e}")
 
-        if self._ios_manager:
+        if self._ios_manager and self.discover_ios:
             try:
                 from worker.discovery.ios import iOSDiscoverer
                 physical_ios_udids = set(iOSDiscoverer.list_devices())
@@ -275,7 +281,7 @@ class DeviceMonitor:
                 logger.error(f"iOS physical detection failed: {e}")
 
         # 检查 Android 设备
-        if self._android_manager:
+        if self._android_manager and self.discover_android:
             for device in self._android_devices[:]:
                 udid = device["udid"]
                 # 物理检测优先：设备不在物理列表中则标记离线
@@ -284,7 +290,7 @@ class DeviceMonitor:
                     logger.warning(f"Android device physically disconnected: {udid}")
 
         # 检查 iOS 设备
-        if self._ios_manager:
+        if self._ios_manager and self.discover_ios:
             for device in self._ios_devices[:]:
                 udid = device["udid"]
                 # 物理检测优先：设备不在物理列表中则标记离线
