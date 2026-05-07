@@ -103,7 +103,7 @@ begin
     'if (Test-Path $toolsDir) {' +
     '  $exes = Get-ChildItem -Path $toolsDir -Filter *.exe -Recurse;' +
     '  foreach ($exe in $exes) {' +
-    '    $name = $exe.Name.Replace('.exe', '''');' +
+    '    $name = $exe.Name.Replace(''.exe'', '''');' +
     '    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue;' +
     '    foreach ($p in $procs) {' +
     '      if ($p.Path -and $p.Path.StartsWith(''' + ExpandConstant('{app}') + ''', [System.StringComparison]::OrdinalIgnoreCase)) {' +
