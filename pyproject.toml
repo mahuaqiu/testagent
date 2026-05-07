@@ -10,7 +10,7 @@ dependencies = [
     "httpx>=0.24.0",
 
     # Web 平台
-    "playwright>=1.40",
+    "playwright==1.58.0",
 
     # 移动端平台
     "uiautomator2>=3.0",
