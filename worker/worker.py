@@ -207,6 +207,12 @@ class Worker:
 
         # 4. 启动移动端平台管理器（必须在设备发现之前，否则 GoIOSClient 未初始化）
         for platform in ("android", "ios"):
+            # 根据开关跳过
+            if platform == "android" and not self.config.discover_android_devices:
+                continue
+            if platform == "ios" and not self.config.discover_ios_devices:
+                continue
+
             manager = self.platform_managers.get(platform)
             if manager:
                 try:
@@ -286,18 +292,24 @@ class Worker:
     def _discover_mobile_devices(self) -> None:
         """发现移动设备。"""
         # Android 设备
-        if AndroidDiscoverer.check_adb_available():
-            self.android_devices = AndroidDiscoverer.discover()
-            logger.info(f"Found {len(self.android_devices)} Android devices")
+        if self.config.discover_android_devices:
+            if AndroidDiscoverer.check_adb_available():
+                self.android_devices = AndroidDiscoverer.discover()
+                logger.info(f"Found {len(self.android_devices)} Android devices")
+            else:
+                logger.warning("ADB not available, skipping Android device discovery")
         else:
-            logger.warning("ADB not available, skipping Android device discovery")
+            logger.info("Android device discovery disabled")
 
         # iOS 设备
-        if iOSDiscoverer.check_tidevice_available():
-            self.ios_devices = iOSDiscoverer.discover()
-            logger.info(f"Found {len(self.ios_devices)} iOS devices")
+        if self.config.discover_ios_devices:
+            if iOSDiscoverer.check_tidevice_available():
+                self.ios_devices = iOSDiscoverer.discover()
+                logger.info(f"Found {len(self.ios_devices)} iOS devices")
+            else:
+                logger.warning("libimobiledevice not available, skipping iOS device discovery")
         else:
-            logger.warning("libimobiledevice not available, skipping iOS device discovery")
+            logger.info("iOS device discovery disabled")
 
     def _init_ocr_client(self) -> None:
         """初始化 OCR 客户端。"""
@@ -314,6 +326,14 @@ class Worker:
         unlock_config = self.config.unlock  # 获取解锁配置
 
         for platform in self.supported_platforms:
+            # Android/iOS 平台根据开关跳过初始化
+            if platform == "android" and not self.config.discover_android_devices:
+                logger.info("Android platform skipped: discover_android_devices=false")
+                continue
+            if platform == "ios" and not self.config.discover_ios_devices:
+                logger.info("iOS platform skipped: discover_ios_devices=false")
+                continue
+
             platform_config = PlatformConfig.from_dict(
                 self.config.get_platform_config(platform)
             )
@@ -342,8 +362,8 @@ class Worker:
             except Exception as e:
                 logger.error(f"Failed to initialize {platform} platform: {e}\n{traceback.format_exc()}")
 
-        # 初始化设备监控
-        if self.android_manager or self.ios_manager:
+        # 初始化设备监控（只有当至少一个平台开启时才创建）
+        if self.config.discover_android_devices or self.config.discover_ios_devices:
             self.device_monitor = DeviceMonitor(self.config)
             self.device_monitor.set_platform_managers(
                 android_manager=self.android_manager,
