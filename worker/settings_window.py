@@ -475,8 +475,12 @@ class SettingsWindow(QDialog):
         """
         import re
 
-        # Quote string values (except null, numbers, and already quoted)
-        if value != "null" and not value.isdigit() and not value.startswith('"'):
+        # Boolean values should not be quoted
+        if value in ("true", "false"):
+            # Keep boolean value without quotes
+            pass
+        elif value != "null" and not value.isdigit() and not value.startswith('"'):
+            # Quote string values (except null, numbers, and already quoted)
             value = f'"{value}"'
 
         # Pattern: match "  key: value" (with possible comment after)

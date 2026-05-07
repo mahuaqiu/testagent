@@ -96,24 +96,19 @@ var
   ResultCode: Integer;
   PowerShellScript: String;
 begin
-  // Use PowerShell to find and kill processes running from install directory
-  // Only kills adb.exe, ios.exe, ffmpeg.exe etc. that are started from {app}\tools\
-  PowerShellScript :=
-    '$toolsDir = ''' + ExpandConstant('{app}\tools') + ''';' +
-    'if (Test-Path $toolsDir) {' +
-    '  $exes = Get-ChildItem -Path $toolsDir -Filter *.exe -Recurse;' +
-    '  foreach ($exe in $exes) {' +
-    '    $name = $exe.Name.Replace(''.exe'', '''');' +
-    '    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue;' +
-    '    foreach ($p in $procs) {' +
-    '      if ($p.Path -and $p.Path.StartsWith(''' + ExpandConstant('{app}') + ''', [System.StringComparison]::OrdinalIgnoreCase)) {' +
-    '        Stop-Process -Id $p.Id -Force;' +
-    '      }' +
-    '    }' +
-    '  }' +
-    '}';
+  // Method 1: Use taskkill to kill common tools processes directly
+  Log('Killing tools processes with taskkill...');
+  Exec('taskkill.exe', '/f /im ios.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/f /im adb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/f /im ffmpeg.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('taskkill done.');
 
-  Log('Cleaning up tools processes...');
+  // Method 2: Use PowerShell to find and kill any remaining processes from install dir
+  PowerShellScript :=
+    '$appDir = ''' + ExpandConstant('{app}') + ''';' +
+    'Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force;';
+
+  Log('Cleaning up remaining processes from install directory...');
   Exec('powershell.exe', '-Command "' + PowerShellScript + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('Tools processes cleanup done.');
 end;
