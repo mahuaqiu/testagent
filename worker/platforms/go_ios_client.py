@@ -67,11 +67,13 @@ class GoIOSClient:
             CompletedProcess: 命令执行结果
         """
         cmd = [self._go_ios_path] + args
-        logger.debug(f"Running go-ios command: {cmd}")
+        # 获取 go-ios 可执行文件所在目录作为工作目录
+        cwd = os.path.dirname(self._go_ios_path)
         result = run_cmd(
             cmd,
             timeout=timeout or self.timeout,
             check=check,
+            cwd=cwd,
         )
         return result
 
@@ -153,17 +155,16 @@ class GoIOSClient:
 
     def start_agent(self) -> subprocess.Popen:
         """启动 go-ios agent（后台进程，使用 userspace TUN 模式避免 IPv6 问题）。"""
-        # 使用 --userspace 参数启动 agent，避免 Windows IPv6 路由配置问题
         cmd = [self._go_ios_path, "tunnel", "start", "--userspace"]
-        # 独立进程标志（popen_cmd 会自动合并隐藏窗口标志）
+        cwd = os.path.dirname(self._go_ios_path)
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立，不依赖父进程
         process = popen_cmd(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
+            cwd=cwd,
         )
         logger.info(f"go-ios agent started (PID: {process.pid}, userspace mode)")
         return process
@@ -341,18 +342,18 @@ class GoIOSClient:
         if xctest_config:
             args.extend(["--xctestconfig", xctest_config])
         # 注意：不手动传递 address 和 rsd_port，让 go-ios 自动从 agent HTTP API 获取
-        # 这样可以避免 IPv6 地址变化导致连接失败的问题
         cmd = [self._go_ios_path] + args
+        cwd = os.path.dirname(self._go_ios_path)
         logger.info(f"WDA command: {' '.join(cmd)}")
-        # 使用 popen_cmd 统一处理黑框问题
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立
+
         process = popen_cmd(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
+            cwd=cwd,
         )
         logger.info(f"WDA started for {udid} (PID: {process.pid})")
         return process
@@ -381,18 +382,17 @@ class GoIOSClient:
             subprocess.Popen: 端口转发进程
         """
         args = ["--udid", udid, "forward", str(local_port), str(device_port)]
-        # 注意：不手动传递 address 和 rsd_port，让 go-ios 自动从 agent HTTP API 获取
         cmd = [self._go_ios_path] + args
+        cwd = os.path.dirname(self._go_ios_path)
         logger.info(f"Forward command: {' '.join(cmd)}")
-        # 使用 popen_cmd 统一处理黑框问题
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        # stdin/stdout/stderr 都设置为 DEVNULL，确保进程完全独立
         process = popen_cmd(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
+            cwd=cwd,
         )
         logger.info(f"Port forward started: {local_port} -> {device_port} (PID: {process.pid})")
         return process

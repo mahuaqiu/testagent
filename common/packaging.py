@@ -6,20 +6,30 @@
 
 import sys
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def is_packaged():
     """检测是否在 Nuitka 打包环境中。
 
     检测逻辑：
-    1. Nuitka 打包后会设置 __compiled__ 属性
-    2. 其他情况视为普通 Python 环境
+    1. Nuitka 打包后会设置 sys.__compiled__ 属性（字符串类型）
+    2. 直接使用 getattr 读取全局变量 sys.__compiled__
+    3. 额外检查 sys.executable 名称作为后备
 
     Returns:
         bool: True 表示打包环境，False 表示普通 Python 环境
     """
-    # Nuitka 打包后会设置 __compiled__ 属性
-    if hasattr(sys, '__compiled__'):
+    # 直接读取 sys.__compiled__（Nuitka 打包后是字符串）
+    compiled = getattr(sys, '__compiled__', None)
+    if compiled is not None:
+        return True
+
+    # 后备检测：检查 executable 名称
+    exe_name = os.path.basename(sys.executable).lower()
+    if exe_name not in ('python.exe', 'python', 'python3', 'pythonw.exe'):
         return True
 
     return False
