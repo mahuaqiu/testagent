@@ -96,8 +96,9 @@ var
   ResultCode: Integer;
   PowerShellScript: String;
 begin
-  // Method 1: Use taskkill to kill common tools processes directly
-  Log('Killing tools processes with taskkill...');
+  // Method 1: Use taskkill to kill processes directly
+  Log('Killing processes with taskkill...');
+  Exec('taskkill.exe', '/f /im test-worker.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill.exe', '/f /im ios.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill.exe', '/f /im adb.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill.exe', '/f /im ffmpeg.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
