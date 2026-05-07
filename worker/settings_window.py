@@ -117,7 +117,7 @@ class SettingsWindow(QDialog):
         """设置界面。"""
         self.setWindowTitle("设置")
         self.setMinimumWidth(500)
-        self.setMinimumHeight(520)
+        self.setMinimumHeight(480)
         self.setModal(True)
 
         # 移除右上角问号按钮，保留关闭按钮
@@ -198,16 +198,14 @@ class SettingsWindow(QDialog):
         grid.addWidget(self.log_level_combo, row, 1)
         row += 1
 
-        # Android 设备发现
-        self.discover_android_checkbox = QCheckBox("发现 Android 设备")
+        # 设备发现开关（同一行）
+        self.discover_android_checkbox = QCheckBox("Android")
         self.discover_android_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
         grid.addWidget(self.discover_android_checkbox, row, 0)
-        row += 1
 
-        # iOS 设备发现
-        self.discover_ios_checkbox = QCheckBox("发现 iOS 设备")
+        self.discover_ios_checkbox = QCheckBox("iOS")
         self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        grid.addWidget(self.discover_ios_checkbox, row, 0)
+        grid.addWidget(self.discover_ios_checkbox, row, 1)
 
         layout.addLayout(grid)
 
