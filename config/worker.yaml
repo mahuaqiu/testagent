@@ -7,8 +7,8 @@ worker:
   ip: null                          # Specify IP address, null means auto-detect
   port: 8088                        # HTTP service port
   namespace: meeting_public         # Namespace for categorizing Workers
-  discover_android_devices: false   # 是否发现 Android 设备（关闭则跳过所有 Android 相关逻辑）
-  discover_ios_devices: false       # 是否发现 iOS 设备（关闭则跳过所有 iOS 相关逻辑）
+  discover_android_devices: false   # Enable Android device discovery
+  discover_ios_devices: false       # Enable iOS device discovery
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
   service_retry_interval: 10        # Retry interval (seconds)
@@ -24,7 +24,7 @@ platforms:
   web:
     enabled: null                   # Auto-detect based on system
     headless: false                 # Headless mode
-    browser_type: Chromium            # 使用系统 Chrome（不是 Chromium）以支持屏幕共享
+    browser_type: Chromium          # Use system Chrome for screen sharing support
     timeout: 30000                  # Timeout (ms)
     session_timeout: 300            # Session timeout (seconds)
     screenshot_dir: data/screenshots
@@ -35,10 +35,10 @@ platforms:
       - microphone
       - clipboard-read
       - clipboard-write
-    # Clear Default directory on startup (keep Cache directory) to avoid account cache
+    # Clear Default directory on startup (keep Cache directory)
     clear_profile_on_start: true
-    # Request blacklist: intercept specific requests (e.g. JS files that timeout)
-    # Action options: abort (cancel request), 404 (return 404), empty (return empty content)
+    # Request blacklist: intercept specific requests
+    # Action options: abort, 404, empty
     request_blacklist:
       - pattern: "uba.js"
         action: "404"
@@ -48,7 +48,6 @@ platforms:
     token_headers:
       - "X-Auth-Token"
       - "X-Request-Operator"
-      # - "Authorization"  # Add more as needed
 
   android:
     enabled: null                   # Only on Windows
@@ -58,10 +57,10 @@ platforms:
 
   ios:
     enabled: null                   # Only on Windows
-    go_ios_path: tools/go-ios/ios.exe  # go-ios 可执行文件路径
-    agent_port: 60105               # go-ios agent HTTP API 端口（默认 60105，文档写的 28100 是错的）
-    wda_base_port: 8100             # WDA 基础端口
-    mjpeg_base_port: 9100           # MJPEG 基础端口
+    go_ios_path: tools/go-ios/ios.exe  # go-ios executable path
+    agent_port: 60105               # go-ios agent HTTP API port
+    wda_base_port: 8100             # WDA base port
+    mjpeg_base_port: 9100           # MJPEG base port
     wda_bundle_id: com.cloudlink.WebDriverAgentRunner.new.xctrunner
     wda_testrunner_bundle_id: com.cloudlink.WebDriverAgentRunner.new.xctrunner
     wda_xctest_config: WebDriverAgentRunner.xctest
@@ -94,40 +93,40 @@ logging:
 
 # Upgrade Settings
 upgrade:
-  check_url: ""                     # Upgrade check API URL, e.g. "http://192.168.0.102:8000/get_worker_upgrade"
+  check_url: ""                     # Upgrade check API URL
   check_timeout: 30                 # Upgrade check timeout (seconds)
   download_timeout: 300             # Download timeout (seconds)
 
 # Unlock Screen Settings (iOS/Android only)
 unlock:
-  # 默认解锁密码
+  # Default unlock password
   password: "3665"
 
-  # 点击间隔（毫秒）
+  # Click interval (milliseconds)
   click_interval: 150
 
-  # iOS unlock method per device (物理分辨率)
-  # 解锁方式：home_key（按HOME键出现密码界面）或 swipe_up（向上滑动）
+  # iOS unlock method per device (physical resolution)
+  # Methods: home_key (press HOME key) or swipe_up (swipe up)
   ios_unlock_method:
-    # iPhone 8 / iPhone SE (750x1334) - 按 HOME 键解锁
+    # iPhone 8 / iPhone SE (750x1334) - HOME key unlock
     "750x1334": "home_key"
-    # iPhone 11 / iPhone XR (828x1792) - 按 HOME 键解锁
+    # iPhone 11 / iPhone XR (828x1792) - HOME key unlock
     "828x1792": "home_key"
-    # iPhone 14 / iPhone 15 (1170x2532) - 向上滑动解锁（Face ID 机型）
+    # iPhone 14 / iPhone 15 (1170x2532) - Swipe up unlock (Face ID)
     "1170x2532": "swipe_up"
-    # iPhone 14 Pro / iPhone 15 Pro (1179x2556) - 向上滑动解锁
+    # iPhone 14 Pro / iPhone 15 Pro (1179x2556) - Swipe up unlock
     "1179x2556": "swipe_up"
-    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796) - 向上滑动解锁
+    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796) - Swipe up unlock
     "1290x2796": "swipe_up"
-    # 默认方式
+    # Default method
     default: "home_key"
 
-  # iOS password keypad coordinates (物理分辨率，即真实像素尺寸)
-  # 键盘布局: 1 2 3 / 4 5 6 / 7 8 9 / 0
-  # 配置方式：按物理分辨率配置，运行时自动匹配
-  # 获取方法：截图后查看图片尺寸即为物理分辨率
+  # iOS password keypad coordinates (physical resolution)
+  # Keypad layout: 1 2 3 / 4 5 6 / 7 8 9 / 0
+  # Configure by physical resolution, auto-matched at runtime
+  # How to get: screenshot and check image size for physical resolution
   ios_keypad:
-    # iPhone 8 / iPhone SE (750x1334 物理分辨率)
+    # iPhone 8 / iPhone SE (750x1334)
     "750x1334":
       "1": {x: 167, y: 483}
       "2": {x: 375, y: 483}
@@ -140,7 +139,7 @@ unlock:
       "9": {x: 570, y: 838}
       "0": {x: 375, y: 1010}
 
-    # iPhone 11 / iPhone XR (828x1792 物理分辨率)
+    # iPhone 11 / iPhone XR (828x1792)
     "828x1792":
       "1": {x: 104, y: 760}
       "2": {x: 276, y: 760}
@@ -153,7 +152,7 @@ unlock:
       "9": {x: 448, y: 1000}
       "0": {x: 276, y: 1120}
 
-    # iPhone 14 / iPhone 15 (1170x2532 物理分辨率)
+    # iPhone 14 / iPhone 15 (1170x2532)
     "1170x2532":
       "1": {x: 144, y: 1080}
       "2": {x: 390, y: 1080}
@@ -166,7 +165,7 @@ unlock:
       "9": {x: 636, y: 1440}
       "0": {x: 390, y: 1620}
 
-    # iPhone 14 Pro / iPhone 15 Pro (1179x2556 物理分辨率)
+    # iPhone 14 Pro / iPhone 15 Pro (1179x2556)
     "1179x2556":
       "1": {x: 147, y: 1095}
       "2": {x: 393, y: 1095}
@@ -179,7 +178,7 @@ unlock:
       "9": {x: 639, y: 1455}
       "0": {x: 393, y: 1635}
 
-    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796 物理分辨率)
+    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796)
     "1290x2796":
       "1": {x: 162, y: 1200}
       "2": {x: 430, y: 1200}
@@ -192,7 +191,7 @@ unlock:
       "9": {x: 698, y: 1600}
       "0": {x: 430, y: 1800}
 
-    # 后备默认配置（无法匹配分辨率时使用 iPhone 8）
+    # Fallback default (use iPhone 8 if resolution not matched)
     default:
       "1": {x: 92, y: 570}
       "2": {x: 250, y: 570}
@@ -205,9 +204,9 @@ unlock:
       "9": {x: 408, y: 770}
       "0": {x: 250, y: 870}
 
-  # Android password keypad coordinates (物理分辨率)
+  # Android password keypad coordinates (physical resolution)
   android_keypad:
-    # 1080x2400 分辨率（常见 Android 机型）
+    # 1080x2400 resolution (common Android devices)
     "1080x2400":
       "1": {x: 180, y: 850}
       "2": {x: 540, y: 850}
@@ -220,7 +219,7 @@ unlock:
       "9": {x: 900, y: 1050}
       "0": {x: 540, y: 1150}
 
-    # 后备默认配置
+    # Fallback default
     default:
       "1": {x: 90, y: 850}
       "2": {x: 270, y: 850}
@@ -233,13 +232,13 @@ unlock:
       "9": {x: 450, y: 1050}
       "0": {x: 270, y: 1150}
 
-# 录屏配置
+# Recording Settings
 recording:
-  output_dir: data/recordings    # 输出目录
-  default_fps: 10                # 默认帧率
-  max_timeout_ms: 7200000        # 最大超时（毫秒），2小时
+  output_dir: data/recordings    # Output directory
+  default_fps: 10                # Default frame rate
+  max_timeout_ms: 7200000        # Max timeout (ms), 2 hours
 
-# WebSocket 推流配置
+# WebSocket Streaming Settings
 websocket_streaming:
-  max_connections_per_device: 3  # 单设备最大连接数
-  send_timeout_seconds: 30       # 发送超时（秒），超时后自动断开连接
+  max_connections_per_device: 3  # Max connections per device
+  send_timeout_seconds: 30       # Send timeout (seconds)

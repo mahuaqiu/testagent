@@ -414,23 +414,14 @@ class SettingsWindow(QDialog):
             return
 
         # Read original file content to preserve comments and format
-        # Try multiple encodings for compatibility
         original_content = ""
-        encodings = ["utf-8", "gbk", "gb18030"]
-
-        for encoding in encodings:
-            try:
-                if os.path.exists(self.config_path):
-                    with open(self.config_path, "r", encoding=encoding) as f:
-                        original_content = f.read()
-                    logger.info(f"Config file read successfully with {encoding} encoding")
-                    break
-            except UnicodeDecodeError as e:
-                logger.warning(f"Failed to read config with {encoding}: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Failed to read config file: {e}")
-                continue
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    original_content = f.read()
+                logger.info(f"Config file read successfully")
+        except Exception as e:
+            logger.error(f"Failed to read config file: {e}")
 
         if original_content:
             # Update specific fields using string replacement (preserve comments)
