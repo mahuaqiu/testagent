@@ -248,7 +248,10 @@
       "Bash(ls -la .venv/)",
       "Bash(ls -la venv/)",
       "Bash(maturin build *)",
-      "Bash(dir /s /b \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\")"
+      "Bash(dir /s /b \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\")",
+      "Bash(wmic process *)",
+      "Bash(git show *)",
+      "Read(//tmp/**)"
     ]
   }
 }
