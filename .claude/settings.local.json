@@ -246,7 +246,9 @@
       "Bash(D:/code/autotest/.venv/Scripts/pip.exe install *)",
       "Bash(D:/code/autotest/.venv/Scripts/python.exe *)",
       "Bash(ls -la .venv/)",
-      "Bash(ls -la venv/)"
+      "Bash(ls -la venv/)",
+      "Bash(maturin build *)",
+      "Bash(dir /s /b \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\")"
     ]
   }
 }
