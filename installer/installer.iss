@@ -1,5 +1,5 @@
 ; installer/installer.iss
-; Test Worker 安装脚本
+; Test Worker Install Script
 ; Inno Setup 6.x
 
 #define Version "2.0.0"
@@ -322,18 +322,18 @@ begin
   else
     OcrServiceEdit.Text := 'http://192.168.0.102:9021';
 
-  // Android 设备发现
+  // Android device discovery
   DiscoverAndroidCheckbox := TNewCheckBox.Create(ConfigPage);
   DiscoverAndroidCheckbox.Parent := ConfigPage.Surface;
-  DiscoverAndroidCheckbox.Caption := '发现 Android 设备';
+  DiscoverAndroidCheckbox.Caption := 'Android';
   DiscoverAndroidCheckbox.Left := ScaleX(0);
   DiscoverAndroidCheckbox.Top := ScaleY(220);
   DiscoverAndroidCheckbox.Checked := False;
 
-  // iOS 设备发现
+  // iOS device discovery
   DiscoverIosCheckbox := TNewCheckBox.Create(ConfigPage);
   DiscoverIosCheckbox.Parent := ConfigPage.Surface;
-  DiscoverIosCheckbox.Caption := '发现 iOS 设备';
+  DiscoverIosCheckbox.Caption := 'iOS';
   DiscoverIosCheckbox.Left := ScaleX(180);
   DiscoverIosCheckbox.Top := ScaleY(220);
   DiscoverIosCheckbox.Checked := False;
@@ -404,18 +404,18 @@ begin
           if Pos('discover_android_devices:', LineContent) > 0 then
           begin
             if DiscoverAndroidCheckbox.Checked then
-              LineContent := '  discover_android_devices: true   # 是否发现 Android 设备（关闭则跳过所有 Android 相关逻辑）'
+              LineContent := '  discover_android_devices: true   # Enable Android device discovery'
             else
-              LineContent := '  discover_android_devices: false  # 是否发现 Android 设备（关闭则跳过所有 Android 相关逻辑）';
+              LineContent := '  discover_android_devices: false  # Enable Android device discovery';
           end;
 
           // Replace discover_ios_devices
           if Pos('discover_ios_devices:', LineContent) > 0 then
           begin
             if DiscoverIosCheckbox.Checked then
-              LineContent := '  discover_ios_devices: true       # 是否发现 iOS 设备（关闭则跳过所有 iOS 相关逻辑）'
+              LineContent := '  discover_ios_devices: true       # Enable iOS device discovery'
             else
-              LineContent := '  discover_ios_devices: false      # 是否发现 iOS 设备（关闭则跳过所有 iOS 相关逻辑）';
+              LineContent := '  discover_ios_devices: false      # Enable iOS device discovery';
           end;
 
           ConfigLines[LineIndex] := LineContent;
