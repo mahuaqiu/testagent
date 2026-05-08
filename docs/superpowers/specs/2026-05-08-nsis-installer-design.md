@@ -39,7 +39,7 @@ installer/
 
 | 功能 | Inno Setup 实现 | NSIS 实现 |
 |------|-----------------|-----------|
-| 权限设置 | `PrivilegesRequired=lowest` | `RequestExecutionLevel admin`（NSIS 默认需管理员） |
+| 权限设置 | `PrivilegesRequired=lowest` | `RequestExecutionLevel admin`（用户确认变更，强制管理员权限） |
 | 桌面快捷方式选项 | `[Tasks]` 段复选框 | nsDialogs 自定义页面添加复选框 |
 | 基本安装 | `[Files]` 段 | `File` 命令 |
 | 目录创建 | `[Dirs]` 段 | `CreateDirectory` 命令 |
@@ -78,19 +78,13 @@ Function KillProcessesAndCleanup
   StrCpy $3 "$2\"  ; 路径末尾加分隔符
 
   ; 3. PowerShell 按路径精准杀 ios.exe、adb.exe、ffmpeg.exe
-  ; 注意：使用 -like 操作符（不区分大小写）替代 StartsWith
-  ; NSIS 变量在运行时展开，路径中的特殊字符（如空格）会被正确处理
-  ; PowerShell 脚本使用单引号包裹路径，避免双引号转义问题
-  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
-  StrCpy $1 '$1foreach ($x in $p) { '
-  StrCpy $1 '$1  if ($x.Path -like \"$3*\" -or $x.Path -like \"$2\*\" ) { '
-  StrCpy $1 '$1    $x.Kill(); '
-  StrCpy $1 '$1  } '
-  StrCpy $1 '$1}"'
+  ; 注意：NSIS 字符串拼接使用 "$变量" 格式，$1 会被替换为已存储的值
+  ; PowerShell 脚本中的路径使用 -like 操作符（不区分大小写）
+  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; foreach ($x in $p) { if ($x.Path -like \'$3*\' -or $x.Path -like \'$2\\*\') { $x.Kill() } }"'
   ExecWait $1 $0
 
-  ; 4. 删除 playwright 目录（避免升级问题）
+  ; 4. 删除 playwright 目录（避免升级不兼容问题）
+  ; Playwright chromium 版本可能随 Playwright 库更新而变化，升级时需清理旧缓存
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
     RMDir /r "$INSTDIR\playwright"
   NoPlaywright:
@@ -151,7 +145,7 @@ $OcrService = ($YamlContent | Select-String 'ocr_service:\s*"([^"]+)"').Matches.
 | 命名空间 | 文本框 | meeting_public |
 | 平台 API 地址 | 文本框 | 从 worker.yaml 读取 |
 | OCR 服务地址 | 文本框 | 从 worker.yaml 读取 |
-| 设备发现选项 | 复选框 | Android + iOS（默认不勾选） |
+| 设备发现选项 | 复选框 × 2 | Android/iOS 设备发现开关（对应 config 中的 discover_android_devices 和 discover_ios_devices 字段，默认 false） |
 
 **升级安装行为**：
 - 检测到 `config\worker.yaml` 存在时，跳过配置参数页面
@@ -215,6 +209,8 @@ Function GetLocalIP
     StrCmp $R0 "192.168." store_192
     StrCpy $R0 $R2 4
     StrCmp $R0 "172." store_172
+    ; 注意：172.x 验证简化，实际私有范围是 172.16-31.x.x
+    ; 但 NSIS 字符串处理较复杂，这里接受所有 172.x 作为私有地址（优先级影响较小）
     StrCmp $R6 "" store_other
     Goto next
 
@@ -277,8 +273,29 @@ FunctionEnd
 - `{app}\data` - 数据目录
 
 **配置文件处理**：
-- 新安装：从 `_internal\config\worker.yaml` 复制模板，替换用户输入值
-- 升级安装：保留原有 `config\worker.yaml`
+- 新安装：从 `_internal\config\worker.yaml` 复制模板，逐行替换用户输入值
+- 升级安装：保留原有 `config\worker.yaml`，不修改
+
+**配置替换机制**：
+使用 NSIS `FileOpen`/`FileRead`/`FileWrite` 逐行读取模板文件，匹配特定字段行并替换：
+```nsis
+; 示例：替换 ip: null 行为用户输入的 IP
+FileOpen $4 "$INSTDIR\_internal\config\worker.yaml" r
+FileOpen $5 "$INSTDIR\config\worker.yaml" w
+Loop:
+  FileRead $4 $6
+  StrCmp $6 "" Close
+  ; 检查是否是 ip: null 行
+  StrCmp $6 "  ip: null$\r$\n" 0 NotIpLine
+    StrCpy $6 "  ip: \"$IpInput\"$\r$\n"
+  NotIpLine:
+  ; ... 其他字段替换
+  FileWrite $5 $6
+  Goto Loop
+Close:
+  FileClose $4
+  FileClose $5
+```
 
 **启动程序**：
 - 交互安装：完成页面显示"启动"复选框，勾选后启动（带 UAC 提升）
