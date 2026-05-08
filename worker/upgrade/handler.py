@@ -110,7 +110,7 @@ def _execute_upgrade_background(
 
     流程：下载 -> 安装 -> 退出
 
-    注意：安装前清理（杀进程、删 playwright）由 Inno Setup 安装包处理
+    注意：安装前清理（杀进程、删 playwright）由 NSIS 安装包处理
     """
     try:
         # 1. 开始下载

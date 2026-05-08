@@ -63,6 +63,9 @@ Page custom ConfigPageCreate ConfigPageLeave
 ; Install Section
 ; ============================================
 Section "MainSection" SEC01
+  ; Check upgrade install before any operations (needed for silent install)
+  Call IsUpgradeInstall
+
   ; Kill processes first (show progress before heavy operations)
   DetailPrint "Stopping running processes..."
   Call KillProcessesAndCleanup
