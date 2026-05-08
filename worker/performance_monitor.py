@@ -316,106 +316,74 @@ class PerformanceCollector:
                 break
 
     def _convert_sample_to_report(self, sample) -> dict:
-        """将 perfwin Sample 转换为接口上报格式。
+        """将 perfwin Sample 直接转换为 dict 格式（透传）。
 
         Args:
-            sample: perfwin 样本数据
+            sample: perfwin v0.3.0 Sample 对象
 
         Returns:
-            转换后的数据字典
+            转换后的数据字典，结构完全透传 perfwin 原始数据
         """
-        relative_time = 0
-        if self._start_time:
-            relative_time = int((datetime.now(timezone.utc) - self._start_time).total_seconds())
-
-        s = sample.system
-
-        # 系统级指标
-        system = {
-            "cpu_usage": s.cpu.percent,
-            "gpu_usage": s.gpu.percent,
-            "commit_memory": s.memory.committed_mb / 1024,  # MB → GB
-            "memory_usage": s.memory.used_mb / 1024,  # MB → GB
-            "power": s.system_power,
-            "cpu_speed": s.cpu.clock_speed,  # GHz
-            "cpu_temp": s.cpu.temperature or 0,
-            "process_handles": self._get_total_handles(sample),
-            "upload_speed": s.network.upload_speed / 1024,  # bytes/s → KB/s
-            "download_speed": s.network.download_speed / 1024,  # bytes/s → KB/s
-        }
-
-        # 构建进程 PID → ProcessInfo 映射（用于获取实例明细）
-        pid_to_proc = {}
-        if sample.processes:
-            for p in sample.processes:
-                pid_to_proc[p.pid] = p
-
-        # 目标进程指标
-        target_processes = []
-        if sample.aggregated:
-            for agg in sample.aggregated:
-                # 构建实例明细
-                instances = []
-                for pid in agg.pids:
-                    proc = pid_to_proc.get(pid)
-                    if proc:
-                        instances.append({
-                            "pid": pid,
-                            "cpu": proc.cpu_percent,
-                            "memory": proc.working_set_mb,
-                            "committed_memory": proc.committed_memory_mb,
-                            "gpu": proc.gpu_percent,
-                        })
-
-                target_processes.append({
-                    "name": agg.name,
-                    "total_cpu": agg.cpu_percent_total,
-                    "total_memory": agg.working_set_mb_total,
-                    "total_committed_memory": agg.committed_memory_mb_total,
-                    "total_gpu": agg.gpu_percent_total,
-                    "instances": instances,
-                })
-
-        # TOP10 进程
-        top10_cpu = []
-        top10_gpu = []
-        if sample.top_n_cpu:
-            top10_cpu = [
-                {"name": p.name, "cpu": p.cpu_percent, "memory": p.working_set_mb}
-                for p in sample.top_n_cpu[:10]
-            ]
-        if sample.top_n_gpu:
-            top10_gpu = [
-                {"name": p.name, "gpu": p.gpu_percent}
-                for p in sample.top_n_gpu[:10]
-            ]
-
         return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "relative_time": relative_time,
-            "system": system,
-            "target_processes": target_processes,
-            "top10_cpu": top10_cpu,
-            "top10_gpu": top10_gpu,
+            "timestamp": sample.timestamp,
+            "hwinfo_raw": dict(sample.hwinfo_raw),
+            "processes": self._convert_processes(sample.processes),
+            "aggregated": self._convert_aggregated(sample.aggregated),
+            "top_n_cpu": self._convert_processes(sample.top_n_cpu),
+            "top_n_gpu": self._convert_processes(sample.top_n_gpu),
         }
 
-    def _get_total_handles(self, sample) -> int:
-        """获取系统总句柄数。
+    def _convert_processes(self, processes) -> list[dict] | None:
+        """转换进程列表为 dict 格式。
 
         Args:
-            sample: perfwin 样本数据
+            processes: perfwin ProcessInfo 列表或 None
 
         Returns:
-            总句柄数
+            转换后的列表或 None
         """
-        total = 0
-        if sample.aggregated:
-            for agg in sample.aggregated:
-                total += agg.handle_count_total
-        elif sample.processes:
-            for p in sample.processes:
-                total += p.handle_count
-        return total
+        if processes is None:
+            return None
+
+        return [
+            {
+                "pid": p.pid,
+                "name": p.name,
+                "cpu_percent": p.cpu_percent,
+                "working_set_mb": p.working_set_mb,
+                "committed_memory_mb": p.committed_memory_mb,
+                "gpu_percent": p.gpu_percent,
+                "gpu_memory_mb": p.gpu_memory_mb,
+                "handle_count": p.handle_count,
+            }
+            for p in processes
+        ]
+
+    def _convert_aggregated(self, aggregated) -> list[dict] | None:
+        """转换汇总列表为 dict 格式。
+
+        Args:
+            aggregated: perfwin AggregatedProcessInfo 列表或 None
+
+        Returns:
+            转换后的列表或 None
+        """
+        if aggregated is None:
+            return None
+
+        return [
+            {
+                "name": a.name,
+                "pids": list(a.pids),
+                "cpu_percent_total": a.cpu_percent_total,
+                "working_set_mb_total": a.working_set_mb_total,
+                "committed_memory_mb_total": a.committed_memory_mb_total,
+                "gpu_percent_total": a.gpu_percent_total,
+                "handle_count_total": a.handle_count_total,
+                "process_count": a.process_count,
+            }
+            for a in aggregated
+        ]
 
     def _report_samples(self, samples: list[dict]) -> None:
         """上报样本数组到后端或本地持久化。
