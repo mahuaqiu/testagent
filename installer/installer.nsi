@@ -296,42 +296,41 @@ Function ConfigPageCreate
   nsDialogs::Create 1018
   Pop $0
 
-  ; IP address (row 1)
-  ${NSD_CreateLabel} 0 0 100% 12u "Worker IP Address:"
-  ${NSD_CreateText} 0 16 300 12u ""
+  ; Row 1: IP and Port on same line
+  ${NSD_CreateLabel} 0 0 140 12u "Worker IP Address:"
+  ${NSD_CreateText} 0 16 280 12u ""
   Pop $IpInput
   Call GetLocalIP
   ${NSD_SetText} $IpInput $R0
 
-  ; Port (row 2)
-  ${NSD_CreateLabel} 0 36 100% 12u "Worker Port:"
-  ${NSD_CreateText} 0 52 100 12u "8088"
+  ${NSD_CreateLabel} 300 0 80 12u "Port:"
+  ${NSD_CreateText} 300 16 80 12u "8088"
   Pop $PortInput
 
-  ; Namespace (row 3)
-  ${NSD_CreateLabel} 0 72 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 88 200 12u "meeting_public"
+  ; Row 2: Namespace
+  ${NSD_CreateLabel} 0 40 100% 12u "Namespace:"
+  ${NSD_CreateText} 0 56 200 12u "meeting_public"
   Pop $NamespaceInput
 
-  ; Platform API address (row 4)
-  ${NSD_CreateLabel} 0 108 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 124 350 12u "${PLATFORM_API}"
+  ; Row 3: Platform API address
+  ${NSD_CreateLabel} 0 80 100% 12u "Platform API Address:"
+  ${NSD_CreateText} 0 96 350 12u "${PLATFORM_API}"
   Pop $PlatformApiInput
 
-  ; OCR service address (row 5)
-  ${NSD_CreateLabel} 0 144 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 160 350 12u "${OCR_SERVICE}"
+  ; Row 4: OCR service address
+  ${NSD_CreateLabel} 0 120 100% 12u "OCR Service Address:"
+  ${NSD_CreateText} 0 136 350 12u "${OCR_SERVICE}"
   Pop $OcrServiceInput
 
-  ; Device discovery options (row 6)
-  ${NSD_CreateLabel} 0 180 100% 12u "Device Discovery:"
-  ${NSD_CreateCheckbox} 0 196 80 12u "Android"
+  ; Row 5: Device discovery options
+  ${NSD_CreateLabel} 0 160 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 176 80 12u "Android"
   Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 100 196 60 12u "iOS"
+  ${NSD_CreateCheckbox} 100 176 60 12u "iOS"
   Pop $DiscoverIos
 
-  ; Desktop shortcut (row 7)
-  ${NSD_CreateCheckbox} 0 216 100% 12u "Create Desktop Shortcut"
+  ; Row 6: Desktop shortcut
+  ${NSD_CreateCheckbox} 0 196 100% 12u "Create Desktop Shortcut"
   Pop $DesktopCheckbox
   ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
 
