@@ -39,6 +39,8 @@ installer/
 
 | 功能 | Inno Setup 实现 | NSIS 实现 |
 |------|-----------------|-----------|
+| 权限设置 | `PrivilegesRequired=lowest` | `RequestExecutionLevel admin`（NSIS 默认需管理员） |
+| 桌面快捷方式选项 | `[Tasks]` 段复选框 | nsDialogs 自定义页面添加复选框 |
 | 基本安装 | `[Files]` 段 | `File` 命令 |
 | 目录创建 | `[Dirs]` 段 | `CreateDirectory` 命令 |
 | 快捷方式 | `[Icons]` 段 | `CreateShortcut` 命令 |
@@ -57,39 +59,49 @@ installer/
 
 ### 进程清理
 
-**问题**：原 Inno Setup 实现的进程清理有 bug，安装目录占用的进程没杀掉。
+**背景**：安装前需要清理占用安装目录的进程，避免文件替换失败。
 
-**原因分析**：
-1. 进程名不准确（ios.exe 而非 ios）
-2. 执行时机不对（路径参数可能未确定）
-3. PowerShell 路径匹配时机问题
+**原 Inno Setup 实现**：已修复，使用 PowerShell `StartsWith` 进行路径匹配。NSIS 迁移时需要保持相同的逻辑，但需要注意以下改进点：
 
-**NSIS 改进方案**：
+**NSIS 实现要点**：
 - 执行时机：INSTFILES 页面初始化时（此时 `$INSTDIR` 已确定）
 - 进程名：test-worker.exe（全局杀）、ios.exe、adb.exe、ffmpeg.exe（按路径筛选）
-- 实现方式：先杀主进程，再用 PowerShell 按路径精准杀其他进程
+- 路径匹配：确保不区分大小写，路径末尾有分隔符
 
 ```nsis
 Function KillProcessesAndCleanup
   ; 1. 杀主进程（全局杀，名称唯一）
   ExecWait '"taskkill" /f /im test-worker.exe' $0
 
-  ; 2. PowerShell 按路径精准杀 ios.exe、adb.exe、ffmpeg.exe
+  ; 2. 准备路径变量（确保末尾有斜杠，避免匹配到其他路径）
+  StrCpy $2 "$INSTDIR"
+  StrCpy $3 "$2\"  ; 路径末尾加分隔符
+
+  ; 3. PowerShell 按路径精准杀 ios.exe、adb.exe、ffmpeg.exe
+  ; 注意：使用 -like 操作符（不区分大小写）替代 StartsWith
+  ; NSIS 变量在运行时展开，路径中的特殊字符（如空格）会被正确处理
+  ; PowerShell 脚本使用单引号包裹路径，避免双引号转义问题
   StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "'
   StrCpy $1 '$1$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
   StrCpy $1 '$1foreach ($x in $p) { '
-  StrCpy $1 '$1  if ($x.Path.StartsWith(\"$INSTDIR\")) { '
+  StrCpy $1 '$1  if ($x.Path -like \"$3*\" -or $x.Path -like \"$2\*\" ) { '
   StrCpy $1 '$1    $x.Kill(); '
   StrCpy $1 '$1  } '
   StrCpy $1 '$1}"'
   ExecWait $1 $0
 
-  ; 3. 删除 playwright 目录（避免升级问题）
+  ; 4. 删除 playwright 目录（避免升级问题）
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
     RMDir /r "$INSTDIR\playwright"
   NoPlaywright:
 FunctionEnd
 ```
+
+**关键技术点**：
+1. **路径末尾分隔符**：`$3 = "$INSTDIR\"`，确保不会误匹配到其他路径（如 "Test Worker" 匹配到 "Test Worker2")
+2. **大小写不敏感**：使用 PowerShell `-like` 操作符替代 `StartsWith`，Windows 文件系统不区分大小写
+3. **变量展开时机**：NSIS 变量 `$INSTDIR` 在运行时展开，不是编译时，路径中的空格和特殊字符会被正确处理
+4. **单引号替代双引号**：PowerShell 脚本中的路径使用单引号包裹，避免 NSIS 双引号转义问题
 
 **调用时机**：
 ```nsis
@@ -109,12 +121,16 @@ $WorkerYaml = "config\worker.yaml"
 $YamlContent = Get-Content $WorkerYaml
 
 # 提取 platform_api 和 ocr_service 默认值
+# 注意：由于 YAML 行格式固定（缩进 + 字段名），直接匹配字段名即可
+# 不需要考虑完整路径（external_services.platform_api）
 $PlatformApi = ($YamlContent | Select-String 'platform_api:\s*"([^"]+)"').Matches.Groups[1].Value
 $OcrService = ($YamlContent | Select-String 'ocr_service:\s*"([^"]+)"').Matches.Groups[1].Value
 
 # 传给 NSIS
 & $NsisPath "/DVersion=$Version" "/DPlatformApi=$PlatformApi" "/DOcrService=$OcrService" "installer\installer.nsi"
 ```
+
+**说明**：`worker.yaml` 中字段格式固定，如 `platform_api: "http://192.168.0.102:8000"`，正则表达式 `platform_api:\s*"([^"]+)"` 可以直接匹配，无需考虑 YAML 节点层级。
 
 ### 安装向导页面流程
 
@@ -141,16 +157,114 @@ $OcrService = ($YamlContent | Select-String 'ocr_service:\s*"([^"]+)"').Matches.
 - 检测到 `config\worker.yaml` 存在时，跳过配置参数页面
 - 保留用户原有配置
 
+**桌面快捷方式选项**：
+在配置参数页面添加"创建桌面快捷方式"复选框，默认勾选。实现方式：
+```nsis
+; nsDialogs 创建复选框
+${NSD_CreateCheckbox} 0 220 100% 12u "创建桌面快捷方式"
+Var /GLOBAL DesktopCheckbox
+${NSD_GetState} $DesktopCheckbox $0
+; 安装时根据 $0 决定是否创建快捷方式
+```
+
 ### 自动 IP 检测
 
 **逻辑**：遍历注册表网络接口，优先返回 10.x.x.x、192.168.x.x、172.16-31.x.x 范围的 IP。
 
-**NSIS 实现**：
+**NSIS 实现思路**（完整实现）：
 ```nsis
 Function GetLocalIP
-  ; 遍历注册表 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces
-  ; 读取 DhcpIPAddress 或 IPAddress
-  ; 按优先级返回：10.xx > 192.168.xx > 172.xx > 其他 > 127.0.0.1
+  ; 输出：$R0 = 最佳 IP 地址
+  Push $R1  ; 子键索引
+  Push $R2  ; 当前 IP
+  Push $R3  ; 10.x IP
+  Push $R4  ; 192.168.x IP
+  Push $R5  ; 172.x IP
+  Push $R6  ; 其他 IP
+
+  StrCpy $R3 ""
+  StrCpy $R4 ""
+  StrCpy $R5 ""
+  StrCpy $R6 ""
+
+  ; 遍历注册表子键
+  StrCpy $R1 0
+  loop:
+    EnumRegKey $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" $R1
+    StrCmp $R2 "" done
+
+    ; 尝试读取 DhcpIPAddress
+    ReadRegStr $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R2" "DhcpIPAddress"
+    StrCmp $R2 "" try_static
+    Goto check_ip
+
+  try_static:
+    ReadRegStr $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R2" "IPAddress"
+
+  check_ip:
+    ; 过滤无效 IP（空、0.0.0.0、127.x）
+    StrCmp $R2 "" next
+    StrCmp $R2 "0.0.0.0" next
+    StrCpy $R0 $R2 4
+    StrCmp $R0 "127." next
+
+    ; 按优先级存储（只存第一个）
+    StrCpy $R0 $R2 3
+    StrCmp $R0 "10." store_10
+    StrCpy $R0 $R2 8
+    StrCmp $R0 "192.168." store_192
+    StrCpy $R0 $R2 4
+    StrCmp $R0 "172." store_172
+    StrCmp $R6 "" store_other
+    Goto next
+
+  store_10:
+    StrCmp $R3 "" 0 next
+    StrCpy $R3 $R2
+    Goto next
+  store_192:
+    StrCmp $R4 "" 0 next
+    StrCpy $R4 $R2
+    Goto next
+  store_172:
+    StrCmp $R5 "" 0 next
+    StrCpy $R5 $R2
+    Goto next
+  store_other:
+    StrCpy $R6 $R2
+
+  next:
+    IntOp $R1 $R1 + 1
+    Goto loop
+
+  done:
+    ; 按优先级返回
+    StrCmp $R3 "" 0 return_10
+    StrCmp $R4 "" 0 return_192
+    StrCmp $R5 "" 0 return_172
+    StrCmp $R6 "" 0 return_other
+    StrCpy $R0 "127.0.0.1"
+    Goto end
+
+  return_10:
+    StrCpy $R0 $R3
+    Goto end
+  return_192:
+    StrCpy $R0 $R4
+    Goto end
+  return_172:
+    StrCpy $R0 $R5
+    Goto end
+  return_other:
+    StrCpy $R0 $R6
+
+  end:
+    Pop $R6
+    Pop $R5
+    Pop $R4
+    Pop $R3
+    Pop $R2
+    Pop $R1
 FunctionEnd
 ```
 
@@ -178,7 +292,10 @@ FunctionEnd
 - 删除快捷方式
 - 删除安装目录所有文件
 
-**注意**：与原 Inno Setup 不同，卸载时完全删除所有文件（包括 config）。
+**卸载行为变更说明**：
+- 原 Inno Setup 卸载时保留 config 目录
+- 新 NSIS 方案卸载时完全删除所有文件（包括 config）
+- 变更原因：用户确认，干净卸载不留残留文件；升级安装时 config 目录会被保留（升级检测机制）
 
 ### 构建脚本改造
 
