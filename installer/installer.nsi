@@ -43,7 +43,6 @@ Var PlatformApiInput
 Var OcrServiceInput
 Var DiscoverAndroid
 Var DiscoverIos
-Var DesktopCheckbox
 Var IsUpgrade
 
 ; Page order
@@ -92,10 +91,8 @@ Section "MainSection" SEC01
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\test-worker.exe"
   CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\uninst.exe"
 
-  ; Desktop shortcut (based on checkbox)
-  ${If} $DesktopCheckbox == ${BST_CHECKED}
-    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\test-worker.exe"
-  ${EndIf}
+  ; Desktop shortcut
+  CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\test-worker.exe"
 
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\uninst.exe"
@@ -337,11 +334,6 @@ Function ConfigPageCreate
   ${NSD_CreateCheckbox} 100 178 60 12u "iOS"
   Pop $DiscoverIos
 
-  ; Row 6: Desktop shortcut
-  ${NSD_CreateCheckbox} 0 200 100% 12u "Create Desktop Shortcut"
-  Pop $DesktopCheckbox
-  ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
-
   nsDialogs::Show
 
   skip_page:
@@ -357,7 +349,6 @@ Function ConfigPageLeave
   ${NSD_GetText} $OcrServiceInput $OcrServiceInput
   ${NSD_GetState} $DiscoverAndroid $DiscoverAndroid
   ${NSD_GetState} $DiscoverIos $DiscoverIos
-  ${NSD_GetState} $DesktopCheckbox $DesktopCheckbox
 FunctionEnd
 
 ; Config file replacement
