@@ -361,35 +361,44 @@ Function ReplaceConfigFile
   ; Copy template to user config directory first
   CopyFiles "$INSTDIR\_internal\config\worker.yaml" "$INSTDIR\config\worker.yaml"
 
-  ; Build a simple PowerShell script to replace values
-  ; Store config path in variable
+  ; Build PowerShell script - use single quotes to avoid NSIS escaping issues
+  ; Store config path
   StrCpy $9 "$INSTDIR\config\worker.yaml"
 
-  ; Use single PowerShell command with multiple replacements
-  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 "$1$$f='$9'; "
-  StrCpy $1 "$1$$c=Get-Content $$f; "
-  StrCpy $1 "$1$$c=$$c -replace 'ip: null','ip: $IpInput'; "
-  StrCpy $1 "$1$$c=$$c -replace 'port: 8088','port: $PortInput'; "
-  StrCpy $1 "$1$$c=$$c -replace 'namespace: meeting_public','namespace: $NamespaceInput'; "
+  ; Build command string
+  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$$f='
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1; $$c=Get-Content $$f'
+  StrCpy $1 '$1; $$c=$$c -replace '
+  StrCpy $1 '$1"ip: null"'
+  StrCpy $1 '$1,"ip: $IpInput"'
+  StrCpy $1 '$1; $$c=$$c -replace '
+  StrCpy $1 '$1"port: 8088"'
+  StrCpy $1 '$1,"port: $PortInput"'
+  StrCpy $1 '$1; $$c=$$c -replace '
+  StrCpy $1 '$1"namespace: meeting_public"'
+  StrCpy $1 '$1,"namespace: $NamespaceInput"'
 
-  ; Device discovery - check if checked
+  ; Device discovery
   StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
-    StrCpy $1 "$1$$c=$$c -replace 'discover_android_devices: false','discover_android_devices: true'; "
+    StrCpy $1 '$1; $$c=$$c -replace '
+    StrCpy $1 '$1"discover_android_devices: false"'
+    StrCpy $1 '$1,"discover_android_devices: true"'
   skip_android:
 
   StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
-    StrCpy $1 "$1$$c=$$c -replace 'discover_ios_devices: false','discover_ios_devices: true'; "
+    StrCpy $1 '$1; $$c=$$c -replace '
+    StrCpy $1 '$1"discover_ios_devices: false"'
+    StrCpy $1 '$1,"discover_ios_devices: true"'
   skip_ios:
 
-  StrCpy $1 "$1$$c | Set-Content $$f\""
+  StrCpy $1 '$1; $$c | Set-Content $$f"'
   nsExec::Exec $1
 
   Goto done
 
   no_template:
-    ; Template not found, show warning
-    MessageBox MB_OK "Warning: Config template not found at _internal\config\worker.yaml"
+    MessageBox MB_OK "Warning: Config template not found"
 
   done:
 FunctionEnd
