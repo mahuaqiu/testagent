@@ -50,7 +50,6 @@ Var IsUpgrade
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom ConfigPageCreate ConfigPageLeave
-!define MUI_PAGE_CUSTOMFUNCTION_PRE KillProcessesAndCleanup
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -65,6 +64,10 @@ Page custom ConfigPageCreate ConfigPageLeave
 ; Install Section
 ; ============================================
 Section "MainSection" SEC01
+  ; Kill processes first (show progress before heavy operations)
+  DetailPrint "Stopping running processes..."
+  Call KillProcessesAndCleanup
+
   ; Create directories
   CreateDirectory "$INSTDIR\config"
   CreateDirectory "$INSTDIR\_internal\config"
@@ -72,10 +75,12 @@ Section "MainSection" SEC01
   CreateDirectory "$INSTDIR\data"
 
   ; Copy files - first copy _internal directory (includes _internal\config)
+  DetailPrint "Copying internal files..."
   SetOutPath "$INSTDIR\_internal"
   File /r "..\dist\windows\test-worker\_internal\*"
 
   ; Copy all other files (exclude root config and _internal to avoid duplication)
+  DetailPrint "Copying program files..."
   SetOutPath "$INSTDIR"
   File /r /x "config" /x "_internal" "..\dist\windows\test-worker\*"
 
@@ -110,19 +115,17 @@ Section Uninstall
   ; Kill processes
   ExecWait '"taskkill" /f /im test-worker.exe' $0
 
-  ; PowerShell: kill ios, adb, ffmpeg by install path
-  ; Use $$ for literal $ in PowerShell (NSIS $$ = literal $)
-  ; Use nsExec plugin to hide console window
+  ; PowerShell: kill ios, adb, ffmpeg by install path (hidden window, async)
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"
-  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
   StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
   StrCpy $1 '$1foreach ($$x in $$p) { '
   StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
   StrCpy $1 '$1    $$x.Kill() '
   StrCpy $1 '$1  } '
   StrCpy $1 '$1}"'
-  nsExec::Exec $1
+  Exec $1
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -159,15 +162,15 @@ Function KillProcessesAndCleanup
 
   ; 3. PowerShell: kill ios, adb, ffmpeg by install path
   ; Build command string in segments, use $$ for literal $ in PowerShell
-  ; Use nsExec plugin to hide console window
-  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
+  ; Use Exec with hidden window style (async, won't block UI)
+  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
   StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
   StrCpy $1 '$1foreach ($$x in $$p) { '
   StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
   StrCpy $1 '$1    $$x.Kill() '
   StrCpy $1 '$1  } '
   StrCpy $1 '$1}"'
-  nsExec::Exec $1
+  Exec $1  ; Async execution, won't block
 
   ; 4. Delete playwright directory (avoid upgrade incompatibility)
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
@@ -361,39 +364,36 @@ Function ReplaceConfigFile
   ; Copy template to user config directory first
   CopyFiles "$INSTDIR\_internal\config\worker.yaml" "$INSTDIR\config\worker.yaml"
 
-  ; Build PowerShell script - use single quotes to avoid NSIS escaping issues
   ; Store config path
   StrCpy $9 "$INSTDIR\config\worker.yaml"
 
-  ; Build command string
-  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$$f='
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1; $$c=Get-Content $$f'
-  StrCpy $1 '$1; $$c=$$c -replace '
-  StrCpy $1 '$1"ip: null"'
-  StrCpy $1 '$1,"ip: $IpInput"'
-  StrCpy $1 '$1; $$c=$$c -replace '
-  StrCpy $1 '$1"port: 8088"'
-  StrCpy $1 '$1,"port: $PortInput"'
-  StrCpy $1 '$1; $$c=$$c -replace '
-  StrCpy $1 '$1"namespace: meeting_public"'
-  StrCpy $1 '$1,"namespace: $NamespaceInput"'
+  ; Build PowerShell script with variable substitution
+  ; Use double quotes for NSIS variable expansion
+  DetailPrint "Updating configuration file..."
 
-  ; Device discovery
+  ; IP replacement
+  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'ip: null', 'ip: $IpInput' | Set-Content '$9'\""
+  Exec $1
+
+  ; Port replacement
+  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'port: 8088', 'port: $PortInput' | Set-Content '$9'\""
+  Exec $1
+
+  ; Namespace replacement
+  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'namespace: meeting_public', 'namespace: $NamespaceInput' | Set-Content '$9'\""
+  Exec $1
+
+  ; Device discovery - Android
   StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
-    StrCpy $1 '$1; $$c=$$c -replace '
-    StrCpy $1 '$1"discover_android_devices: false"'
-    StrCpy $1 '$1,"discover_android_devices: true"'
+    StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'discover_android_devices: false', 'discover_android_devices: true' | Set-Content '$9'\""
+    Exec $1
   skip_android:
 
+  ; Device discovery - iOS
   StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
-    StrCpy $1 '$1; $$c=$$c -replace '
-    StrCpy $1 '$1"discover_ios_devices: false"'
-    StrCpy $1 '$1,"discover_ios_devices: true"'
+    StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'discover_ios_devices: false', 'discover_ios_devices: true' | Set-Content '$9'\""
+    Exec $1
   skip_ios:
-
-  StrCpy $1 '$1; $$c | Set-Content $$f"'
-  nsExec::Exec $1
 
   Goto done
 
