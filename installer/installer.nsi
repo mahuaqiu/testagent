@@ -112,8 +112,10 @@ SectionEnd
 ; Uninstall Section
 ; ============================================
 Section Uninstall
-  ; Kill processes
-  ExecWait '"taskkill" /f /im test-worker.exe' $0
+  ; Kill processes (use nsExec to hide console window)
+  StrCpy $1 '"taskkill" /f /im test-worker.exe'
+  nsExec::Exec $1
+  Pop $0
 
   ; PowerShell: kill ios, adb, ffmpeg by install path (use nsExec to hide window)
   StrCpy $2 "$INSTDIR"
@@ -156,8 +158,10 @@ SectionEnd
 
 ; Process cleanup and Playwright directory removal
 Function KillProcessesAndCleanup
-  ; 1. Kill main process (global kill, name is unique)
-  ExecWait '"taskkill" /f /im test-worker.exe' $0
+  ; 1. Kill main process (use nsExec to hide console window even if process not found)
+  StrCpy $1 '"taskkill" /f /im test-worker.exe'
+  nsExec::Exec $1
+  Pop $0
 
   ; 2. Prepare path variables (ensure trailing slash to avoid matching other paths)
   StrCpy $2 "$INSTDIR"
@@ -312,29 +316,29 @@ Function ConfigPageCreate
   Pop $PortInput
 
   ; Row 2: Namespace
-  ${NSD_CreateLabel} 0 48 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 66 200 12u "meeting_public"
+  ${NSD_CreateLabel} 0 40 100% 12u "Namespace:"
+  ${NSD_CreateText} 0 58 200 12u "meeting_public"
   Pop $NamespaceInput
 
   ; Row 3: Platform API address
-  ${NSD_CreateLabel} 0 96 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 114 350 12u "${PLATFORM_API}"
+  ${NSD_CreateLabel} 0 80 100% 12u "Platform API Address:"
+  ${NSD_CreateText} 0 98 350 12u "${PLATFORM_API}"
   Pop $PlatformApiInput
 
   ; Row 4: OCR service address
-  ${NSD_CreateLabel} 0 144 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 162 350 12u "${OCR_SERVICE}"
+  ${NSD_CreateLabel} 0 120 100% 12u "OCR Service Address:"
+  ${NSD_CreateText} 0 138 350 12u "${OCR_SERVICE}"
   Pop $OcrServiceInput
 
   ; Row 5: Device discovery options
-  ${NSD_CreateLabel} 0 192 100% 12u "Device Discovery:"
-  ${NSD_CreateCheckbox} 0 210 80 12u "Android"
+  ${NSD_CreateLabel} 0 160 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 178 80 12u "Android"
   Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 100 210 60 12u "iOS"
+  ${NSD_CreateCheckbox} 100 178 60 12u "iOS"
   Pop $DiscoverIos
 
   ; Row 6: Desktop shortcut
-  ${NSD_CreateCheckbox} 0 240 100% 12u "Create Desktop Shortcut"
+  ${NSD_CreateCheckbox} 0 200 100% 12u "Create Desktop Shortcut"
   Pop $DesktopCheckbox
   ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
 
