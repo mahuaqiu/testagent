@@ -177,6 +177,7 @@ $OcrService = ($YamlContent | Select-String 'ocr_service:\s*"([^"]+)"').Matches.
 | 平台 API 地址 | 文本框 | 从 worker.yaml 读取 |
 | OCR 服务地址 | 文本框 | 从 worker.yaml 读取 |
 | 设备发现选项 | 复选框 × 2 | Android/iOS 设备发现开关（对应 config 中的 discover_android_devices 和 discover_ios_devices 字段，默认 false） |
+| 创建桌面快捷方式 | 复选框 | 默认勾选，安装时创建桌面快捷方式 |
 
 **升级安装行为**：
 - 检测到 `config\worker.yaml` 存在时，跳过配置参数页面
