@@ -351,66 +351,41 @@ Function ReplaceConfigFile
   ; Only execute for new install
   StrCmp $IsUpgrade "1" done
 
-  ; Copy template to user config directory
+  ; Check if template file exists
+  IfFileExists "$INSTDIR\_internal\config\worker.yaml" 0 no_template
+
+  ; Copy template to user config directory first
   CopyFiles "$INSTDIR\_internal\config\worker.yaml" "$INSTDIR\config\worker.yaml"
 
-  ; Replace user input values line by line
-  FileOpen $4 "$INSTDIR\config\worker.yaml" r
-  FileOpen $5 "$INSTDIR\config\worker.yaml.new" w
+  ; Build a simple PowerShell script to replace values
+  ; Store config path in variable
+  StrCpy $9 "$INSTDIR\config\worker.yaml"
 
-  Loop:
-    FileRead $4 $6
-    StrCmp $6 "" Close
+  ; Use single PowerShell command with multiple replacements
+  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 "$1$$f='$9'; "
+  StrCpy $1 "$1$$c=Get-Content $$f; "
+  StrCpy $1 "$1$$c=$$c -replace 'ip: null','ip: $IpInput'; "
+  StrCpy $1 "$1$$c=$$c -replace 'port: 8088','port: $PortInput'; "
+  StrCpy $1 "$1$$c=$$c -replace 'namespace: meeting_public','namespace: $NamespaceInput'; "
 
-    ; Replace ip: null
-    StrCmp $6 "  ip: null$\r$\n" 0 NotIpLine
-      StrCpy $6 "  ip: \"$IpInput\"$\r$\n"
-    NotIpLine:
+  ; Device discovery - check if checked
+  StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
+    StrCpy $1 "$1$$c=$$c -replace 'discover_android_devices: false','discover_android_devices: true'; "
+  skip_android:
 
-    ; Replace port
-    StrCmp $6 "  port: 8088$\r$\n" 0 NotPortLine
-      StrCpy $6 "  port: $PortInput$\r$\n"
-    NotPortLine:
+  StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
+    StrCpy $1 "$1$$c=$$c -replace 'discover_ios_devices: false','discover_ios_devices: true'; "
+  skip_ios:
 
-    ; Replace namespace
-    StrCmp $6 "  namespace: meeting_public$\r$\n" 0 NotNamespaceLine
-      StrCpy $6 "  namespace: $NamespaceInput$\r$\n"
-    NotNamespaceLine:
+  StrCpy $1 "$1$$c | Set-Content $$f\""
+  nsExec::Exec $1
 
-    ; Replace platform_api
-    StrCmp $6 '  platform_api: "${PLATFORM_API}"$\r$\n' 0 NotPlatformApiLine
-      StrCpy $6 '  platform_api: "$PlatformApiInput"$\r$\n'
-    NotPlatformApiLine:
+  Goto done
 
-    ; Replace ocr_service
-    StrCmp $6 '  ocr_service: "${OCR_SERVICE}"$\r$\n' 0 NotOcrServiceLine
-      StrCpy $6 '  ocr_service: "$OcrServiceInput"$\r$\n'
-    NotOcrServiceLine:
-
-    ; Replace discover_android_devices
-    StrCmp $6 "  discover_android_devices: false$\r$\n" 0 NotAndroidLine
-      ${If} $DiscoverAndroid == ${BST_CHECKED}
-        StrCpy $6 "  discover_android_devices: true$\r$\n"
-      ${EndIf}
-    NotAndroidLine:
-
-    ; Replace discover_ios_devices
-    StrCmp $6 "  discover_ios_devices: false$\r$\n" 0 NotIosLine
-      ${If} $DiscoverIos == ${BST_CHECKED}
-        StrCpy $6 "  discover_ios_devices: true$\r$\n"
-      ${EndIf}
-    NotIosLine:
-
-    FileWrite $5 $6
-    Goto Loop
-
-  Close:
-    FileClose $4
-    FileClose $5
-
-    ; Replace original file
-    Delete "$INSTDIR\config\worker.yaml"
-    Rename "$INSTDIR\config\worker.yaml.new" "$INSTDIR\config\worker.yaml"
+  no_template:
+    ; Template not found, show warning
+    MessageBox MB_OK "Warning: Config template not found at _internal\config\worker.yaml"
 
   done:
 FunctionEnd
