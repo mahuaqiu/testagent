@@ -251,7 +251,10 @@
       "Bash(dir /s /b \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\")",
       "Bash(wmic process *)",
       "Bash(git show *)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(makensis /VERSION)",
+      "Bash(pytest --collect-only)",
+      "Bash(pytest tests/ -v --tb=short)"
     ]
   }
 }
