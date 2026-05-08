@@ -114,19 +114,18 @@ Section Uninstall
   nsExec::Exec $1
   Pop $0
 
-  ; PowerShell: kill ios, adb, ffmpeg by install path (use nsExec to hide window)
+  ; PowerShell: kill ios, adb, ffmpeg by install path (use nsExec for synchronous execution)
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"
-  ; Use double-quoted NSIS string, PowerShell uses double quotes for -like argument
-  ; $$ in NSIS double-quote string means literal $ for PowerShell variables
-  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
   StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
   StrCpy $1 "$1foreach ($$x in $$p) { "
-  StrCpy $1 "$1  if ($$x.Path -like $\"$3*$\" -or $$x.Path -like $\"$2\*$\") { "
+  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
   StrCpy $1 "$1    $$x.Kill() "
   StrCpy $1 "$1  } "
   StrCpy $1 "$1}$\""
-  nsExec::Exec $1
+  nsExec::ExecToStack $1
+  Pop $0
   Pop $0
 
   ; Delete shortcuts
@@ -165,17 +164,21 @@ Function KillProcessesAndCleanup
   StrCpy $3 "$2\"  ; Add trailing separator
 
   ; 3. PowerShell: kill ios, adb, ffmpeg by install path
-  ; Use nsExec::Exec to completely hide console window
-  ; Use double-quoted NSIS string, $$ means literal $ for PowerShell variables
-  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  ; Use nsExec::ExecToStack for synchronous execution (wait for completion, hide window)
+  ; Build command in segments: double-quote for NSIS var expansion, $$ for PowerShell $
+  DetailPrint "Killing device service processes..."
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
   StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
   StrCpy $1 "$1foreach ($$x in $$p) { "
-  StrCpy $1 "$1  if ($$x.Path -like $\"$3*$\" -or $$x.Path -like $\"$2\*$\") { "
+  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
   StrCpy $1 "$1    $$x.Kill() "
   StrCpy $1 "$1  } "
   StrCpy $1 "$1}$\""
-  nsExec::Exec $1
-  Pop $0
+  ; Show the command being executed (for debugging)
+  DetailPrint "Executing: $1"
+  nsExec::ExecToStack $1
+  Pop $0  ; Return code
+  Pop $0  ; Output (discard)
 
   ; 4. Delete playwright directory (avoid upgrade incompatibility)
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
