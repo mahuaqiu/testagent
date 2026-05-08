@@ -115,17 +115,20 @@ Section Uninstall
   ; Kill processes
   ExecWait '"taskkill" /f /im test-worker.exe' $0
 
-  ; PowerShell: kill ios, adb, ffmpeg by install path (hidden window, async)
+  ; PowerShell: kill ios, adb, ffmpeg by install path (use nsExec to hide window)
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"
-  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
-  StrCpy $1 '$1foreach ($$x in $$p) { '
-  StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
-  StrCpy $1 '$1    $$x.Kill() '
-  StrCpy $1 '$1  } '
-  StrCpy $1 '$1}"'
-  Exec $1
+  ; Use double-quoted NSIS string, PowerShell uses double quotes for -like argument
+  ; $$ in NSIS double-quote string means literal $ for PowerShell variables
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1foreach ($$x in $$p) { "
+  StrCpy $1 "$1  if ($$x.Path -like $\"$3*$\" -or $$x.Path -like $\"$2\*$\") { "
+  StrCpy $1 "$1    $$x.Kill() "
+  StrCpy $1 "$1  } "
+  StrCpy $1 "$1}$\""
+  nsExec::Exec $1
+  Pop $0
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -161,16 +164,17 @@ Function KillProcessesAndCleanup
   StrCpy $3 "$2\"  ; Add trailing separator
 
   ; 3. PowerShell: kill ios, adb, ffmpeg by install path
-  ; Build command string in segments, use $$ for literal $ in PowerShell
-  ; Use Exec with hidden window style (async, won't block UI)
-  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
-  StrCpy $1 '$1foreach ($$x in $$p) { '
-  StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
-  StrCpy $1 '$1    $$x.Kill() '
-  StrCpy $1 '$1  } '
-  StrCpy $1 '$1}"'
-  Exec $1  ; Async execution, won't block
+  ; Use nsExec::Exec to completely hide console window
+  ; Use double-quoted NSIS string, $$ means literal $ for PowerShell variables
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1foreach ($$x in $$p) { "
+  StrCpy $1 "$1  if ($$x.Path -like $\"$3*$\" -or $$x.Path -like $\"$2\*$\") { "
+  StrCpy $1 "$1    $$x.Kill() "
+  StrCpy $1 "$1  } "
+  StrCpy $1 "$1}$\""
+  nsExec::Exec $1
+  Pop $0
 
   ; 4. Delete playwright directory (avoid upgrade incompatibility)
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
@@ -298,39 +302,39 @@ Function ConfigPageCreate
 
   ; Row 1: IP and Port on same line
   ${NSD_CreateLabel} 0 0 140 12u "Worker IP Address:"
-  ${NSD_CreateText} 0 16 280 12u ""
+  ${NSD_CreateText} 0 18 280 12u ""
   Pop $IpInput
   Call GetLocalIP
   ${NSD_SetText} $IpInput $R0
 
   ${NSD_CreateLabel} 300 0 80 12u "Port:"
-  ${NSD_CreateText} 300 16 80 12u "8088"
+  ${NSD_CreateText} 300 18 80 12u "8088"
   Pop $PortInput
 
   ; Row 2: Namespace
-  ${NSD_CreateLabel} 0 40 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 56 200 12u "meeting_public"
+  ${NSD_CreateLabel} 0 48 100% 12u "Namespace:"
+  ${NSD_CreateText} 0 66 200 12u "meeting_public"
   Pop $NamespaceInput
 
   ; Row 3: Platform API address
-  ${NSD_CreateLabel} 0 80 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 96 350 12u "${PLATFORM_API}"
+  ${NSD_CreateLabel} 0 96 100% 12u "Platform API Address:"
+  ${NSD_CreateText} 0 114 350 12u "${PLATFORM_API}"
   Pop $PlatformApiInput
 
   ; Row 4: OCR service address
-  ${NSD_CreateLabel} 0 120 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 136 350 12u "${OCR_SERVICE}"
+  ${NSD_CreateLabel} 0 144 100% 12u "OCR Service Address:"
+  ${NSD_CreateText} 0 162 350 12u "${OCR_SERVICE}"
   Pop $OcrServiceInput
 
   ; Row 5: Device discovery options
-  ${NSD_CreateLabel} 0 160 100% 12u "Device Discovery:"
-  ${NSD_CreateCheckbox} 0 176 80 12u "Android"
+  ${NSD_CreateLabel} 0 192 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 210 80 12u "Android"
   Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 100 176 60 12u "iOS"
+  ${NSD_CreateCheckbox} 100 210 60 12u "iOS"
   Pop $DiscoverIos
 
   ; Row 6: Desktop shortcut
-  ${NSD_CreateCheckbox} 0 196 100% 12u "Create Desktop Shortcut"
+  ${NSD_CreateCheckbox} 0 240 100% 12u "Create Desktop Shortcut"
   Pop $DesktopCheckbox
   ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
 
@@ -370,57 +374,39 @@ Function ReplaceConfigFile
   DetailPrint "Updating configuration file..."
 
   ; IP replacement - build command in segments
-  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1(Get-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1) -replace "ip: null", "ip: $IpInput"'
-  StrCpy $1 '$1 | Set-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1"'
-  ExecWait $1
+  ; Use nsExec::Exec to completely hide console window
+  ; Use double-quoted NSIS string, PowerShell uses single quotes for -replace arguments
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1(Get-Content '$9') -replace 'ip: null', 'ip: $IpInput' | Set-Content '$9'$\""
+  nsExec::Exec $1
+  Pop $0
 
   ; Port replacement
-  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1(Get-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1) -replace "port: 8088", "port: $PortInput"'
-  StrCpy $1 '$1 | Set-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1"'
-  ExecWait $1
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1(Get-Content '$9') -replace 'port: 8088', 'port: $PortInput' | Set-Content '$9'$\""
+  nsExec::Exec $1
+  Pop $0
 
   ; Namespace replacement
-  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-  StrCpy $1 '$1(Get-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1) -replace "namespace: meeting_public", "namespace: $NamespaceInput"'
-  StrCpy $1 '$1 | Set-Content '
-  StrCpy $1 '$1$9'
-  StrCpy $1 '$1"'
-  ExecWait $1
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1(Get-Content '$9') -replace 'namespace: meeting_public', 'namespace: $NamespaceInput' | Set-Content '$9'$\""
+  nsExec::Exec $1
+  Pop $0
 
   ; Device discovery - Android
   StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
-    StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-    StrCpy $1 '$1(Get-Content '
-    StrCpy $1 '$1$9'
-    StrCpy $1 '$1) -replace "discover_android_devices: false", "discover_android_devices: true"'
-    StrCpy $1 '$1 | Set-Content '
-    StrCpy $1 '$1$9'
-    StrCpy $1 '$1"'
-    ExecWait $1
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_android_devices: false', 'discover_android_devices: true' | Set-Content '$9'$\""
+    nsExec::Exec $1
+    Pop $0
   skip_android:
 
   ; Device discovery - iOS
   StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
-    StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
-    StrCpy $1 '$1(Get-Content '
-    StrCpy $1 '$1$9'
-    StrCpy $1 '$1) -replace "discover_ios_devices: false", "discover_ios_devices: true"'
-    StrCpy $1 '$1 | Set-Content '
-    StrCpy $1 '$1$9'
-    StrCpy $1 '$1"'
-    ExecWait $1
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_ios_devices: false', 'discover_ios_devices: true' | Set-Content '$9'$\""
+    nsExec::Exec $1
+    Pop $0
   skip_ios:
 
   Goto done
