@@ -368,31 +368,60 @@ Function ReplaceConfigFile
   StrCpy $9 "$INSTDIR\config\worker.yaml"
 
   ; Build PowerShell script with variable substitution
-  ; Use double quotes for NSIS variable expansion
   DetailPrint "Updating configuration file..."
 
-  ; IP replacement
-  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'ip: null', 'ip: $IpInput' | Set-Content '$9'\""
-  Exec $1
+  ; IP replacement - build command in segments
+  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 '$1(Get-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1) -replace "ip: null", "ip: $IpInput"'
+  StrCpy $1 '$1 | Set-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1"'
+  ExecWait $1
 
   ; Port replacement
-  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'port: 8088', 'port: $PortInput' | Set-Content '$9'\""
-  Exec $1
+  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 '$1(Get-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1) -replace "port: 8088", "port: $PortInput"'
+  StrCpy $1 '$1 | Set-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1"'
+  ExecWait $1
 
   ; Namespace replacement
-  StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'namespace: meeting_public', 'namespace: $NamespaceInput' | Set-Content '$9'\""
-  Exec $1
+  StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 '$1(Get-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1) -replace "namespace: meeting_public", "namespace: $NamespaceInput"'
+  StrCpy $1 '$1 | Set-Content '
+  StrCpy $1 '$1$9'
+  StrCpy $1 '$1"'
+  ExecWait $1
 
   ; Device discovery - Android
   StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
-    StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'discover_android_devices: false', 'discover_android_devices: true' | Set-Content '$9'\""
-    Exec $1
+    StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
+    StrCpy $1 '$1(Get-Content '
+    StrCpy $1 '$1$9'
+    StrCpy $1 '$1) -replace "discover_android_devices: false", "discover_android_devices: true"'
+    StrCpy $1 '$1 | Set-Content '
+    StrCpy $1 '$1$9'
+    StrCpy $1 '$1"'
+    ExecWait $1
   skip_android:
 
   ; Device discovery - iOS
   StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
-    StrCpy $1 "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"(Get-Content '$9') -replace 'discover_ios_devices: false', 'discover_ios_devices: true' | Set-Content '$9'\""
-    Exec $1
+    StrCpy $1 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'
+    StrCpy $1 '$1(Get-Content '
+    StrCpy $1 '$1$9'
+    StrCpy $1 '$1) -replace "discover_ios_devices: false", "discover_ios_devices: true"'
+    StrCpy $1 '$1 | Set-Content '
+    StrCpy $1 '$1$9'
+    StrCpy $1 '$1"'
+    ExecWait $1
   skip_ios:
 
   Goto done
