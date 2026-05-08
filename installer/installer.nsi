@@ -291,40 +291,40 @@ Function ConfigPageCreate
 
   ; IP address
   ${NSD_CreateLabel} 0 0 100% 12u "Worker IP Address:"
-  ${NSD_CreateText} 0 18 300 12u ""
+  ${NSD_CreateText} 0 15 300 12u ""
   Pop $IpInput
   Call GetLocalIP
   ${NSD_SetText} $IpInput $R0
 
   ; Port
-  ${NSD_CreateLabel} 0 44 100% 12u "Worker Port:"
-  ${NSD_CreateText} 0 62 100 12u "8088"
+  ${NSD_CreateLabel} 0 35 100% 12u "Worker Port:"
+  ${NSD_CreateText} 0 50 100 12u "8088"
   Pop $PortInput
 
   ; Namespace
-  ${NSD_CreateLabel} 0 88 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 106 200 12u "meeting_public"
+  ${NSD_CreateLabel} 0 70 100% 12u "Namespace:"
+  ${NSD_CreateText} 0 85 200 12u "meeting_public"
   Pop $NamespaceInput
 
   ; Platform API address
-  ${NSD_CreateLabel} 0 132 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 150 350 12u "${PLATFORM_API}"
+  ${NSD_CreateLabel} 0 105 100% 12u "Platform API Address:"
+  ${NSD_CreateText} 0 120 350 12u "${PLATFORM_API}"
   Pop $PlatformApiInput
 
   ; OCR service address
-  ${NSD_CreateLabel} 0 176 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 194 350 12u "${OCR_SERVICE}"
+  ${NSD_CreateLabel} 0 140 100% 12u "OCR Service Address:"
+  ${NSD_CreateText} 0 155 350 12u "${OCR_SERVICE}"
   Pop $OcrServiceInput
 
-  ; Device discovery options
-  ${NSD_CreateLabel} 0 220 100% 12u "Device Discovery Options:"
-  ${NSD_CreateCheckbox} 0 238 80 12u "Android"
+  ; Device discovery options (compact layout)
+  ${NSD_CreateLabel} 0 175 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 190 70 12u "Android"
   Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 90 238 80 12u "iOS"
+  ${NSD_CreateCheckbox} 80 190 50 12u "iOS"
   Pop $DiscoverIos
 
   ; Desktop shortcut
-  ${NSD_CreateCheckbox} 0 264 100% 12u "Create Desktop Shortcut"
+  ${NSD_CreateCheckbox} 0 210 100% 12u "Create Desktop Shortcut"
   Pop $DesktopCheckbox
   ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
 
