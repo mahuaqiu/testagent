@@ -35,6 +35,31 @@ installer/
 3. 调用 `makensis.exe` 编译 `.nsi` 脚本
 4. 输出到 `dist\test-worker-installer.exe`
 
+**NSIS 脚本基本配置**（替代 Inno Setup `[Setup]` 段）：
+```nsis
+; 产品元数据（VERSION 从构建脚本传入）
+!define PRODUCT_NAME "Test Worker"
+!define PRODUCT_VERSION "${VERSION}"
+!define PRODUCT_PUBLISHER "Test Worker Team"
+!define PRODUCT_WEB_SITE ""
+!define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\test-worker.exe"
+!define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+
+; Modern UI 2 配置
+!include "MUI2.nsh"
+!define MUI_ABORTWARNING
+!define MUI_ICON "assets\icon.ico"
+!define MUI_UNICON "assets\icon.ico"
+
+; 安装程序基本信息
+Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
+OutFile "..\dist\test-worker-installer.exe"
+InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
+InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
+ShowInstDetails show
+RequestExecutionLevel admin
+```
+
 ## 功能迁移清单
 
 | 功能 | Inno Setup 实现 | NSIS 实现 |
@@ -52,7 +77,7 @@ installer/
 | 升级检测 | 检查 `config\worker.yaml` | 检查 `config\worker.yaml` |
 | 进程清理 | `Exec('taskkill')` + PowerShell | `ExecWait 'taskkill'` + PowerShell |
 | 配置文件合并 | Pascal 文件操作 | NSIS `FileOpen`/`FileRead`/`FileWrite` |
-| 静默安装 | `/VERYSILENT` 参数 | `/S` 参数 |
+| 静默安装 | `/VERYSILENT` 参数 | `/S` 参数（静默安装完成后自动启动程序，不显示完成页面） |
 | 安装后启动 | `[Run]` 段 | `Exec` 命令 |
 
 ## 关键设计细节
@@ -65,7 +90,7 @@ installer/
 
 **NSIS 实现要点**：
 - 执行时机：INSTFILES 页面初始化时（此时 `$INSTDIR` 已确定）
-- 进程名：test-worker.exe（全局杀）、ios.exe、adb.exe、ffmpeg.exe（按路径筛选）
+- 进程名：test-worker.exe（全局杀）、ios、adb、ffmpeg（按路径筛选，PowerShell `-Name` 参数不需要 `.exe` 后缀）
 - 路径匹配：确保不区分大小写，路径末尾有分隔符
 
 ```nsis
@@ -77,10 +102,16 @@ Function KillProcessesAndCleanup
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"  ; 路径末尾加分隔符
 
-  ; 3. PowerShell 按路径精准杀 ios.exe、adb.exe、ffmpeg.exe
-  ; 注意：NSIS 字符串拼接使用 "$变量" 格式，$1 会被替换为已存储的值
-  ; PowerShell 脚本中的路径使用 -like 操作符（不区分大小写）
-  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; foreach ($x in $p) { if ($x.Path -like \'$3*\' -or $x.Path -like \'$2\\*\') { $x.Kill() } }"'
+  ; 3. PowerShell 按路径精准杀 ios、adb、ffmpeg
+  ; 注意：PowerShell -Name 参数不需要 .exe 后缀
+  ; NSIS 字符串转义规则：
+  ;   - 双引号字符串中：$$ 表示字面量 $，\" 表示字面量双引号（NSIS 3.x+）
+  ;   - 单引号字符串中：'' 表示字面量单引号
+  ;   - 不支持 \ 转义其他字符
+  ; 使用外层双引号、内层单引号（PowerShell 单引号字符串）避免复杂转义
+  ; PowerShell 单引号字符串中 $ 变量不展开，但 $3 是 NSIS 变量会在运行时替换为路径值
+  ; 最终 PowerShell 命令：$p = Get-Process -Name ios,adb,ffmpeg ... if ($x.Path -like 'C:\Path\*') ...
+  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; foreach ($x in $p) { if ($x.Path -like ''$3*'' -or $x.Path -like ''$2\\*'') { $x.Kill() } }"'
   ExecWait $1 $0
 
   ; 4. 删除 playwright 目录（避免升级不兼容问题）
@@ -300,6 +331,17 @@ Close:
 **启动程序**：
 - 交互安装：完成页面显示"启动"复选框，勾选后启动（带 UAC 提升）
 - 静默安装：自动启动（不带 UAC，作为当前用户运行）
+
+**静默安装启动实现**：
+```nsis
+Function .onInstSuccess
+  ; 静默安装时自动启动程序
+  IfSilent 0 done
+    ; 使用 Explorer 启动，避免 UAC 提升问题（作为当前用户运行）
+    Exec '"$WINDIR\explorer.exe" "$INSTDIR\test-worker.exe"'
+  done:
+FunctionEnd
+```
 
 ### 卸载功能
 
