@@ -111,7 +111,7 @@ Function KillProcessesAndCleanup
   ; 使用外层双引号、内层单引号（PowerShell 单引号字符串）避免复杂转义
   ; PowerShell 单引号字符串中 $ 变量不展开，但 $3 是 NSIS 变量会在运行时替换为路径值
   ; 最终 PowerShell 命令：$p = Get-Process -Name ios,adb,ffmpeg ... if ($x.Path -like 'C:\Path\*') ...
-  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; foreach ($x in $p) { if ($x.Path -like ''$3*'' -or $x.Path -like ''$2\\*'') { $x.Kill() } }"'
+  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; foreach ($x in $p) { if ($x.Path -like ''$3*'' -or $x.Path -like ''$2\*'') { $x.Kill() } }"'
   ExecWait $1 $0
 
   ; 4. 删除 playwright 目录（避免升级不兼容问题）
