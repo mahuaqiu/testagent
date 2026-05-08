@@ -108,16 +108,17 @@ Section Uninstall
 
   ; PowerShell: kill ios, adb, ffmpeg by install path
   ; Use $$ for literal $ in PowerShell (NSIS $$ = literal $)
+  ; Use nsExec plugin to hide console window
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"
-  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
   StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
   StrCpy $1 '$1foreach ($$x in $$p) { '
   StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
   StrCpy $1 '$1    $$x.Kill() '
   StrCpy $1 '$1  } '
   StrCpy $1 '$1}"'
-  ExecWait $1 $0
+  nsExec::Exec $1
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -154,14 +155,15 @@ Function KillProcessesAndCleanup
 
   ; 3. PowerShell: kill ios, adb, ffmpeg by install path
   ; Build command string in segments, use $$ for literal $ in PowerShell
-  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "'
+  ; Use nsExec plugin to hide console window
+  StrCpy $1 'powershell -NoProfile -ExecutionPolicy Bypass -Command "'
   StrCpy $1 '$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
   StrCpy $1 '$1foreach ($$x in $$p) { '
   StrCpy $1 '$1  if ($$x.Path -like "$3*" -or $$x.Path -like "$2\*") { '
   StrCpy $1 '$1    $$x.Kill() '
   StrCpy $1 '$1  } '
   StrCpy $1 '$1}"'
-  ExecWait $1 $0
+  nsExec::Exec $1
 
   ; 4. Delete playwright directory (avoid upgrade incompatibility)
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
