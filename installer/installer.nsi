@@ -30,7 +30,7 @@ SetCompressor /SOLID lzma
 ; Command line parameter parsing helpers
 !include "FileFunc.nsh"
 !insertmacro GetParameters
-!insertmacro GetOption
+!insertmacro GetOptions
 
 ; nsDialogs for custom pages
 !include "nsDialogs.nsh"
@@ -408,23 +408,23 @@ Function .onInit
   ${GetParameters} $0
 
   ; Parse parameters (optional: support /IP= /PORT= etc)
-  ${GetOption} $0 "/IP=" $1
+  ${GetOptions} $0 "/IP=" $1
   StrCmp $1 "" 0 +2
     StrCpy $IpInput $1
 
-  ${GetOption} $0 "/PORT=" $1
+  ${GetOptions} $0 "/PORT=" $1
   StrCmp $1 "" 0 +2
     StrCpy $PortInput $1
 
-  ${GetOption} $0 "/NAMESPACE=" $1
+  ${GetOptions} $0 "/NAMESPACE=" $1
   StrCmp $1 "" 0 +2
     StrCpy $NamespaceInput $1
 
-  ${GetOption} $0 "/PLATFORM_API=" $1
+  ${GetOptions} $0 "/PLATFORM_API=" $1
   StrCmp $1 "" 0 +2
     StrCpy $PlatformApiInput $1
 
-  ${GetOption} $0 "/OCR_SERVICE=" $1
+  ${GetOptions} $0 "/OCR_SERVICE=" $1
   StrCmp $1 "" 0 +2
     StrCpy $OcrServiceInput $1
 
