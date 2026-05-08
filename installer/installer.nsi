@@ -296,42 +296,42 @@ Function ConfigPageCreate
   nsDialogs::Create 1018
   Pop $0
 
-  ; IP address
+  ; IP address (row 1)
   ${NSD_CreateLabel} 0 0 100% 12u "Worker IP Address:"
-  ${NSD_CreateText} 0 18 300 12u ""
+  ${NSD_CreateText} 0 16 300 12u ""
   Pop $IpInput
   Call GetLocalIP
   ${NSD_SetText} $IpInput $R0
 
-  ; Port
-  ${NSD_CreateLabel} 0 40 100% 12u "Worker Port:"
-  ${NSD_CreateText} 0 58 100 12u "8088"
+  ; Port (row 2)
+  ${NSD_CreateLabel} 0 36 100% 12u "Worker Port:"
+  ${NSD_CreateText} 0 52 100 12u "8088"
   Pop $PortInput
 
-  ; Namespace
-  ${NSD_CreateLabel} 0 80 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 98 200 12u "meeting_public"
+  ; Namespace (row 3)
+  ${NSD_CreateLabel} 0 72 100% 12u "Namespace:"
+  ${NSD_CreateText} 0 88 200 12u "meeting_public"
   Pop $NamespaceInput
 
-  ; Platform API address
-  ${NSD_CreateLabel} 0 120 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 138 350 12u "${PLATFORM_API}"
+  ; Platform API address (row 4)
+  ${NSD_CreateLabel} 0 108 100% 12u "Platform API Address:"
+  ${NSD_CreateText} 0 124 350 12u "${PLATFORM_API}"
   Pop $PlatformApiInput
 
-  ; OCR service address
-  ${NSD_CreateLabel} 0 160 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 178 350 12u "${OCR_SERVICE}"
+  ; OCR service address (row 5)
+  ${NSD_CreateLabel} 0 144 100% 12u "OCR Service Address:"
+  ${NSD_CreateText} 0 160 350 12u "${OCR_SERVICE}"
   Pop $OcrServiceInput
 
-  ; Device discovery options
-  ${NSD_CreateLabel} 0 200 100% 12u "Device Discovery:"
-  ${NSD_CreateCheckbox} 0 218 80 12u "Android"
+  ; Device discovery options (row 6)
+  ${NSD_CreateLabel} 0 180 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 196 80 12u "Android"
   Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 100 218 60 12u "iOS"
+  ${NSD_CreateCheckbox} 100 196 60 12u "iOS"
   Pop $DiscoverIos
 
-  ; Desktop shortcut
-  ${NSD_CreateCheckbox} 0 240 100% 12u "Create Desktop Shortcut"
+  ; Desktop shortcut (row 7)
+  ${NSD_CreateCheckbox} 0 216 100% 12u "Create Desktop Shortcut"
   Pop $DesktopCheckbox
   ${NSD_SetState} $DesktopCheckbox ${BST_CHECKED}
 
