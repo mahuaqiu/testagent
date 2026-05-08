@@ -71,9 +71,13 @@ Section "MainSection" SEC01
   CreateDirectory "$INSTDIR\temp"
   CreateDirectory "$INSTDIR\data"
 
-  ; Copy files (exclude root config directory)
+  ; Copy files - first copy _internal directory (includes _internal\config)
+  SetOutPath "$INSTDIR\_internal"
+  File /r "..\dist\windows\test-worker\_internal\*"
+
+  ; Copy all other files (exclude root config and _internal to avoid duplication)
   SetOutPath "$INSTDIR"
-  File /r /x "config" "..\dist\windows\test-worker\*"
+  File /r /x "config" /x "_internal" "..\dist\windows\test-worker\*"
 
   ; Replace config file with user input
   Call ReplaceConfigFile
