@@ -1,0 +1,225 @@
+---
+name: NSIS Installer Migration
+description: 将打包方案从 Inno Setup 切换到 NSIS
+type: project
+---
+
+# NSIS Installer Migration Design
+
+## 概述
+
+**目标**：将打包方案从 Inno Setup 切换到 NSIS，保留所有现有功能。
+
+**原因**：Inno Setup 有商业风险，公司不允许使用。
+
+## 核心改动
+
+| 文件 | 改动 |
+|------|------|
+| `installer/installer.nsi` | 新建 NSIS 主脚本（替代 installer.iss） |
+| `installer/build_installer.ps1` | 修改为调用 makensis.exe，从 worker.yaml 读取默认值 |
+| `installer/installer.iss` | 删除（不再使用） |
+
+## 架构
+
+```
+installer/
+├── installer.nsi          # NSIS 主脚本
+├── build_installer.ps1    # 构建脚本（调用 makensis）
+└── header.bmp             # 安装向导头部图片（可选）
+```
+
+**构建流程**：
+1. PowerShell 脚本检测 NSIS 安装路径
+2. 从 `config/worker.yaml` 读取默认值（platform_api、ocr_service）
+3. 调用 `makensis.exe` 编译 `.nsi` 脚本
+4. 输出到 `dist\test-worker-installer.exe`
+
+## 功能迁移清单
+
+| 功能 | Inno Setup 实现 | NSIS 实现 |
+|------|-----------------|-----------|
+| 基本安装 | `[Files]` 段 | `File` 命令 |
+| 目录创建 | `[Dirs]` 段 | `CreateDirectory` 命令 |
+| 快捷方式 | `[Icons]` 段 | `CreateShortcut` 命令 |
+| 卸载 | 自动生成 | `WriteUninstaller` 命令 |
+| 中文界面 | `ChineseSimplified.isl` | Modern UI 2 内置中文语言文件 |
+| 配置向导页面 | `TInputQueryWizardPage` | nsDialogs 自定义页面 |
+| 自动 IP 检测 | Pascal 代码读取注册表 | NSIS `ReadRegStr` + 循环 |
+| 命令行参数 | `GetCmdParam` 函数 | `GetParameters` + `GetOption` |
+| 升级检测 | 检查 `config\worker.yaml` | 检查 `config\worker.yaml` |
+| 进程清理 | `Exec('taskkill')` + PowerShell | `ExecWait 'taskkill'` + PowerShell |
+| 配置文件合并 | Pascal 文件操作 | NSIS `FileOpen`/`FileRead`/`FileWrite` |
+| 静默安装 | `/VERYSILENT` 参数 | `/S` 参数 |
+| 安装后启动 | `[Run]` 段 | `Exec` 命令 |
+
+## 关键设计细节
+
+### 进程清理
+
+**问题**：原 Inno Setup 实现的进程清理有 bug，安装目录占用的进程没杀掉。
+
+**原因分析**：
+1. 进程名不准确（ios.exe 而非 ios）
+2. 执行时机不对（路径参数可能未确定）
+3. PowerShell 路径匹配时机问题
+
+**NSIS 改进方案**：
+- 执行时机：INSTFILES 页面初始化时（此时 `$INSTDIR` 已确定）
+- 进程名：test-worker.exe（全局杀）、ios.exe、adb.exe、ffmpeg.exe（按路径筛选）
+- 实现方式：先杀主进程，再用 PowerShell 按路径精准杀其他进程
+
+```nsis
+Function KillProcessesAndCleanup
+  ; 1. 杀主进程（全局杀，名称唯一）
+  ExecWait '"taskkill" /f /im test-worker.exe' $0
+
+  ; 2. PowerShell 按路径精准杀 ios.exe、adb.exe、ffmpeg.exe
+  StrCpy $1 '"powershell" -NoProfile -ExecutionPolicy Bypass -Command "'
+  StrCpy $1 '$1$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; '
+  StrCpy $1 '$1foreach ($x in $p) { '
+  StrCpy $1 '$1  if ($x.Path.StartsWith(\"$INSTDIR\")) { '
+  StrCpy $1 '$1    $x.Kill(); '
+  StrCpy $1 '$1  } '
+  StrCpy $1 '$1}"'
+  ExecWait $1 $0
+
+  ; 3. 删除 playwright 目录（避免升级问题）
+  IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
+    RMDir /r "$INSTDIR\playwright"
+  NoPlaywright:
+FunctionEnd
+```
+
+**调用时机**：
+```nsis
+!define MUI_PAGE_CUSTOMFUNCTION_PRE KillProcessesAndCleanup
+!insertmacro MUI_PAGE_INSTFILES
+```
+
+### 默认值读取
+
+**问题**：配置页面默认值（platform_api、ocr_service）需从 worker.yaml 模板读取，避免硬编码维护两处。
+
+**方案**：构建时预读取
+
+```powershell
+# 解析 worker.yaml 获取默认值
+$WorkerYaml = "config\worker.yaml"
+$YamlContent = Get-Content $WorkerYaml
+
+# 提取 platform_api 和 ocr_service 默认值
+$PlatformApi = ($YamlContent | Select-String 'platform_api:\s*"([^"]+)"').Matches.Groups[1].Value
+$OcrService = ($YamlContent | Select-String 'ocr_service:\s*"([^"]+)"').Matches.Groups[1].Value
+
+# 传给 NSIS
+& $NsisPath "/DVersion=$Version" "/DPlatformApi=$PlatformApi" "/DOcrService=$OcrService" "installer\installer.nsi"
+```
+
+### 安装向导页面流程
+
+```
+1. 欢迎页面
+2. 安装路径选择页面
+3. 配置参数页面（自定义页面 - nsDialogs）
+4. 安装进度页面
+5. 完成页面
+```
+
+**配置参数页面内容**：
+
+| 控件 | 类型 | 默认值 |
+|------|------|--------|
+| Worker IP 地址 | 文本框 | 自动检测本地 IP |
+| Worker 端口 | 文本框 | 8088 |
+| 命名空间 | 文本框 | meeting_public |
+| 平台 API 地址 | 文本框 | 从 worker.yaml 读取 |
+| OCR 服务地址 | 文本框 | 从 worker.yaml 读取 |
+| 设备发现选项 | 复选框 | Android + iOS（默认不勾选） |
+
+**升级安装行为**：
+- 检测到 `config\worker.yaml` 存在时，跳过配置参数页面
+- 保留用户原有配置
+
+### 自动 IP 检测
+
+**逻辑**：遍历注册表网络接口，优先返回 10.x.x.x、192.168.x.x、172.16-31.x.x 范围的 IP。
+
+**NSIS 实现**：
+```nsis
+Function GetLocalIP
+  ; 遍历注册表 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces
+  ; 读取 DhcpIPAddress 或 IPAddress
+  ; 按优先级返回：10.xx > 192.168.xx > 172.xx > 其他 > 127.0.0.1
+FunctionEnd
+```
+
+### 安装后操作
+
+**目录创建**：
+- `{app}\config` - 用户配置目录
+- `{app}\_internal\config` - 配置模板备份
+- `{app}\temp` - 临时文件目录
+- `{app}\data` - 数据目录
+
+**配置文件处理**：
+- 新安装：从 `_internal\config\worker.yaml` 复制模板，替换用户输入值
+- 升级安装：保留原有 `config\worker.yaml`
+
+**启动程序**：
+- 交互安装：完成页面显示"启动"复选框，勾选后启动（带 UAC 提升）
+- 静默安装：自动启动（不带 UAC，作为当前用户运行）
+
+### 卸载功能
+
+**卸载时执行的操作**：
+- 杀进程（按安装路径筛选）
+- 删除所有目录（包括 config、logs、data、temp）
+- 删除快捷方式
+- 删除安装目录所有文件
+
+**注意**：与原 Inno Setup 不同，卸载时完全删除所有文件（包括 config）。
+
+### 构建脚本改造
+
+**PowerShell 构建脚本改造要点**：
+
+```powershell
+# 检测 NSIS 安装路径
+$NsisPath = "C:\Program Files (x86)\NSIS\makensis.exe"
+if (-not (Test-Path $NsisPath)) {
+    $NsisPath = "C:\Program Files\NSIS\makensis.exe"
+}
+if (-not (Test-Path $NsisPath)) {
+    $NsisPath = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+}
+
+# 从 worker.yaml 读取默认值
+$PlatformApi = ...
+$OcrService = ...
+
+# 编译命令
+& $NsisPath "/DVersion=$Version" "/DPlatformApi=$PlatformApi" "/DOcrService=$OcrService" "installer\installer.nsi"
+```
+
+## 依赖安装
+
+| 软件 | 说明 | 下载地址 |
+|------|------|----------|
+| NSIS 3.x | Nullsoft Scriptable Install System，约 3MB | https://nsis.sourceforge.io/Download |
+
+**安装步骤**：
+1. 下载 NSIS 3.x（推荐 3.09 或更高版本）
+2. 运行安装程序，默认安装到 `C:\Program Files (x86)\NSIS`
+3. 无需安装额外插件（Modern UI 2 和 nsDialogs 都是内置的）
+
+**验证安装**：
+```powershell
+makensis /VERSION
+```
+
+## 风险和注意事项
+
+1. **NSIS 学习曲线**：语法与 Inno Setup Pascal 不同，需要学习基本语法
+2. **进程名验证**：ios.exe 进程名需在实际环境中验证
+3. **测试覆盖**：需要测试新安装、升级安装、静默安装、卸载等场景
