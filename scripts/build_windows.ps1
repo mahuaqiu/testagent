@@ -4,6 +4,7 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.2.1-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
+    [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel 路径
     [switch]$Clean,
     [switch]$BuildInstaller  # Build installer directly
 )
@@ -68,6 +69,15 @@ if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
     Write-Warning "Performance monitoring may not work!"
 }
 
+# 安装 win-control wheel
+if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
+    Write-Host "  Installing win-control wheel: $WinControlWheel"
+    pip install $WinControlWheel
+} else {
+    Write-Warning "win-control wheel not found at: $WinControlWheel"
+    Write-Warning "System control actions (set_resolution, set_volume, audio_device) may not work!"
+}
+
 Write-Host "[3/6] Generating version file..."
 $BuildVersion = Get-Date -Format "yyyyMMddHHmm"
 Set-Content -Path "worker\_version.py" -Value "VERSION = `"$BuildVersion`"" -Encoding UTF8
@@ -98,6 +108,7 @@ $nuitkaArgs = @(
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
     "--include-package-data=perfwin"
+    "--include-package-data=win_control"
     # uiautomator2 assets (u2.jar, app-uiautomator.apk)
     "--include-package-data=uiautomator2"
     "--low-memory"

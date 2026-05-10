@@ -113,6 +113,7 @@ PlatformManager (抽象基类)
 - **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
 - **移动端特有**：`unlock_screen` - 解锁屏幕（iOS/Android 专用）
 - **窗口激活**：`activate_window` - 激活窗口（Windows/Mac 专用）
+- **Windows 系统控制**：`set_resolution`, `set_volume`, `audio_device` - 分辨率、音量、音频设备控制（Windows 专用）
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
 
@@ -256,6 +257,59 @@ PlatformManager (抽象基类)
 |------|------------|--------------|
 | Windows | 支持 | 支持（通过进程名匹配） |
 | Mac | 不推荐 | 支持（通过应用名激活） |
+
+### set_resolution 设置分辨率（Windows 专用）
+
+设置显示器分辨率，用于测试不同分辨率下的 UI 表现。
+
+**参数**：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `width` | int | ✅ | 分辨率宽度（如 1920） |
+| `height` | int | ✅ | 分辨率高度（如 1080） |
+| `monitor_index` | int | ❌ | 显示器索引：0=主显示器（默认），1=第二个显示器 |
+
+**使用示例**：
+```json
+{"action_type": "set_resolution", "width": 1920, "height": 1080}
+{"action_type": "set_resolution", "width": 1920, "height": 1080, "monitor_index": 1}
+```
+
+**依赖**：需要安装 `win-control` 模块（打包时自动包含）。
+
+### set_volume 设置音量（Windows 专用）
+
+设置系统扬声器音量。
+
+**参数**：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `value` | int | ✅ | 音量值（0-100） |
+
+**使用示例**：
+```json
+{"action_type": "set_volume", "value": 50}
+```
+
+**依赖**：需要安装 `win-control` 模块（打包时自动包含）。
+
+### audio_device 音频设备控制（Windows 专用）
+
+启用或停用音频设备。
+
+**参数**：
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `device` | string | ✅ | 设备名称或 ID（支持包含匹配） |
+| `state` | string | ✅ | 状态：`"enable"`（启用）或 `"disabled"`（停用） |
+
+**使用示例**：
+```json
+{"action_type": "audio_device", "device": "扬声器", "state": "disabled"}
+{"action_type": "audio_device", "device": "Realtek Audio", "state": "enable"}
+```
+
+**依赖**：需要安装 `win-control` 模块（打包时自动包含）。
 
 ## 任务执行流程
 

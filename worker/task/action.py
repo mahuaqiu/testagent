@@ -116,6 +116,13 @@ class Action:
     region: list[int] | None = None       # 操作区域 [x1, y1, x2, y2]
     match_by: str | None = None           # 定位方式："title" 或 "process"
 
+    # 系统控制参数（分辨率/音量/设备）
+    width: int | None = None              # 分辨率宽度
+    height: int | None = None             # 分辨率高度
+    monitor_index: int | None = None      # 显示器索引（0=主显示器）
+    device: str | None = None             # 设备名称/ID（音频设备）
+    state: str | None = None              # 设备状态："enable" 或 "disabled"
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -174,6 +181,11 @@ class Action:
             target_index=data.get("target_index"),
             region=data.get("region"),
             match_by=data.get("match_by"),
+            width=data.get("width"),
+            height=data.get("height"),
+            monitor_index=data.get("monitor_index"),
+            device=data.get("device"),
+            state=data.get("state"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -242,5 +254,15 @@ class Action:
             result["region"] = self.region
         if self.match_by is not None:
             result["match_by"] = self.match_by
+        if self.width is not None:
+            result["width"] = self.width
+        if self.height is not None:
+            result["height"] = self.height
+        if self.monitor_index is not None:
+            result["monitor_index"] = self.monitor_index
+        if self.device is not None:
+            result["device"] = self.device
+        if self.state is not None:
+            result["state"] = self.state
 
         return result

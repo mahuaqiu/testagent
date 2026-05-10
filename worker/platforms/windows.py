@@ -39,7 +39,7 @@ class WindowsPlatformManager(PlatformManager):
     """
 
     # Windows 平台特有动作
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "set_resolution", "set_volume", "audio_device"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -267,6 +267,12 @@ class WindowsPlatformManager(PlatformManager):
                 result = self._action_start_app(action)
             elif action.action_type == "stop_app":
                 result = self._action_stop_app(action)
+            elif action.action_type == "set_resolution":
+                result = self._action_set_resolution(action)
+            elif action.action_type == "set_volume":
+                result = self._action_set_volume(action)
+            elif action.action_type == "audio_device":
+                result = self._action_audio_device(action)
             else:
                 # 使用 ActionRegistry 执行通用动作
                 executor = ActionRegistry.get(action.action_type)
@@ -370,4 +376,136 @@ class WindowsPlatformManager(PlatformManager):
                 action_type="stop_app",
                 status=ActionStatus.FAILED,
                 error=f"Failed to stop app: {e}",
+            )
+
+    def _action_set_resolution(self, action: Action) -> ActionResult:
+        """设置显示器分辨率。"""
+        width = action.width
+        height = action.height
+        if not width or not height:
+            return ActionResult(
+                number=0,
+                action_type="set_resolution",
+                status=ActionStatus.FAILED,
+                error="width and height are required",
+            )
+
+        try:
+            from win_control.display import set_resolution, DisplayError
+            monitor_index = action.monitor_index
+            set_resolution(width, height, monitor_index)
+            monitor_desc = f"monitor {monitor_index}" if monitor_index else "primary monitor"
+            return ActionResult(
+                number=0,
+                action_type="set_resolution",
+                status=ActionStatus.SUCCESS,
+                output=f"Resolution set to {width}x{height} on {monitor_desc}",
+            )
+        except DisplayError as e:
+            return ActionResult(
+                number=0,
+                action_type="set_resolution",
+                status=ActionStatus.FAILED,
+                error=f"Failed to set resolution: {e}",
+            )
+        except ImportError:
+            return ActionResult(
+                number=0,
+                action_type="set_resolution",
+                status=ActionStatus.FAILED,
+                error="win-control module not installed",
+            )
+
+    def _action_set_volume(self, action: Action) -> ActionResult:
+        """设置系统音量。"""
+        volume = action.value
+        if volume is None:
+            return ActionResult(
+                number=0,
+                action_type="set_volume",
+                status=ActionStatus.FAILED,
+                error="volume value is required",
+            )
+
+        try:
+            volume_int = int(volume)
+            if volume_int < 0 or volume_int > 100:
+                return ActionResult(
+                    number=0,
+                    action_type="set_volume",
+                    status=ActionStatus.FAILED,
+                    error="volume must be between 0 and 100",
+                )
+
+            from win_control.audio import set_volume, AudioError
+            set_volume(volume_int)
+            return ActionResult(
+                number=0,
+                action_type="set_volume",
+                status=ActionStatus.SUCCESS,
+                output=f"Volume set to {volume_int}",
+            )
+        except AudioError as e:
+            return ActionResult(
+                number=0,
+                action_type="set_volume",
+                status=ActionStatus.FAILED,
+                error=f"Failed to set volume: {e}",
+            )
+        except ImportError:
+            return ActionResult(
+                number=0,
+                action_type="set_volume",
+                status=ActionStatus.FAILED,
+                error="win-control module not installed",
+            )
+
+    def _action_audio_device(self, action: Action) -> ActionResult:
+        """启用/停用音频设备。"""
+        device = action.device
+        state = action.state
+        if not device or not state:
+            return ActionResult(
+                number=0,
+                action_type="audio_device",
+                status=ActionStatus.FAILED,
+                error="device and state are required",
+            )
+
+        if state not in ("enable", "disabled"):
+            return ActionResult(
+                number=0,
+                action_type="audio_device",
+                status=ActionStatus.FAILED,
+                error="state must be 'enable' or 'disabled'",
+            )
+
+        try:
+            from win_control.audio import enable_device, disable_device, AudioError
+            if state == "enable":
+                enable_device(device)
+                output = f"Device '{device}' enabled"
+            else:
+                disable_device(device)
+                output = f"Device '{device}' disabled"
+
+            return ActionResult(
+                number=0,
+                action_type="audio_device",
+                status=ActionStatus.SUCCESS,
+                output=output,
+            )
+        except AudioError as e:
+            return ActionResult(
+                number=0,
+                action_type="audio_device",
+                status=ActionStatus.FAILED,
+                error=f"Failed to change device state: {e}",
+            )
+        except ImportError:
+            return ActionResult(
+                number=0,
+                action_type="audio_device",
+                status=ActionStatus.FAILED,
+                error="win-control module not installed",
             )

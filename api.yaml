@@ -345,6 +345,9 @@ components:
             - cmd_exec
             - unlock_screen
             - activate_window
+            - set_resolution
+            - set_volume
+            - audio_device
           description: |
             动作类型，分为以下几类：
 
@@ -395,6 +398,9 @@ components:
             - cmd_exec: 在宿主机执行 shell/cmd 命令
             - unlock_screen: 解锁屏幕（iOS/Android 专用）
             - activate_window: 激活窗口（Windows/Mac 专用）
+            - set_resolution: 设置显示器分辨率（Windows 专用）
+            - set_volume: 设置系统音量（Windows 专用）
+            - audio_device: 启用/停用音频设备（Windows 专用）
         level:
           type: string
           enum: [browser, system]
@@ -462,6 +468,37 @@ components:
             平台支持：
             - Windows: 支持 title 和 process 模式
             - Mac: 仅推荐 process 模式（通过应用名激活）
+        width:
+          type: integer
+          description: |
+            分辨率宽度，仅 set_resolution 动作必填：
+            - 设置显示器分辨率的宽度值，如 1920、1280
+        height:
+          type: integer
+          description: |
+            分辨率高度，仅 set_resolution 动作必填：
+            - 设置显示器分辨率的高度值，如 1080、720
+        monitor_index:
+          type: integer
+          default: 0
+          description: |
+            显示器索引，仅 set_resolution 动作可选：
+            - 0: 主显示器（默认）
+            - 1: 第二个显示器
+            - 2: 第三个显示器
+        device:
+          type: string
+          description: |
+            设备名称或 ID，仅 audio_device 动作必填：
+            - 音频设备名称（支持包含匹配），如 "扬声器"、"Realtek Audio"
+            - 也可传入完整设备 ID
+        state:
+          type: string
+          enum: [enable, disabled]
+          description: |
+            设备状态，仅 audio_device 动作必填：
+            - enable: 启用音频设备
+            - disabled: 停用音频设备
         text:
           type: string
           description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
@@ -1074,3 +1111,23 @@ components:
   # {"action_type": "activate_window", "value": "notepad.exe", "match_by": "process"}
   # 示例 3: Mac 激活应用（推荐使用 process 模式）
   # {"action_type": "activate_window", "value": "Calculator", "match_by": "process"}
+
+  # ---------- Windows 系统控制动作 ----------
+  # set_resolution - 设置显示器分辨率（仅 Windows 平台）
+  # 用于测试不同分辨率下的 UI 表现
+  # 示例 1: 设置主显示器分辨率为 1920x1080
+  # {"action_type": "set_resolution", "width": 1920, "height": 1080}
+  # 示例 2: 设置第二个显示器分辨率为 1920x1080
+  # {"action_type": "set_resolution", "width": 1920, "height": 1080, "monitor_index": 1}
+
+  # set_volume - 设置系统音量（仅 Windows 平台）
+  # 设置系统扬声器音量百分比
+  # 示例: 设置音量为 50%
+  # {"action_type": "set_volume", "value": 50}
+
+  # audio_device - 启用/停用音频设备（仅 Windows 平台）
+  # 控制音频设备的启用/停用状态，支持设备名称包含匹配
+  # 示例 1: 停用扬声器设备
+  # {"action_type": "audio_device", "device": "扬声器", "state": "disabled"}
+  # 示例 2: 启用 Realtek 音频设备
+  # {"action_type": "audio_device", "device": "Realtek Audio", "state": "enable"}
