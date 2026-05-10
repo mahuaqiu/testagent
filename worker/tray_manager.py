@@ -88,6 +88,12 @@ class TrayManager:
         """创建托盘菜单。"""
         return pystray.Menu(
             pystray.MenuItem(f"版本: {_get_version()}", None, default=False),
+            pystray.MenuItem(
+                "工具",
+                pystray.Menu(
+                    pystray.MenuItem("class-finder", self._on_tools_class_finder_click),
+                ),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("升级", self._on_upgrade_click),
             pystray.MenuItem("重启", self._on_restart_click),
@@ -96,6 +102,22 @@ class TrayManager:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出", self._on_exit_click),
         )
+
+    def _on_tools_class_finder_click(self):
+        """工具 - class-finder 菜单点击。"""
+        import subprocess
+
+        base_dir = get_base_dir()
+        exe_path = os.path.join(base_dir, "tools", "window-class-finder.exe")
+
+        if os.path.exists(exe_path):
+            try:
+                subprocess.Popen([exe_path], shell=True)
+                logger.info(f"Launched window-class-finder: {exe_path}")
+            except Exception as e:
+                logger.error(f"Failed to launch window-class-finder: {e}")
+        else:
+            logger.warning(f"window-class-finder.exe not found: {exe_path}")
 
     def _on_upgrade_click(self):
         """升级菜单点击。"""

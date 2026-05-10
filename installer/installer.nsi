@@ -162,6 +162,11 @@ Function KillProcessesAndCleanup
   nsExec::Exec $1
   Pop $0
 
+  ; Kill window-class-finder (tools utility)
+  StrCpy $1 '"taskkill" /f /im window-class-finder.exe'
+  nsExec::Exec $1
+  Pop $0
+
   ; 2. Prepare path variables (ensure trailing slash to avoid matching other paths)
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"  ; Add trailing separator
