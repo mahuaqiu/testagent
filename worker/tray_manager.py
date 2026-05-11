@@ -103,10 +103,28 @@ class TrayManager:
             pystray.MenuItem("退出", self._on_exit_click),
         )
 
+    def _safe_callback(self, name: str, callback: Optional[Callable]) -> None:
+        """安全执行回调，确保快速返回并捕获异常。
+
+        使用 QTimer.singleShot 延迟执行 UI 操作，避免阻塞 pystray 线程。
+        """
+        logger.info(f"Menu clicked: {name}")
+        try:
+            if callback:
+                # 使用 QTimer.singleShot 延迟执行，确保回调立即返回
+                # 这避免了 pystray 线程被 PyQt5 UI 操作阻塞
+                from PyQt5.QtCore import QTimer
+
+                QTimer.singleShot(0, callback)
+                logger.debug(f"Callback scheduled via QTimer: {name}")
+        except Exception as e:
+            logger.error(f"Menu callback error ({name}): {e}")
+
     def _on_tools_class_finder_click(self):
         """工具 - class-finder 菜单点击。"""
         import subprocess
 
+        logger.info("Menu clicked: tools/class-finder")
         base_dir = get_base_dir()
         exe_path = os.path.join(base_dir, "tools", "window-class-finder.exe")
 
@@ -121,17 +139,15 @@ class TrayManager:
 
     def _on_upgrade_click(self):
         """升级菜单点击。"""
-        if self.on_upgrade:
-            # 在后台线程执行，避免阻塞托盘
-            threading.Thread(target=self.on_upgrade, daemon=True).start()
+        self._safe_callback("upgrade", self.on_upgrade)
 
     def _on_restart_click(self):
         """重启菜单点击。"""
-        if self.on_restart:
-            self.on_restart()
+        self._safe_callback("restart", self.on_restart)
 
     def _on_log_click(self):
         """日志菜单点击。"""
+        logger.info("Menu clicked: log")
         # 获取日志文件所在目录（与日志文件同级）
         app_dir = get_base_dir()
 
@@ -141,14 +157,11 @@ class TrayManager:
 
     def _on_settings_click(self):
         """设置菜单点击。"""
-        if self.on_settings:
-            self.on_settings()
+        self._safe_callback("settings", self.on_settings)
 
     def _on_exit_click(self):
         """退出菜单点击。"""
-        if self.on_exit:
-            self.on_exit()
-        # 注意：不在这里停止托盘，由 GUIApp._do_exit() 处理
+        self._safe_callback("exit", self.on_exit)
 
     def start(self):
         """启动托盘。"""
