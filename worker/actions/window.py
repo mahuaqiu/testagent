@@ -157,37 +157,31 @@ class ActivateWindowAction(BaseActionExecutor):
         """
         import win32gui
         import win32process
-        import psutil
 
         exact_match_hwnd = 0
         partial_match_hwnd = 0
 
-        def get_exe_name(hwnd: int) -> str | None:
-            """获取窗口对应的进程 exe 名称。"""
-            try:
-                _, process_id = win32process.GetWindowThreadProcessId(hwnd)
-                process = psutil.Process(process_id)
-                return process.name()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                return None
-
         def enum_windows_callback(hwnd, _):
             nonlocal exact_match_hwnd, partial_match_hwnd
-            cls = win32gui.GetClassName(hwnd)
+            try:
+                cls = win32gui.GetClassName(hwnd)
 
-            # 如果指定了 exe_name，检查进程名
-            if exe_name:
-                exe = get_exe_name(hwnd)
-                if exe != exe_name:
-                    return True  # 跳过不匹配的窗口
+                # 如果指定了 exe_name，检查进程名
+                if exe_name:
+                    exe = self._get_exe_name(hwnd)
+                    if exe != exe_name:
+                        return True  # 跳过不匹配的窗口
 
-            # 精确匹配优先
-            if cls == class_name:
-                exact_match_hwnd = hwnd
-                return False  # 停止枚举
-            # 包含匹配作为备选
-            if class_name in cls and partial_match_hwnd == 0:
-                partial_match_hwnd = hwnd
+                # 精确匹配优先
+                if cls == class_name:
+                    exact_match_hwnd = hwnd
+                    return False  # 停止枚举
+                # 包含匹配作为备选
+                if class_name in cls and partial_match_hwnd == 0:
+                    partial_match_hwnd = hwnd
+            except Exception:
+                # 回调函数中任何异常都不应中断枚举
+                pass
             return True
 
         win32gui.EnumWindows(enum_windows_callback, None)
@@ -196,6 +190,26 @@ class ActivateWindowAction(BaseActionExecutor):
         if exact_match_hwnd:
             return exact_match_hwnd
         return partial_match_hwnd
+
+    def _get_exe_name(self, hwnd: int) -> str | None:
+        """获取窗口对应的进程 exe 名称。
+
+        Args:
+            hwnd: 窗口句柄
+
+        Returns:
+            进程 exe 名称（如 "chrome.exe"），获取失败返回 None
+        """
+        try:
+            import win32process
+            import psutil
+
+            _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+            process = psutil.Process(process_id)
+            return process.name()
+        except Exception:
+            # NoSuchProcess、AccessDenied 或其他异常
+            return None
 
     def _filter_window_by_exe(self, windows: list, exe_name: str):
         """从窗口列表中过滤指定 exe 的窗口。
@@ -207,19 +221,15 @@ class ActivateWindowAction(BaseActionExecutor):
         Returns:
             匹配的窗口对象，未找到返回 None
         """
-        import win32process
-        import psutil
-
         for window in windows:
             try:
                 # pygetwindow 的 window 对象有 _hWnd 属性
                 hwnd = getattr(window, '_hWnd', None)
                 if hwnd:
-                    _, process_id = win32process.GetWindowThreadProcessId(hwnd)
-                    process = psutil.Process(process_id)
-                    if process.name() == exe_name:
+                    exe = self._get_exe_name(hwnd)
+                    if exe == exe_name:
                         return window
-            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+            except Exception:
                 continue
         return None
 
