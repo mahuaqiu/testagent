@@ -9,6 +9,13 @@ param(
     [switch]$BuildInstaller  # Build installer directly
 )
 
+# 定义工程根目录（使用绝对路径，避免相对路径问题）
+$ProjectRoot = $PSScriptRoot
+if ($ProjectRoot -eq "") {
+    $ProjectRoot = Get-Location
+}
+Write-Host "Project root: $ProjectRoot"
+
 Write-Host "=========================================="
 Write-Host "Building Test Worker with Nuitka"
 Write-Host "Version: $Version"
@@ -16,7 +23,8 @@ Write-Host "Output: $OutputDir"
 Write-Host "Compiler: MSVC"
 Write-Host "=========================================="
 
-# Python path handling
+# 切换到工程根目录
+Set-Location $ProjectRoot
 if ($PythonPath -ne "") {
     $PythonExe = $PythonPath
     if (-not (Test-Path $PythonExe)) {
@@ -44,7 +52,7 @@ if (-not (Test-Path $vsWhere)) {
     Write-Warning "Visual Studio Installer not found, but Nuitka will auto-detect MSVC"
 }
 
-$VenvPath = "build_env_nuitka"
+$VenvPath = "$ProjectRoot\build_env_nuitka"
 if ($Clean -or -not (Test-Path $VenvPath)) {
     if (Test-Path $VenvPath) { Remove-Item -Recurse -Force $VenvPath }
     Write-Host "[1/6] Creating virtual environment..."
@@ -53,7 +61,7 @@ if ($Clean -or -not (Test-Path $VenvPath)) {
     Write-Host "[1/6] Using existing virtual environment..."
 }
 
-& ".\$VenvPath\Scripts\Activate.ps1"
+& "$VenvPath\Scripts\Activate.ps1"
 
 Write-Host "[2/6] Installing dependencies..."
 pip install --upgrade pip
@@ -80,14 +88,14 @@ if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
 
 Write-Host "[3/6] Generating version file..."
 $BuildVersion = Get-Date -Format "yyyyMMddHHmm"
-Set-Content -Path "worker\_version.py" -Value "VERSION = `"$BuildVersion`"" -Encoding UTF8
+Set-Content -Path "$ProjectRoot\worker\_version.py" -Value "VERSION = `"$BuildVersion`"" -Encoding UTF8
 
 Write-Host "[4/6] Checking Playwright..."
 $ChromiumPath = "$env:LOCALAPPDATA\ms-playwright\chromium-*"
 if (-not (Test-Path $ChromiumPath)) { playwright install chromium }
 
 Write-Host "[5/6] Cleaning old build artifacts..."
-$NuitkaBuildDir = "dist\nuitka_build"
+$NuitkaBuildDir = "$ProjectRoot\dist\nuitka_build"
 if (Test-Path $NuitkaBuildDir) {
     Remove-Item -Recurse -Force $NuitkaBuildDir
     Write-Host "  Cleaned: $NuitkaBuildDir"
@@ -98,11 +106,11 @@ Write-Host "  Memory optimization: --low-memory --jobs=10"
 
 $nuitkaArgs = @(
     "--mode=standalone"
-    "worker\gui_main.py"
+    "$ProjectRoot\worker\gui_main.py"
     "--output-filename=test-worker.exe"
     "--windows-console-mode=disable"
     "--windows-uac-admin"
-    "--windows-icon-from-ico=assets\icon.ico"
+    "--windows-icon-from-ico=$ProjectRoot\assets\icon.ico"
     "--include-data-dir=config=config"
     "--include-data-dir=assets=assets"
     "--include-data-dir=tools=tools"
@@ -161,7 +169,7 @@ $nuitkaArgs = @(
     "--nofollow-import-to=jinja2.tests"
     "--nofollow-import-to=pydantic.v1.tests"
     "--nofollow-import-to=sentry_sdk.integrations.openai_agents.tests"
-    "--output-dir=dist\nuitka_build"
+    "--output-dir=$ProjectRoot\dist\nuitka_build"
     "--show-progress"
 )
 
@@ -169,18 +177,22 @@ $nuitkaArgs = @(
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Nuitka build failed!"
-    Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
+    Remove-Item "$ProjectRoot\worker\_version.py" -ErrorAction SilentlyContinue
     exit 1
 }
 
-Remove-Item "worker\_version.py" -ErrorAction SilentlyContinue
+Remove-Item "$ProjectRoot\worker\_version.py" -ErrorAction SilentlyContinue
 
 Write-Host "[7/6] Creating release package..."
+# OutputDir 可能是相对路径或绝对路径，统一转换为绝对路径
+if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
+    $OutputDir = "$ProjectRoot\$OutputDir"
+}
 $PackageDir = "$OutputDir\test-worker"
 if (Test-Path $PackageDir) { Remove-Item -Recurse -Force $PackageDir }
 New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 
-$BuildDir = "dist\nuitka_build\gui_main.dist"
+$BuildDir = "$ProjectRoot\dist\nuitka_build\gui_main.dist"
 if (Test-Path $BuildDir) {
     Move-Item "$BuildDir\*" $PackageDir
 } else {
@@ -191,22 +203,22 @@ if (Test-Path $BuildDir) {
 # Nuitka --include-data-dir may miss binary files in subdirs, copy tools manually
 Write-Host "Copying tools directory (full)..."
 if (Test-Path "$PackageDir\tools") { Remove-Item -Recurse -Force "$PackageDir\tools" }
-Copy-Item -Path "tools" -Destination "$PackageDir\tools" -Recurse -Force
+Copy-Item -Path "$ProjectRoot\tools" -Destination "$PackageDir\tools" -Recurse -Force
 
 # Also ensure assets and config are complete
 Write-Host "Copying assets directory..."
 if (Test-Path "$PackageDir\assets") { Remove-Item -Recurse -Force "$PackageDir\assets" }
-Copy-Item -Path "assets" -Destination "$PackageDir\assets" -Recurse -Force
+Copy-Item -Path "$ProjectRoot\assets" -Destination "$PackageDir\assets" -Recurse -Force
 
 Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
-Copy-Item -Path "config" -Destination "$PackageDir\config" -Recurse -Force
+Copy-Item -Path "$ProjectRoot\config" -Destination "$PackageDir\config" -Recurse -Force
 
 # 复制 minicap 二进制文件（Nuitka --include-data-dir 可能遗漏）
 Write-Host "Copying minicap static files..."
 # Nuitka --include-data-dir 会创建根目录下的目录，但可能不完整
 # 手动复制确保 minicap-shared 目录（包含 .so 文件）也被包含
-$MinicapSrcDir = "worker\platforms\minicap\static"
+$MinicapSrcDir = "$ProjectRoot\worker\platforms\minicap\static"
 $MinicapTargetDir = "$PackageDir\worker\platforms\minicap\static"
 if (-not (Test-Path $MinicapTargetDir)) {
     New-Item -ItemType Directory -Force -Path $MinicapTargetDir | Out-Null
@@ -218,7 +230,7 @@ Write-Host "  minicap files copied successfully"
 Write-Host "Creating _internal\config template..."
 $InternalConfigDir = "$PackageDir\_internal\config"
 New-Item -ItemType Directory -Force -Path $InternalConfigDir | Out-Null
-Copy-Item -Path "config\*" -Destination $InternalConfigDir -Recurse -Force
+Copy-Item -Path "$ProjectRoot\config\*" -Destination $InternalConfigDir -Recurse -Force
 
 # 复制 HWiNFO64.EXE (Nuitka --include-package-data 不包含 .exe 文件)
 Write-Host "Copying HWiNFO64.EXE for perfwin..."
@@ -254,7 +266,7 @@ Write-Host "=========================================="
 # Build installer (optional)
 if ($BuildInstaller) {
     Write-Host "Building installer (via -BuildInstaller flag)..."
-    & ".\installer\build_installer.ps1" -Version $BuildVersion
+    & "$ProjectRoot\installer\build_installer.ps1" -Version $BuildVersion
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Installer build failed, but EXE package is available"
     }
@@ -265,7 +277,7 @@ if ($BuildInstaller) {
 
     if ($BuildInstallerChoice -eq 'y') {
         Write-Host "Building installer..."
-        & ".\installer\build_installer.ps1" -Version $BuildVersion
+        & "$ProjectRoot\installer\build_installer.ps1" -Version $BuildVersion
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "Installer build failed, but EXE package is available"
         }

@@ -3,8 +3,13 @@
 
 set -e
 
+# 定义工程根目录（使用绝对路径，避免相对路径问题）
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_ROOT"
+echo "Project root: $PROJECT_ROOT"
+
 VERSION=${1:-"2.0.0"}
-OUTPUT_DIR="dist/macos"
+OUTPUT_DIR="$PROJECT_ROOT/dist/macos"
 
 echo "=========================================="
 echo "Building Test Worker for macOS (Nuitka)"
@@ -19,7 +24,7 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # 创建虚拟环境
-VENV_PATH="build_env_nuitka"
+VENV_PATH="$PROJECT_ROOT/build_env_nuitka"
 echo "[1/6] Creating virtual environment..."
 python3 -m venv $VENV_PATH
 source $VENV_PATH/bin/activate
@@ -33,7 +38,7 @@ pip install -e ".[all]"
 # 生成版本文件
 echo "[3/6] Generating version file..."
 BUILD_VERSION=$(date +"%Y%m%d%H%M")
-echo "VERSION = \"$BUILD_VERSION\"" > worker/_version.py
+echo "VERSION = \"$BUILD_VERSION\"" > $PROJECT_ROOT/worker/_version.py
 
 # 安装 Playwright 浏览器
 echo "[4/6] Installing Playwright browsers..."
@@ -44,10 +49,10 @@ echo "[5/6] Building executable with Nuitka..."
 
 python -m nuitka \
     --mode=standalone \
-    worker/gui_main.py \
+    $PROJECT_ROOT/worker/gui_main.py \
     --output-filename=test-worker \
     --macos-create-app-bundle \
-    --macos-app-icon=assets/icon.icns \
+    --macos-app-icon=$PROJECT_ROOT/assets/icon.icns \
     --include-data-dir=config=config \
     --include-data-dir=assets=assets \
     --include-data-dir=tools=tools \
@@ -71,18 +76,18 @@ python -m nuitka \
     --nofollow-import-to=pytest \
     --nofollow-import-to=allure \
     --nofollow-import-to=faker \
-    --output-dir=dist/nuitka_build \
+    --output-dir=$PROJECT_ROOT/dist/nuitka_build \
     --show-progress
 
 # 清理版本文件
-rm -f worker/_version.py
+rm -f $PROJECT_ROOT/worker/_version.py
 
 # 创建发布包
 echo "[6/6] Creating release package..."
 PACKAGE_DIR="$OUTPUT_DIR/test-worker"
 mkdir -p "$PACKAGE_DIR"
 
-BUILD_DIR="dist/nuitka_build/gui_main.dist"
+BUILD_DIR="$PROJECT_ROOT/dist/nuitka_build/gui_main.dist"
 if [ -d "$BUILD_DIR" ]; then
     cp -r "$BUILD_DIR/"* "$PACKAGE_DIR/"
 else
@@ -98,7 +103,7 @@ if [ -n "$PLAYWRIGHT_CHROMIUM" ]; then
 fi
 
 # 复制 minicap static 文件
-MINICAP_SRC="worker/platforms/minicap/static"
+MINICAP_SRC="$PROJECT_ROOT/worker/platforms/minicap/static"
 MINICAP_TARGET="$PACKAGE_DIR/worker/platforms/minicap/static"
 mkdir -p "$MINICAP_TARGET"
 cp -r "$MINICAP_SRC/"* "$MINICAP_TARGET/"
@@ -137,7 +142,7 @@ EOF
 # 清理
 echo "Cleaning up..."
 deactivate
-rm -rf $VENV_PATH dist/nuitka_build
+rm -rf $VENV_PATH $PROJECT_ROOT/dist/nuitka_build
 
 echo "=========================================="
 echo "Build complete!"
