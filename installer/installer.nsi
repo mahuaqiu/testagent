@@ -194,99 +194,142 @@ Function KillProcessesAndCleanup
   NoPlaywright:
 FunctionEnd
 
-; Auto IP detection
+; Auto IP detection using PowerShell (more reliable than registry)
 Function GetLocalIP
   ; Output: $R0 = best IP address
-  Push $R1  ; Subkey index
-  Push $R2  ; Current IP
-  Push $R3  ; 10.x IP
-  Push $R4  ; 192.168.x IP
-  Push $R5  ; 172.x IP
-  Push $R6  ; Other IP
+  ; Use PowerShell to get network interface IPs
+  ; Priority by IP segment: 10.x > 192.168.x > 172.16-31.x > others
+  ; Filter: skip virtual interfaces, loopback, and link-local (169.254.x.x)
 
-  StrCpy $R3 ""
+  Push $R1  ; PowerShell output
+
+  ; PowerShell script: Get IPv4 addresses from physical network interfaces
+  ; Priority by IP address segment (not interface name)
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$net = Get-NetIPConfiguration | Where-Object { "
+  StrCpy $1 "$1  $$_.IPv4Address -ne $null "
+  StrCpy $1 "$1  -and $$_.InterfaceAlias -notmatch 'virtual|vmware|vbox|hyper-v|loopback|bluetooth|tunnel|vpn|vEthernet' "
+  StrCpy $1 "$1  -and $$_.IPv4Address.IPAddress -notmatch '^127\\.' "
+  StrCpy $1 "$1}; "
+  StrCpy $1 "$1$$addrs = @(); "
+  StrCpy $1 "$1foreach ($$n in $$net) { "
+  StrCpy $1 "$1  $$ip = $$n.IPv4Address.IPAddress; "
+  StrCpy $1 "$1  if ($$ip -match '^10\\.') { $$prio = 4 } "
+  StrCpy $1 "$1  elseif ($$ip -match '^192\\.168\\.') { $$prio = 3 } "
+  StrCpy $1 "$1  elseif ($$ip -match '^172\\.(16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)\\.') { $$prio = 2 } "
+  StrCpy $1 "$1  else { $$prio = 1 }; "
+  StrCpy $1 "$1  $$addrs += [PSCustomObject]@{P=$$prio; I=$$ip} "
+  StrCpy $1 "$1}; "
+  StrCpy $1 "$1if ($$addrs.Count -gt 0) { ($$addrs | Sort-Object P -Descending)[0].I } else { '127.0.0.1' }$\""
+
+  ; Execute PowerShell and capture output
+  nsExec::ExecToStack $1
+  Pop $0  ; Return code
+  Pop $R1  ; Output (IP address)
+
+  ; Check if PowerShell succeeded
+  StrCmp $0 "0" success fallback
+
+success:
+  ; Trim whitespace from output
+  StrCpy $R0 $R1
+  Goto end
+
+fallback:
+  ; Fallback to registry method if PowerShell fails
+  Push $R2  ; Subkey index
+  Push $R3  ; Current IP
+  Push $R4  ; 10.x IP
+  Push $R5  ; 192.168.x IP
+  Push $R6  ; 172.x IP
+  Push $R7  ; Other IP
+
   StrCpy $R4 ""
   StrCpy $R5 ""
   StrCpy $R6 ""
+  StrCpy $R7 ""
 
   ; Enumerate registry subkeys
-  StrCpy $R1 0
-  loop:
-    EnumRegKey $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" $R1
-    StrCmp $R2 "" done
+  StrCpy $R2 0
+  loop_fallback:
+    EnumRegKey $R3 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" $R2
+    StrCmp $R3 "" done_fallback
 
     ; Try to read DhcpIPAddress
-    ReadRegStr $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R2" "DhcpIPAddress"
-    StrCmp $R2 "" try_static
-    Goto check_ip
+    ReadRegStr $R3 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R3" "DhcpIPAddress"
+    StrCmp $R3 "" try_static_fallback
+    Goto check_ip_fallback
 
-  try_static:
-    ReadRegStr $R2 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R2" "IPAddress"
+  try_static_fallback:
+    ReadRegStr $R3 HKLM "SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$R3" "IPAddress"
 
-  check_ip:
+  check_ip_fallback:
     ; Filter invalid IPs (empty, 0.0.0.0, 127.x)
-    StrCmp $R2 "" next
-    StrCmp $R2 "0.0.0.0" next
-    StrCpy $R0 $R2 4
-    StrCmp $R0 "127." next
+    StrCmp $R3 "" next_fallback
+    StrCmp $R3 "0.0.0.0" next_fallback
+    StrCpy $R0 $R3 4
+    StrCmp $R0 "127." next_fallback
 
     ; Store by priority (only first found)
-    StrCpy $R0 $R2 3
-    StrCmp $R0 "10." store_10
-    StrCpy $R0 $R2 8
-    StrCmp $R0 "192.168." store_192
-    StrCpy $R0 $R2 4
-    StrCmp $R0 "172." store_172
-    StrCmp $R6 "" store_other
-    Goto next
+    StrCpy $R0 $R3 3
+    StrCmp $R0 "10." store_10_fallback
+    StrCpy $R0 $R3 8
+    StrCmp $R0 "192.168." store_192_fallback
+    StrCpy $R0 $R3 4
+    StrCmp $R0 "172." store_172_fallback
+    StrCmp $R7 "" store_other_fallback
+    Goto next_fallback
 
-  store_10:
-    StrCmp $R3 "" 0 next
-    StrCpy $R3 $R2
-    Goto next
-  store_192:
-    StrCmp $R4 "" 0 next
-    StrCpy $R4 $R2
-    Goto next
-  store_172:
-    StrCmp $R5 "" 0 next
-    StrCpy $R5 $R2
-    Goto next
-  store_other:
-    StrCpy $R6 $R2
+  store_10_fallback:
+    StrCmp $R4 "" 0 next_fallback
+    StrCpy $R4 $R3
+    Goto next_fallback
+  store_192_fallback:
+    StrCmp $R5 "" 0 next_fallback
+    StrCpy $R5 $R3
+    Goto next_fallback
+  store_172_fallback:
+    StrCmp $R6 "" 0 next_fallback
+    StrCpy $R6 $R3
+    Goto next_fallback
+  store_other_fallback:
+    StrCpy $R7 $R3
 
-  next:
-    IntOp $R1 $R1 + 1
-    Goto loop
+  next_fallback:
+    IntOp $R2 $R2 + 1
+    Goto loop_fallback
 
-  done:
+  done_fallback:
     ; Return by priority
-    StrCmp $R3 "" 0 return_10
-    StrCmp $R4 "" 0 return_192
-    StrCmp $R5 "" 0 return_172
-    StrCmp $R6 "" 0 return_other
+    StrCmp $R4 "" 0 return_10_fallback
+    StrCmp $R5 "" 0 return_192_fallback
+    StrCmp $R6 "" 0 return_172_fallback
+    StrCmp $R7 "" 0 return_other_fallback
     StrCpy $R0 "127.0.0.1"
-    Goto end
+    Goto end_fallback
 
-  return_10:
-    StrCpy $R0 $R3
-    Goto end
-  return_192:
+  return_10_fallback:
     StrCpy $R0 $R4
-    Goto end
-  return_172:
+    Goto end_fallback
+  return_192_fallback:
     StrCpy $R0 $R5
-    Goto end
-  return_other:
+    Goto end_fallback
+  return_172_fallback:
     StrCpy $R0 $R6
+    Goto end_fallback
+  return_other_fallback:
+    StrCpy $R0 $R7
 
-  end:
+  end_fallback:
+    Pop $R7
     Pop $R6
     Pop $R5
     Pop $R4
     Pop $R3
     Pop $R2
-    Pop $R1
+
+end:
+  Pop $R1
 FunctionEnd
 
 ; Upgrade detection

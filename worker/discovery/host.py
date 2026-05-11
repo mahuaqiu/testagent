@@ -15,6 +15,39 @@ from common.utils import run_cmd
 logger = logging.getLogger(__name__)
 
 
+def _get_ip_segment_priority(ip: str) -> int:
+    """
+    根据 IP 地址段计算优先级。
+
+    优先级规则：
+    - 10.x.x.x: 4 (最高，通常是企业内网)
+    - 192.168.x.x: 3 (其次，常见的家庭/办公网络)
+    - 172.16-31.x.x: 2 (再次，企业内网备用)
+    - 其他: 1 (最低)
+
+    Args:
+        ip: IP 地址字符串
+
+    Returns:
+        int: 优先级数值（越高越优先）
+    """
+    if ip.startswith("10."):
+        return 4
+    elif ip.startswith("192.168."):
+        return 3
+    elif ip.startswith("172."):
+        # 172.16.0.0 - 172.31.255.255 是私有地址段
+        parts = ip.split(".")
+        if len(parts) >= 2:
+            try:
+                second_octet = int(parts[1])
+                if 16 <= second_octet <= 31:
+                    return 2
+            except ValueError:
+                pass
+    return 1
+
+
 @dataclass
 class HostInfo:
     """宿主机信息。"""
@@ -96,34 +129,94 @@ class HostDiscoverer:
 
     @staticmethod
     def get_ip_addresses() -> List[str]:
-        """获取所有 IP 地址（过滤链路本地地址）。"""
-        addresses = []
+        """
+        获取所有 IP 地址（按优先级排序）。
+
+        优先级策略（按 IP 地址段）：
+        1. psutil 遍历物理网卡，按 IP 地址段排序：10.x > 192.168.x > 172.16-31.x > 其他
+        2. UDP socket 连接测试（获取实际使用的出口 IP）
+        3. 返回 127.0.0.1 作为最终后备
+
+        Returns:
+            List[str]: IP 地址列表，按优先级排序
+        """
+        addresses: List[str] = []
+        seen: set = set()
+
+        # 方式 1：psutil 遍历网卡（最可靠）
+        # 按 IP 地址段优先级排序：10.x > 192.168.x > 172.16-31.x > 其他
         try:
-            hostname = socket.gethostname()
-            # 获取所有 IP 地址
-            for info in socket.getaddrinfo(hostname, None):
-                ip = info[4][0]
-                # 过滤掉本地回环地址、IPv6 本地地址和链路本地地址（169.254.x.x）
-                if ip != "127.0.0.1" and not ip.startswith("::1") and not ip.startswith("169.254."):
-                    if ip not in addresses:
-                        addresses.append(ip)
-        except Exception:
-            pass
+            net_if_addrs = psutil.net_if_addrs()
+            net_if_stats = psutil.net_if_stats()
 
-        # 如果没有获取到，尝试其他方式
-        if not addresses:
-            try:
-                for interface, addrs in psutil.net_if_addrs().items():
-                    for addr in addrs:
-                        if addr.family == socket.AF_INET:
-                            ip = addr.address
-                            # 同样过滤链路本地地址
-                            if ip != "127.0.0.1" and not ip.startswith("169.254.") and ip not in addresses:
-                                addresses.append(ip)
-            except Exception:
-                pass
+            # 虚拟网卡过滤关键词（已转为小写）
+            virtual_keywords = ['virtual', 'vmware', 'vbox', 'hyper-v', 'loopback', 'bluetooth', 'tunnel', 'vpn', 'vethernet', '虚拟']
 
-        return addresses or ["127.0.0.1"]
+            # 收集网卡信息并按 IP 地址段优先级排序
+            interface_ips: List[tuple[int, str]] = []  # (priority, ip)
+
+            for interface, addrs in net_if_addrs.items():
+                # 检查网卡状态
+                stats = net_if_stats.get(interface)
+                if not stats or not stats.isup:
+                    continue
+
+                # 检查是否为虚拟网卡
+                is_virtual = any(kw in interface.lower() for kw in virtual_keywords)
+                if is_virtual:
+                    continue
+
+                # 获取 IPv4 地址
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        ip = addr.address
+                        # 过滤链路本地地址和回环地址
+                        if ip != "127.0.0.1" and not ip.startswith("169.254."):
+                            if ip not in seen:
+                                # 按 IP 地址段计算优先级
+                                priority = _get_ip_segment_priority(ip)
+                                interface_ips.append((priority, ip))
+                                seen.add(ip)
+
+            # 按优先级排序（高优先级在前）
+            interface_ips.sort(key=lambda x: -x[0])
+            addresses.extend([ip for _, ip in interface_ips])
+
+            if addresses:
+                logger.debug(f"Found IPs via psutil: {addresses}")
+                return addresses
+
+        except Exception as e:
+            logger.debug(f"psutil method failed: {e}")
+
+        # 方式 2：UDP socket 连接测试（获取出口 IP）
+        # 尝试连接公共 IP 来获取本机使用的出口 IP
+        try:
+            # 使用几个公共 IP 地址尝试（不需要真正连接，只是获取本地地址）
+            test_ips = ["8.8.8.8", "1.1.1.1", "192.168.1.1"]
+            for test_ip in test_ips:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        # 不需要真正连接，只是绑定本地地址
+                        s.connect((test_ip, 80))
+                        local_ip = s.getsockname()[0]
+                        if local_ip != "127.0.0.1" and not local_ip.startswith("169.254.") and local_ip not in seen:
+                            addresses.append(local_ip)
+                            seen.add(local_ip)
+                            logger.debug(f"Found IP via UDP socket test: {local_ip}")
+                            break  # 找到一个有效 IP 就停止
+                except Exception:
+                    continue
+
+            if addresses:
+                return addresses
+
+        except Exception as e:
+            logger.debug(f"UDP socket method failed: {e}")
+
+        # 最终后备
+        logger.warning("All IP detection methods failed, falling back to 127.0.0.1")
+        return ["127.0.0.1"]
 
     @staticmethod
     def get_preferred_ip(configured_ip: Optional[str] = None) -> str:
