@@ -245,6 +245,7 @@ PlatformManager (抽象基类)
 |------|------|
 | `value` | 窗口标题或窗口类名（支持包含匹配） |
 | `match_by` | 定位方式，默认 "title"，可选 "class" |
+| `name` | 进程 exe 名称过滤（可选），如 "chrome.exe"，用于区分同名窗口类但不同进程 |
 
 **使用示例**：
 ```json
@@ -253,6 +254,9 @@ PlatformManager (抽象基类)
 
 // 按窗口类名激活 Chrome 浏览器
 {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class"}
+
+// 按窗口类名激活，限制只找 chrome.exe 进程的窗口（避免误激活 Edge）
+{"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
 ```
 
 **平台支持**：

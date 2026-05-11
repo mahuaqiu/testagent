@@ -468,6 +468,20 @@ components:
             平台支持：
             - Windows/Web: 支持 title 和 class 模式
             - Mac: 仅支持 class 模式（通过应用名激活）
+        name:
+          type: string
+          description: |
+            进程 exe 名称过滤，仅 activate_window 动作可选：
+            - 用于区分同名窗口类但不同进程的窗口
+            - 如 "chrome.exe"、"msedge.exe"、"notepad.exe"
+            - 不传则按原有逻辑查找，传了则只找指定 exe 进程的窗口
+
+            使用场景：
+            - Chrome_WidgetWin_1 是 Chrome 和 Edge 共用的窗口类名
+            - 传 name="chrome.exe" 可确保只激活 Chrome 窗口，避免误激活 Edge
+
+            示例：
+            {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
         width:
           type: integer
           description: |
@@ -1109,7 +1123,11 @@ components:
   # {"action_type": "activate_window", "value": "计算器"}
   # 示例 2: 按窗口类名激活 Chrome 浏览器
   # {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class"}
-  # 示例 3: Mac 激活应用（使用 class 模式，即应用名）
+  # 示例 3: 按窗口类名激活，限制只找 chrome.exe 进程（避免误激活 Edge）
+  # {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
+  # 示例 4: 按窗口类名激活，限制只找 msedge.exe 进程（激活 Edge）
+  # {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "msedge.exe"}
+  # 示例 5: Mac 激活应用（使用 class 模式，即应用名）
   # {"action_type": "activate_window", "value": "Calculator", "match_by": "class"}
 
   # ---------- Windows 系统控制动作 ----------

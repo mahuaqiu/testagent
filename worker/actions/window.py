@@ -28,6 +28,7 @@ class ActivateWindowAction(BaseActionExecutor):
         """执行窗口激活。"""
         value = action.value
         match_by = action.match_by or "title"
+        exe_name = action.name  # 进程 exe 名称过滤
 
         if not value:
             return ActionResult(
@@ -48,7 +49,7 @@ class ActivateWindowAction(BaseActionExecutor):
 
         # Windows 平台和 Web 平台（运行在 Windows 上）都使用 Windows 逻辑
         if platform.platform in ("windows", "web"):
-            return self._activate_windows(value, match_by)
+            return self._activate_windows(value, match_by, exe_name)
         elif platform.platform == "mac":
             return self._activate_mac(value, match_by)
         else:
@@ -59,8 +60,14 @@ class ActivateWindowAction(BaseActionExecutor):
                 error=f"activate_window is not supported on {platform.platform}",
             )
 
-    def _activate_windows(self, value: str, match_by: str) -> ActionResult:
-        """Windows 平台窗口激活。"""
+    def _activate_windows(self, value: str, match_by: str, exe_name: str | None = None) -> ActionResult:
+        """Windows 平台窗口激活。
+
+        Args:
+            value: 窗口标题或窗口类名
+            match_by: 定位方式，"title" 或 "class"
+            exe_name: 进程 exe 名称过滤（可选），如 "chrome.exe"
+        """
         try:
             if match_by == "title":
                 # 按标题查找（包含匹配）
@@ -74,7 +81,18 @@ class ActivateWindowAction(BaseActionExecutor):
                         status=ActionStatus.FAILED,
                         error=f"Window not found by title: {value}",
                     )
-                window = windows[0]
+                # 如果指定了 exe_name，需要过滤
+                if exe_name:
+                    window = self._filter_window_by_exe(windows, exe_name)
+                    if not window:
+                        return ActionResult(
+                            number=0,
+                            action_type=self.name,
+                            status=ActionStatus.FAILED,
+                            error=f"Window not found by title '{value}' with exe '{exe_name}'",
+                        )
+                else:
+                    window = windows[0]
                 window.activate()
                 logger.info(f"Activated window by title: {window.title}")
                 return ActionResult(
@@ -89,13 +107,16 @@ class ActivateWindowAction(BaseActionExecutor):
                 import win32con
                 import win32api
 
-                hwnd = self._find_window_by_class(value)
+                hwnd = self._find_window_by_class(value, exe_name)
                 if not hwnd:
+                    error_msg = f"Window not found by class: {value}"
+                    if exe_name:
+                        error_msg = f"Window not found by class '{value}' with exe '{exe_name}'"
                     return ActionResult(
                         number=0,
                         action_type=self.name,
                         status=ActionStatus.FAILED,
-                        error=f"Window not found by class: {value}",
+                        error=error_msg,
                     )
 
                 # 使用 AttachThreadInput 技术确保后台进程能正确激活窗口
@@ -121,25 +142,45 @@ class ActivateWindowAction(BaseActionExecutor):
                 error=f"Failed to activate window: {e}",
             )
 
-    def _find_window_by_class(self, class_name: str) -> int:
+    def _find_window_by_class(self, class_name: str, exe_name: str | None = None) -> int:
         """通过窗口类名查找窗口句柄。
 
         支持精确匹配和包含匹配（传入部分类名也能找到）。
+        可选支持按进程 exe 名称过滤。
 
         Args:
             class_name: 窗口类名（如 Chrome_WidgetWin_1）
+            exe_name: 进程 exe 名称（可选），如 "chrome.exe"
 
         Returns:
             窗口句柄（HWND），未找到返回 0
         """
         import win32gui
+        import win32process
+        import psutil
 
         exact_match_hwnd = 0
         partial_match_hwnd = 0
 
+        def get_exe_name(hwnd: int) -> str | None:
+            """获取窗口对应的进程 exe 名称。"""
+            try:
+                _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+                process = psutil.Process(process_id)
+                return process.name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return None
+
         def enum_windows_callback(hwnd, _):
             nonlocal exact_match_hwnd, partial_match_hwnd
             cls = win32gui.GetClassName(hwnd)
+
+            # 如果指定了 exe_name，检查进程名
+            if exe_name:
+                exe = get_exe_name(hwnd)
+                if exe != exe_name:
+                    return True  # 跳过不匹配的窗口
+
             # 精确匹配优先
             if cls == class_name:
                 exact_match_hwnd = hwnd
@@ -155,6 +196,32 @@ class ActivateWindowAction(BaseActionExecutor):
         if exact_match_hwnd:
             return exact_match_hwnd
         return partial_match_hwnd
+
+    def _filter_window_by_exe(self, windows: list, exe_name: str):
+        """从窗口列表中过滤指定 exe 的窗口。
+
+        Args:
+            windows: pygetwindow 窗口列表
+            exe_name: 进程 exe 名称，如 "chrome.exe"
+
+        Returns:
+            匹配的窗口对象，未找到返回 None
+        """
+        import win32process
+        import psutil
+
+        for window in windows:
+            try:
+                # pygetwindow 的 window 对象有 _hWnd 属性
+                hwnd = getattr(window, '_hWnd', None)
+                if hwnd:
+                    _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+                    process = psutil.Process(process_id)
+                    if process.name() == exe_name:
+                        return window
+            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                continue
+        return None
 
     def _force_set_foreground_window(self, hwnd: int) -> None:
         """强制将窗口设为前台窗口。

@@ -123,6 +123,9 @@ class Action:
     device: str | None = None             # 设备名称/ID（音频设备）
     state: str | None = None              # 设备状态："enable" 或 "disabled"
 
+    # 窗口激活参数
+    name: str | None = None               # 进程 exe 名称（如 "chrome.exe"），用于 activate_window
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -186,6 +189,7 @@ class Action:
             monitor_index=data.get("monitor_index"),
             device=data.get("device"),
             state=data.get("state"),
+            name=data.get("name"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -264,5 +268,7 @@ class Action:
             result["device"] = self.device
         if self.state is not None:
             result["state"] = self.state
+        if self.name is not None:
+            result["name"] = self.name
 
         return result
