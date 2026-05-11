@@ -84,7 +84,7 @@ Section "MainSection" SEC01
   ; Copy all other files (exclude root config and _internal to avoid duplication)
   DetailPrint "Copying program files..."
   SetOutPath "$INSTDIR"
-  File /r /x "config" /x "_internal" "..\dist\windows\test-worker\*"
+  File /r /x "config" /x "_internal" /x "worker.log" "..\dist\windows\test-worker\*"
 
   ; Replace config file with user input
   Call ReplaceConfigFile
