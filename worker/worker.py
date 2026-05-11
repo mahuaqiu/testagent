@@ -230,10 +230,7 @@ class Worker:
         # 6. 初始化上报客户端
         self._init_reporter()
 
-        # 7. 上报初始状态
-        self._report_devices()
-
-        # 8. 启动设备监控
+        # 7. 启动设备监控（定期上报由 DeviceMonitor 负责）
         if self.device_monitor:
             self.device_monitor.start()
 
@@ -362,16 +359,16 @@ class Worker:
             except Exception as e:
                 logger.error(f"Failed to initialize {platform} platform: {e}\n{traceback.format_exc()}")
 
-        # 初始化设备监控（只有当至少一个平台开启时才创建）
-        if self.config.discover_android_devices or self.config.discover_ios_devices:
-            self.device_monitor = DeviceMonitor(self.config)
-            self.device_monitor.set_platform_managers(
-                android_manager=self.android_manager,
-                ios_manager=self.ios_manager
-            )
-            self.device_monitor.on_device_change = self._on_device_change
+        # 初始化设备监控（始终创建，用于定期上报）
+        self.device_monitor = DeviceMonitor(self.config)
+        self.device_monitor.set_platform_managers(
+            android_manager=self.android_manager,
+            ios_manager=self.ios_manager
+        )
+        self.device_monitor.on_device_change = self._on_device_change
 
-            # 设置帧捕获失败回调
+        # 设置帧捕获失败回调（仅移动端）
+        if self.config.discover_android_devices or self.config.discover_ios_devices:
             from worker.screen.manager import set_capture_failed_callback
             set_capture_failed_callback(self._on_capture_failed)
 
