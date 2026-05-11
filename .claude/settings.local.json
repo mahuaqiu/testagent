@@ -254,7 +254,15 @@
       "Read(//tmp/**)",
       "Bash(makensis /VERSION)",
       "Bash(pytest --collect-only)",
-      "Bash(pytest tests/ -v --tb=short)"
+      "Bash(pytest tests/ -v --tb=short)",
+      "Bash(Get-ChildItem -Path \"D:\\\\code\\\\autotest\" -Filter \"*.log\" -Recurse)",
+      "Bash(Select-Object FullName, LastWriteTime, Length)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(Get-NetIPConfiguration *)",
+      "PowerShell(.venv\\\\Scripts\\\\activate; python -c \"from worker.discovery.host import HostDiscoverer, _get_ip_segment_priority; print\\('=== IP Segment Priority Test ==='\\); test_ips = ['10.0.0.1', '192.168.1.1', '172.16.0.1', '172.20.0.1', '172.32.0.1', '8.8.8.8']; for ip in test_ips: print\\(f'{ip}: priority {_get_ip_segment_priority\\(ip\\)}'\\); print\\('\\\\n=== Detected IPs ==='\\); ips = HostDiscoverer.get_ip_addresses\\(\\); print\\('IPs:', ips\\)\")",
+      "PowerShell(& .venv\\\\Scripts\\\\python.exe test_ip_priority.py)",
+      "PowerShell(python test_ip_priority.py)",
+      "PowerShell(python test_interfaces.py)"
     ]
   }
 }
