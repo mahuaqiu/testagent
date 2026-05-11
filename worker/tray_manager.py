@@ -106,17 +106,15 @@ class TrayManager:
     def _safe_callback(self, name: str, callback: Optional[Callable]) -> None:
         """安全执行回调，确保快速返回并捕获异常。
 
-        使用 QTimer.singleShot 延迟执行 UI 操作，避免阻塞 pystray 线程。
+        使用 threading.Thread 执行回调，避免阻塞 pystray 线程。
+        QTimer.singleShot 在非 Qt 主线程中无法工作，因此改用 threading。
         """
         logger.info(f"Menu clicked: {name}")
         try:
             if callback:
-                # 使用 QTimer.singleShot 延迟执行，确保回调立即返回
-                # 这避免了 pystray 线程被 PyQt5 UI 操作阻塞
-                from PyQt5.QtCore import QTimer
-
-                QTimer.singleShot(0, callback)
-                logger.debug(f"Callback scheduled via QTimer: {name}")
+                # 在后台线程执行回调，确保不阻塞 pystray 线程
+                threading.Thread(target=callback, daemon=True).start()
+                logger.debug(f"Callback started in thread: {name}")
         except Exception as e:
             logger.error(f"Menu callback error ({name}): {e}")
 

@@ -10,7 +10,8 @@ param(
 )
 
 # 定义工程根目录（使用绝对路径，避免相对路径问题）
-$ProjectRoot = $PSScriptRoot
+# $PSScriptRoot 是脚本所在目录（scripts），需要获取其父目录作为项目根目录
+$ProjectRoot = Split-Path $PSScriptRoot -Parent
 if ($ProjectRoot -eq "") {
     $ProjectRoot = Get-Location
 }
