@@ -112,7 +112,7 @@ PlatformManager (抽象基类)
 - **Web 特有**：`navigate`, `new_page`, `switched_page`, `close_page`
 - **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
 - **移动端特有**：`unlock_screen` - 解锁屏幕（iOS/Android 专用）
-- **窗口激活**：`activate_window` - 激活窗口（Windows/Mac 专用）
+- **窗口激活**：`activate_window` - 激活窗口（Windows/Mac/Web 专用）
 - **Windows 系统控制**：`set_resolution`, `set_volume`, `audio_device` - 分辨率、音量、音频设备控制（Windows 专用）
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
@@ -236,27 +236,37 @@ PlatformManager (抽象基类)
 - `unlock.ios_keypad`: iOS 密码键盘坐标配置（物理分辨率）
 - `unlock.android_keypad`: Android 密码键盘坐标配置（物理分辨率）
 
-### activate_window 激活窗口（Windows/Mac 专用）
+### activate_window 激活窗口（Windows/Mac/Web 专用）
 
-将指定窗口带到前台并获取焦点。支持按标题或进程名定位。
+将指定窗口带到前台并获取焦点。支持按标题或窗口类名定位。
 
 **参数**：
 | 参数 | 说明 |
 |------|------|
-| `value` | 窗口标题或进程名（包含匹配） |
-| `match_by` | 定位方式，默认 "title"，可选 "process" |
+| `value` | 窗口标题或窗口类名（支持包含匹配） |
+| `match_by` | 定位方式，默认 "title"，可选 "class" |
 
 **使用示例**：
 ```json
+// 按标题激活窗口
 {"action_type": "activate_window", "value": "计算器"}
-{"action_type": "activate_window", "value": "notepad.exe", "match_by": "process"}
+
+// 按窗口类名激活 Chrome 浏览器
+{"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class"}
 ```
 
 **平台支持**：
-| 平台 | title 模式 | process 模式 |
-|------|------------|--------------|
-| Windows | 支持 | 支持（通过进程名匹配） |
-| Mac | 不推荐 | 支持（通过应用名激活） |
+| 平台 | title 模式 | class 模式 |
+|------|------------|------------|
+| Windows | 支持（包含匹配） | 支持（窗口类名匹配） |
+| Web | 支持（包含匹配） | 支持（窗口类名匹配） |
+| Mac | 不支持 | 支持（应用名激活） |
+
+**常见窗口类名**：
+- Chrome: `Chrome_WidgetWin_1`
+- Edge: `Chrome_WidgetWin_1`（Edge 也使用 Chromium）
+- 记事本: `Notepad`
+- 计算器: `Windows.UI.Core.CoreWindow`
 
 ### set_resolution 设置分辨率（Windows 专用）
 
