@@ -25,6 +25,22 @@ logger = logging.getLogger(__name__)
 _status_manager = UpgradeStatusManager()
 
 
+def _stop_device_monitor() -> None:
+    """
+    停止设备监控定时任务。
+
+    升级开始时立即停止定时上报，避免升级过程中继续上报过时数据。
+    """
+    try:
+        # 导入 server.py 中的 worker 实例
+        from worker.server import worker
+        if worker and worker.device_monitor:
+            logger.info("升级开始，停止设备监控定时任务")
+            worker.device_monitor.stop()
+    except Exception as e:
+        logger.warning(f"停止设备监控失败: {e}")
+
+
 def get_current_version() -> str | None:
     """
     获取当前版本号。
@@ -55,6 +71,9 @@ def start_async_upgrade(request: UpgradeRequest) -> UpgradeResponse:
     # 检查是否已有升级
     if _status_manager.is_upgrading():
         raise UpgradeError("已有升级任务正在进行中")
+
+    # 立即停止设备监控定时任务
+    _stop_device_monitor()
 
     current_version = get_current_version()
     target_version = request.version

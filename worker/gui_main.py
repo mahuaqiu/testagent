@@ -470,7 +470,15 @@ class GUIApp:
             self._show_error_dialog("检查更新失败", str(e))
 
     def _do_upgrade(self, upgrade_info: UpgradeInfo) -> None:
-        """执行升级。"""
+        """执行升级。
+
+        立即停止定时上报，避免升级过程中继续上报过时数据。
+        """
+        # 立即停止设备监控定时任务
+        if self.worker and self.worker.device_monitor:
+            logger.info("托盘升级开始，停止设备监控定时任务")
+            self.worker.device_monitor.stop()
+
         temp_dir = tempfile.gettempdir()
         installer_path = os.path.join(temp_dir, "test-worker-installer.exe")
 
