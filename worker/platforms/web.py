@@ -145,7 +145,41 @@ class WebPlatformManager(PlatformManager):
 
         logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
 
-        logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
+    def _disable_restore_bubble(self, user_data_dir: str) -> None:
+        """禁用浏览器"恢复页面"弹窗，清除 crash 状态标记让浏览器认为上次正常关闭。"""
+        default_dir = os.path.join(user_data_dir, "Default")
+        preferences_file = os.path.join(default_dir, "Preferences")
+
+        # 确保 Default 目录存在
+        if not os.path.exists(default_dir):
+            os.makedirs(default_dir, exist_ok=True)
+
+        # 如果 Preferences 文件不存在，无需处理
+        if not os.path.exists(preferences_file):
+            return
+
+        # 修改现有的 Preferences 文件，清除 crash 状态
+        import json
+        try:
+            with open(preferences_file, "r", encoding="utf-8") as f:
+                preferences = json.load(f)
+
+            # 清除 crash 相关标记，让浏览器认为上次正常关闭
+            # exit_type = "Normal" 表示正常退出，不会显示恢复弹窗
+            if "profile" not in preferences:
+                preferences["profile"] = {}
+            preferences["profile"]["exit_type"] = "Normal"
+
+            # 清除 session crashed 状态
+            if "session" in preferences:
+                if "exited_cleanly" in preferences["session"]:
+                    preferences["session"]["exited_cleanly"] = True
+
+            with open(preferences_file, "w", encoding="utf-8") as f:
+                json.dump(preferences, f, ensure_ascii=False, indent=2)
+            logger.info(f"Updated Preferences to clear crash state (no restore bubble)")
+        except Exception as e:
+            logger.warning(f"Failed to update Preferences file: {e}")
 
     @property
     def platform(self) -> str:
@@ -180,6 +214,10 @@ class WebPlatformManager(PlatformManager):
         # 如果配置了启动前清理，删除 Default 目录数据（保留 Cache）
         if self.clear_profile_on_start:
             self._clear_profile_data(user_data_dir)
+
+        # 禁用浏览器"恢复页面"弹窗（Chromium 系浏览器）
+        if self.browser_type in ("chromium", "chrome", "msedge", "edge"):
+            self._disable_restore_bubble(user_data_dir)
 
         # 选择浏览器类型和启动器
         # Playwright 的 browser_type 只有 chromium/firefox/webkit 三种
