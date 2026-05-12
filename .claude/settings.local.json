@@ -262,7 +262,10 @@
       "PowerShell(.venv\\\\Scripts\\\\activate; python -c \"from worker.discovery.host import HostDiscoverer, _get_ip_segment_priority; print\\('=== IP Segment Priority Test ==='\\); test_ips = ['10.0.0.1', '192.168.1.1', '172.16.0.1', '172.20.0.1', '172.32.0.1', '8.8.8.8']; for ip in test_ips: print\\(f'{ip}: priority {_get_ip_segment_priority\\(ip\\)}'\\); print\\('\\\\n=== Detected IPs ==='\\); ips = HostDiscoverer.get_ip_addresses\\(\\); print\\('IPs:', ips\\)\")",
       "PowerShell(& .venv\\\\Scripts\\\\python.exe test_ip_priority.py)",
       "PowerShell(python test_ip_priority.py)",
-      "PowerShell(python test_interfaces.py)"
+      "PowerShell(python test_interfaces.py)",
+      "Bash(Get-ChildItem \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\" -Recurse -Filter \"perfwin*\")",
+      "Bash(Select-Object FullName)",
+      "WebFetch(domain:superuser.com)"
     ]
   }
 }
