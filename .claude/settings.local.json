@@ -265,7 +265,9 @@
       "PowerShell(python test_interfaces.py)",
       "Bash(Get-ChildItem \"D:\\\\code\\\\autotest\\\\dist\\\\windows\\\\test-worker\" -Recurse -Filter \"perfwin*\")",
       "Bash(Select-Object FullName)",
-      "WebFetch(domain:superuser.com)"
+      "WebFetch(domain:superuser.com)",
+      "Bash(whoami /priv)",
+      "Bash(findstr /i \"admin\")"
     ]
   }
 }
