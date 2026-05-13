@@ -93,7 +93,17 @@ class ActivateWindowAction(BaseActionExecutor):
                         )
                 else:
                     window = windows[0]
-                window.activate()
+                # 添加异常捕获，pygetwindow.activate() 在无权限时可能崩溃
+                try:
+                    window.activate()
+                except Exception as activate_err:
+                    logger.warning(f"window.activate() failed: {activate_err}")
+                    return ActionResult(
+                        number=0,
+                        action_type=self.name,
+                        status=ActionStatus.FAILED,
+                        error=f"Failed to activate window (may need admin privileges): {activate_err}",
+                    )
                 logger.info(f"Activated window by title: {window.title}")
                 return ActionResult(
                     number=0,
@@ -241,31 +251,41 @@ class ActivateWindowAction(BaseActionExecutor):
 
         Args:
             hwnd: 目标窗口句柄
+
+        Raises:
+            Exception: 当权限不足或其他原因导致操作失败时抛出异常
         """
         import win32gui
         import win32process
         import win32api
         import win32con
 
-        # 如果窗口最小化，先恢复
-        if win32gui.IsIconic(hwnd):
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        try:
+            # 如果窗口最小化，先恢复
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
-        # 获取当前前台窗口的线程 ID
-        remote_thread_id = win32process.GetWindowThreadProcessId(win32gui.GetForegroundWindow())[0]
-        # 获取当前脚本运行的线程 ID
-        current_thread_id = win32api.GetCurrentThreadId()
+            # 获取当前前台窗口的线程 ID
+            foreground_hwnd = win32gui.GetForegroundWindow()
+            remote_thread_id = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
+            # 获取当前脚本运行的线程 ID
+            current_thread_id = win32api.GetCurrentThreadId()
 
-        if current_thread_id != remote_thread_id:
-            # 附加线程输入
-            win32process.AttachThreadInput(current_thread_id, remote_thread_id, True)
-            # 执行置顶操作
-            win32gui.BringWindowToTop(hwnd)
-            win32gui.SetForegroundWindow(hwnd)
-            # 操作完成后解除附加，防止系统输入混乱
-            win32process.AttachThreadInput(current_thread_id, remote_thread_id, False)
-        else:
-            win32gui.SetForegroundWindow(hwnd)
+            if current_thread_id != remote_thread_id:
+                # 附加线程输入
+                win32process.AttachThreadInput(current_thread_id, remote_thread_id, True)
+                try:
+                    # 执行置顶操作
+                    win32gui.BringWindowToTop(hwnd)
+                    win32gui.SetForegroundWindow(hwnd)
+                finally:
+                    # 操作完成后解除附加，防止系统输入混乱
+                    win32process.AttachThreadInput(current_thread_id, remote_thread_id, False)
+            else:
+                win32gui.SetForegroundWindow(hwnd)
+        except Exception as e:
+            logger.error(f"Failed to force set foreground window: {e}")
+            raise
 
     def _activate_mac(self, value: str, match_by: str) -> ActionResult:
         """Mac 平台窗口激活。
