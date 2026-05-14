@@ -267,7 +267,8 @@
       "Bash(Select-Object FullName)",
       "WebFetch(domain:superuser.com)",
       "Bash(whoami /priv)",
-      "Bash(findstr /i \"admin\")"
+      "Bash(findstr /i \"admin\")",
+      "Bash(Get-Content worker.log -Tail 50 -Encoding UTF8)"
     ]
   }
 }
