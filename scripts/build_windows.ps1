@@ -3,7 +3,7 @@ param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
-    [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.2-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
+    [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.3-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel 路径
     [switch]$Clean,
     [switch]$BuildInstaller  # Build installer directly
