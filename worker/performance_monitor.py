@@ -329,8 +329,8 @@ class PerformanceCollector:
             "hwinfo_raw": dict(sample.hwinfo_raw),
             "processes": self._convert_processes(sample.processes),
             "aggregated": self._convert_aggregated(sample.aggregated),
-            "top_n_cpu": self._convert_processes(sample.top_n_cpu),
-            "top_n_gpu": self._convert_processes(sample.top_n_gpu),
+            "top_n_cpu": self._convert_aggregated(sample.top_n_cpu),
+            "top_n_gpu": self._convert_aggregated(sample.top_n_gpu),
         }
 
     def _convert_processes(self, processes) -> list[dict] | None:
@@ -408,9 +408,27 @@ class PerformanceCollector:
         # 尝试 HTTP 上报
         try:
             import requests
+
+            # 打印上报数据摘要
+            sample_count = len(samples)
+            logger.info(f"准备上报 {sample_count} 个样本, collect_id={self._collect_id}")
+
+            # 打印第一个样本的详细数据（用于调试）
+            if samples:
+                first_sample = samples[0]
+                top_n_cpu = first_sample.get("top_n_cpu", [])
+                if top_n_cpu:
+                    cpu_summary = ", ".join(
+                        f"{p['name']}({p['process_count']}个实例): {p['cpu_percent_total']:.2f}%"
+                        for p in top_n_cpu[:5]
+                    )
+                    logger.info(f"top_n_cpu 前5: {cpu_summary}")
+
             url = f"{self._backend_host}/api/core/performance-monitor/report"
             response = requests.post(url, json=payload, timeout=10)
-            if response.status_code != 200:
+            if response.status_code == 200:
+                logger.info(f"上报成功: {sample_count} 个样本")
+            else:
                 logger.warning(f"上报失败: {response.status_code}")
                 self._persist_samples(payload)
         except Exception as e:
@@ -438,7 +456,7 @@ class PerformanceCollector:
         with open(file_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-        logger.debug(f"性能数据已持久化: {file_path}, 样本数: {len(payload['samples'])}")
+        logger.info(f"性能数据已持久化: {file_path}, 样本数: {len(payload['samples'])}")
 
     def get_processes(self, search: str | None = None) -> list[ProcessInfo]:
         """获取所有进程列表及其资源使用率。
