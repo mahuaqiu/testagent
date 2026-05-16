@@ -276,7 +276,8 @@
       "PowerShell(pip install *)",
       "PowerShell(pip show *)",
       "PowerShell(pip *)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(venv\\\\Scripts\\\\pip install *)"
     ]
   }
 }
