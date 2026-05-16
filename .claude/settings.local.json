@@ -270,7 +270,9 @@
       "Bash(findstr /i \"admin\")",
       "Bash(Get-Content worker.log -Tail 50 -Encoding UTF8)",
       "Bash(Get-Content \"D:\\\\code\\\\autotest\\\\data\\\\performance\\\\5r3gTblHnX83kTKdM7WVj.log\" -TotalCount 1)",
-      "PowerShell(Get-Content \"D:\\\\code\\\\autotest\\\\data\\\\performance\\\\5r3gTblHnX83kTKdM7WVj.log\" -TotalCount 1 | python -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\('Payload keys:', list\\(d.keys\\(\\)\\)\\); print\\('Sample keys:', list\\(d['samples'][0].keys\\(\\)\\) if d['samples'] else 'empty'\\)\")"
+      "PowerShell(Get-Content \"D:\\\\code\\\\autotest\\\\data\\\\performance\\\\5r3gTblHnX83kTKdM7WVj.log\" -TotalCount 1 | python -c \"import sys,json; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\('Payload keys:', list\\(d.keys\\(\\)\\)\\); print\\('Sample keys:', list\\(d['samples'][0].keys\\(\\)\\) if d['samples'] else 'empty'\\)\")",
+      "Bash(Get-ChildItem -Path \"D:\\\\code\\\\autotest\\\\data\" -Recurse -ErrorAction SilentlyContinue)",
+      "Bash(dir D:\\\\code\\\\autotest\\\\data\\\\performance *)"
     ]
   }
 }
