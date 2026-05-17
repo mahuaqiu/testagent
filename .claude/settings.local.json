@@ -277,7 +277,10 @@
       "PowerShell(pip show *)",
       "PowerShell(pip *)",
       "Bash(cargo check *)",
-      "Bash(venv\\\\Scripts\\\\pip install *)"
+      "Bash(venv\\\\Scripts\\\\pip install *)",
+      "Skill(systematic-debugging)",
+      "Bash(Get-ChildItem -Path . -Filter \"*.log\" -Recurse)",
+      "Bash(Select-Object -First 10 FullName)"
     ]
   }
 }
