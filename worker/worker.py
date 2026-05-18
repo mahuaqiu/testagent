@@ -31,6 +31,7 @@ from worker.platforms.windows import WindowsPlatformManager
 from worker.reporter import DesktopInfo, Reporter, WorkerCapabilities, WorkerReport
 from worker.task import ActionStatus, Task, TaskResult, TaskStatus
 from worker.task.store import TaskEntry, TaskStore
+from worker.tools import get_all_script_versions
 
 logger = logging.getLogger(__name__)
 
@@ -474,6 +475,7 @@ class Worker:
             devices=devices_payload,
             version=self._get_version(),
             config_version=self.config.config_version,
+            scripts=get_all_script_versions(),
         )
 
     def _start_device_monitor(self) -> None:
@@ -613,6 +615,7 @@ class Worker:
             },
             "namespace": self.reporter.namespace if self.reporter else "",
             "config_version": self.config.config_version,
+            "scripts": get_all_script_versions(),
         }
 
     def get_devices(self) -> dict[str, Any]:

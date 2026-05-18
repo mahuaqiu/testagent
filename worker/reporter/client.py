@@ -50,6 +50,7 @@ class Reporter:
         devices: Dict[str, List[str]],
         version: Optional[str] = None,
         config_version: Optional[str] = None,
+        scripts: Optional[Dict[str, str]] = None,
     ) -> bool:
         """
         调用设备注册接口（新格式）。
@@ -60,6 +61,7 @@ class Reporter:
             devices: 设备列表，key 为 device_type，value 为 device_sn 列表
             version: 机器版本（可选）
             config_version: 配置版本（可选）
+            scripts: 脚本版本信息（可选）
 
         Returns:
             bool: 注册是否成功
@@ -77,6 +79,7 @@ class Reporter:
                 "version": version,
                 "devices": devices,
                 "config_version": config_version,
+                "scripts": scripts or {},
             }
 
             response = self._client.post(

@@ -148,3 +148,21 @@ def script_exists(name: str) -> bool:
     """
     script_path = os.path.join(get_tools_dir(), name)
     return os.path.exists(script_path)
+
+
+def get_all_script_versions() -> dict[str, str]:
+    """
+    获取所有脚本的版本记录。
+
+    Returns:
+        dict[str, str]: 脚本名称 -> 版本号的映射
+    """
+    versions_file = get_versions_file()
+    if not os.path.exists(versions_file):
+        return {}
+
+    try:
+        with open(versions_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
