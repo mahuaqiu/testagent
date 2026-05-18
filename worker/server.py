@@ -705,6 +705,9 @@ async def update_worker_script(request: ScriptUpdateRequest):
         # 8. 返回响应（不重启）
         logger.info(f"Script updated successfully: {request.name} -> {request.version}")
 
+        # 9. 触发注册上报（通知平台脚本版本已更新）
+        worker._report_devices()
+
         return {
             "status": "success",
             "message": "脚本更新成功",
