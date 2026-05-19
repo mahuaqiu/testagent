@@ -59,6 +59,7 @@ class OcrClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -122,6 +123,7 @@ class OcrInputAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -198,6 +200,7 @@ class OcrWaitAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.FAILED,
             error=f"Text not appeared within timeout: {action.value}",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -238,6 +241,7 @@ class OcrAssertAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}",
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
 
@@ -316,6 +320,7 @@ class OcrPasteAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -384,6 +389,7 @@ class OcrMoveAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -443,6 +449,7 @@ class OcrDoubleClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -514,6 +521,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Anchor text not found: {action.anchor_text}" + (f" at index {anchor_index}" if anchor_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         anchor_x, anchor_y = anchor_position
@@ -545,6 +553,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Target text not found in row of \"{action.anchor_text}\": {action.value}" + (f" at target_index {target_index}" if target_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 计算目标在 region 裁剪图中的坐标（加上 row 裁剪偏移）
@@ -620,6 +629,7 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Anchor text not found: {action.anchor_text}" + (f" at index {anchor_index}" if anchor_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         anchor_x, anchor_y = anchor_position

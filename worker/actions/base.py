@@ -178,6 +178,22 @@ class BaseActionExecutor(ActionExecutor):
             )
         return None
 
+    def _get_last_ocr_info(self, platform: "PlatformManager") -> list | None:
+        """
+        获取最后一次 OCR 调用的 ocr_info。
+
+        Args:
+            platform: 平台管理器
+
+        Returns:
+            list | None: ocr_info 列表，如果没有则返回 None
+        """
+        if platform.ocr_client:
+            ocr_info = platform.ocr_client.get_last_ocr_info()
+            if ocr_info:
+                return ocr_info
+        return None
+
     def _find_text_position(
         self,
         platform: "PlatformManager",
@@ -234,8 +250,10 @@ class BaseActionExecutor(ActionExecutor):
         # 图像匹配失败时打印原始响应
         if position is None and platform.ocr_client:
             last_response = platform.ocr_client.get_last_response()
+            ocr_info = platform.ocr_client.get_last_ocr_info()
             logger.warning(
                 f"Image match failed, threshold={threshold}, "
+                f"ocr_info={ocr_info}, "
                 f"ocr_response={last_response}"
             )
 
@@ -275,8 +293,10 @@ class BaseActionExecutor(ActionExecutor):
         # OCR 失败时打印原始响应
         if position is None and platform.ocr_client:
             last_response = platform.ocr_client.get_last_response()
+            ocr_info = platform.ocr_client.get_last_ocr_info()
             logger.warning(
                 f"OCR find text failed, target=\"{text}\", "
+                f"ocr_info={ocr_info}, "
                 f"ocr_response={last_response}"
             )
 

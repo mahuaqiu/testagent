@@ -46,6 +46,8 @@ class ActionResult:
     exit_code: Optional[int] = None  # 命令退出码
     stdout: Optional[str] = None     # 标准输出
     stderr: Optional[str] = None     # 标准错误
+    # OCR 失败时的信息
+    ocr_info: Optional[list[dict[str, Any]]] = None  # OCR 识别信息列表
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
@@ -63,6 +65,7 @@ class ActionResult:
             exit_code=data.get("exit_code"),
             stdout=data.get("stdout"),
             stderr=data.get("stderr"),
+            ocr_info=data.get("ocr_info"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -87,6 +90,8 @@ class ActionResult:
             result["stdout"] = self.stdout
         if self.stderr is not None:
             result["stderr"] = self.stderr
+        if self.ocr_info is not None:
+            result["ocr_info"] = self.ocr_info
         # context 不需要序列化到结果中
         return result
 

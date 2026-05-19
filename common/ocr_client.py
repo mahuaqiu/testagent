@@ -480,6 +480,15 @@ class OCRClient:
         """获取最后一次 OCR/Image 调用的原始响应。"""
         return self._last_response
 
+    def get_last_ocr_info(self) -> list:
+        """
+        获取最后一次 OCR/Image 调用的 ocr_info 字段。
+
+        Returns:
+            list: ocr_info 列表，失败或无数据时返回空列表
+        """
+        return self._last_response.get("ocr_info", [])
+
 
 # 全局客户端实例
 _client: Optional[OCRClient] = None

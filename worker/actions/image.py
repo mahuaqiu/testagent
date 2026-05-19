@@ -63,6 +63,7 @@ class ImageClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -143,6 +144,7 @@ class ImageWaitAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.FAILED,
             error="Image not appeared within timeout",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -191,6 +193,7 @@ class ImageAssertAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
 
@@ -251,6 +254,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Image not found near text: {action.value}",
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -317,6 +321,7 @@ class ImageMoveAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -385,6 +390,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 将相对坐标转换为全局坐标
@@ -454,6 +460,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Anchor text not found: {action.anchor_text}" + (f" at index {anchor_index}" if anchor_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         anchor_x, anchor_y = anchor_position
@@ -488,6 +495,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Target image not found in row of \"{action.anchor_text}\"" + (f" at target_index {target_index}" if target_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         # 计算目标在原图中的坐标（加上裁剪偏移）
@@ -569,6 +577,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=f"Anchor text not found: {action.anchor_text}" + (f" at index {anchor_index}" if anchor_index > 0 else ""),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
         anchor_x, anchor_y = anchor_position
