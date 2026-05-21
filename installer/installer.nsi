@@ -36,6 +36,7 @@ SetCompressor /SOLID lzma
 !include "nsDialogs.nsh"
 
 ; Variables
+Var DetectedIP        ; IP detected in .onInit (stored separately from IpInput control handle)
 Var IpInput
 Var PortInput
 Var NamespaceInput
@@ -194,13 +195,12 @@ Function KillProcessesAndCleanup
   NoPlaywright:
 FunctionEnd
 
-; Auto IP detection - registry first (fast), PowerShell fallback (reliable)
+; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)
 Function GetLocalIP
-  ; Output: $R0 = best IP address
-  ; Strategy: registry first (milliseconds), PowerShell fallback (seconds)
+  ; Output: $R0 = best IP address, or "0.0.0.0" if not found
+  ; Strategy: registry enumeration (milliseconds, no PowerShell)
   ; Priority by IP segment: 10.x > 192.168.x > 172.16-31.x > others
 
-  ; Phase 1: Fast registry method
   Push $R1  ; Subkey index
   Push $R2  ; Current IP
   Push $R3  ; 10.x IP
@@ -270,8 +270,9 @@ Function GetLocalIP
     StrCmp $R5 "" 0 return_172_registry
     StrCmp $R6 "" 0 return_other_registry
 
-    ; Registry failed - fallback to PowerShell (for static IP configs)
-    Goto try_powershell
+    ; Registry failed - return default 0.0.0.0 (user must fill manually)
+    StrCpy $R0 "0.0.0.0"
+    Goto cleanup_registry
 
   return_10_registry:
     StrCpy $R0 $R3
@@ -293,59 +294,6 @@ Function GetLocalIP
     Pop $R3
     Pop $R2
     Pop $R1
-    Goto end
-
-  ; Phase 2: PowerShell fallback (only if registry failed)
-  try_powershell:
-    ; Clean up registry variables first
-    Pop $R6
-    Pop $R5
-    Pop $R4
-    Pop $R3
-    Pop $R2
-    Pop $R1
-
-    Push $R1  ; PowerShell output
-
-    ; PowerShell script: Get IPv4 addresses from physical network interfaces
-    StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1$$net = Get-NetIPConfiguration | Where-Object { "
-    StrCpy $1 "$1  $$_.IPv4Address -ne $null "
-    StrCpy $1 "$1  -and $$_.InterfaceAlias -notmatch 'virtual|vmware|vbox|hyper-v|loopback|bluetooth|tunnel|vpn|vEthernet' "
-    StrCpy $1 "$1  -and $$_.IPv4Address.IPAddress -notmatch '^127\\.' "
-    StrCpy $1 "$1}; "
-    StrCpy $1 "$1$$addrs = @(); "
-    StrCpy $1 "$1foreach ($$n in $$net) { "
-    StrCpy $1 "$1  $$ip = $$n.IPv4Address.IPAddress; "
-    StrCpy $1 "$1  if ($$ip -match '^10\\.') { $$prio = 4 } "
-    StrCpy $1 "$1  elseif ($$ip -match '^192\\.168\\.') { $$prio = 3 } "
-    StrCpy $1 "$1  elseif ($$ip -match '^172\\.(16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)\\.') { $$prio = 2 } "
-    StrCpy $1 "$1  else { $$prio = 1 }; "
-    StrCpy $1 "$1  $$addrs += [PSCustomObject]@{P=$$prio; I=$$ip} "
-    StrCpy $1 "$1}; "
-    StrCpy $1 "$1if ($$addrs.Count -gt 0) { ($$addrs | Sort-Object P -Descending)[0].I } else { '127.0.0.1' }$\""
-
-    ; Execute PowerShell and capture output
-    nsExec::ExecToStack $1
-    Pop $0  ; Return code
-    Pop $R1  ; Output (IP address)
-
-    ; Check if PowerShell succeeded
-    StrCmp $0 "0" powershell_success powershell_failed
-
-  powershell_success:
-    ; Trim whitespace from output
-    StrCpy $R0 $R1
-    Pop $R1
-    Goto end
-
-  powershell_failed:
-    ; Both methods failed, return localhost
-    StrCpy $R0 "127.0.0.1"
-    Pop $R1
-    Goto end
-
-end:
 FunctionEnd
 
 ; Upgrade detection
@@ -375,8 +323,8 @@ Function ConfigPageCreate
   ${NSD_CreateLabel} 0 0 140 12u "Worker IP Address:"
   ${NSD_CreateText} 0 18 280 12u ""
   Pop $IpInput
-  Call GetLocalIP
-  ${NSD_SetText} $IpInput $R0
+  ; Use IP detected in .onInit (stored in DetectedIP, not IpInput which is now control handle)
+  ${NSD_SetText} $IpInput $DetectedIP
 
   ${NSD_CreateLabel} 300 0 80 12u "Port:"
   ${NSD_CreateText} 300 18 80 12u "8088"
@@ -508,11 +456,12 @@ Function .onInit
   StrCmp $1 "" 0 +2
     StrCpy $OcrServiceInput $1
 
-  ; If silent install and no IP provided, auto detect
-  IfSilent 0 done
-    StrCmp $IpInput "" 0 done
+  ; Auto detect IP for all installs (not just silent)
+  ; Do this in .onInit so detection happens before UI shows, avoiding UI freeze
+  ; Store result in DetectedIP (not IpInput, which becomes control handle later)
+  StrCmp $DetectedIP "" 0 done
     Call GetLocalIP
-    StrCpy $IpInput $R0
+    StrCpy $DetectedIP $R0
   done:
 FunctionEnd
 
