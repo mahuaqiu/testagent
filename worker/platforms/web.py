@@ -733,9 +733,13 @@ class WebPlatformManager(PlatformManager):
         page = context or self._current_page
         if page:
             try:
-                return _run_async(page.screenshot(type="png"))
-            except Exception:
+                screenshot_bytes = _run_async(page.screenshot(type="png"))
+                logger.info(f"Playwright screenshot: {len(screenshot_bytes)} bytes")
+                return screenshot_bytes
+            except Exception as e:
+                logger.error(f"Playwright screenshot failed: {e}")
                 return b""
+        logger.warning("take_screenshot: no page available")
         return b""
 
     def _take_system_screenshot(self, monitor: int = None) -> bytes:
