@@ -146,7 +146,10 @@ class WebPlatformManager(PlatformManager):
         logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
 
     def _disable_restore_bubble(self, user_data_dir: str) -> None:
-        """禁用浏览器"恢复页面"弹窗，清除 crash 状态标记让浏览器认为上次正常关闭。"""
+        """禁用浏览器"恢复页面"弹窗，清除 crash 状态标记让浏览器认为上次正常关闭。
+
+        无论 Preferences 文件是否存在，都确保写入正确的 crash 状态标记。
+        """
         default_dir = os.path.join(user_data_dir, "Default")
         preferences_file = os.path.join(default_dir, "Preferences")
 
@@ -154,27 +157,30 @@ class WebPlatformManager(PlatformManager):
         if not os.path.exists(default_dir):
             os.makedirs(default_dir, exist_ok=True)
 
-        # 如果 Preferences 文件不存在，无需处理
-        if not os.path.exists(preferences_file):
-            return
-
-        # 修改现有的 Preferences 文件，清除 crash 状态
+        # 读取或创建 Preferences
         import json
+        preferences = {}
+        if os.path.exists(preferences_file):
+            try:
+                with open(preferences_file, "r", encoding="utf-8") as f:
+                    preferences = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to read Preferences file, will create new one: {e}")
+                preferences = {}
+
+        # 清除 crash 相关标记，让浏览器认为上次正常关闭
+        # exit_type = "Normal" 表示正常退出，不会显示恢复弹窗
+        if "profile" not in preferences:
+            preferences["profile"] = {}
+        preferences["profile"]["exit_type"] = "Normal"
+
+        # 清除 session crashed 状态
+        if "session" not in preferences:
+            preferences["session"] = {}
+        preferences["session"]["exited_cleanly"] = True
+
+        # 写入 Preferences 文件
         try:
-            with open(preferences_file, "r", encoding="utf-8") as f:
-                preferences = json.load(f)
-
-            # 清除 crash 相关标记，让浏览器认为上次正常关闭
-            # exit_type = "Normal" 表示正常退出，不会显示恢复弹窗
-            if "profile" not in preferences:
-                preferences["profile"] = {}
-            preferences["profile"]["exit_type"] = "Normal"
-
-            # 清除 session crashed 状态
-            if "session" in preferences:
-                if "exited_cleanly" in preferences["session"]:
-                    preferences["session"]["exited_cleanly"] = True
-
             with open(preferences_file, "w", encoding="utf-8") as f:
                 json.dump(preferences, f, ensure_ascii=False, indent=2)
             logger.info(f"Updated Preferences to clear crash state (no restore bubble)")

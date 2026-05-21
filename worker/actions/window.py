@@ -259,14 +259,33 @@ class ActivateWindowAction(BaseActionExecutor):
         import win32process
         import win32api
         import win32con
+        import time
 
         try:
             # 如果窗口最小化，先恢复
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
-            # 获取当前前台窗口的线程 ID
-            foreground_hwnd = win32gui.GetForegroundWindow()
+            # 获取当前前台窗口的线程 ID（最多重试一次）
+            max_retries = 2
+            for retry in range(max_retries):
+                foreground_hwnd = win32gui.GetForegroundWindow()
+
+                # 无前台窗口或句柄无效，等待后重试
+                if foreground_hwnd == 0 or not win32gui.IsWindow(foreground_hwnd):
+                    if retry < max_retries - 1:
+                        logger.warning(f"Foreground window handle invalid (hwnd={foreground_hwnd}), waiting 1s to retry...")
+                        time.sleep(1)
+                        continue
+                    else:
+                        # 重试后仍无效，直接尝试 SetForegroundWindow
+                        logger.warning("Foreground window still invalid after retry, attempting direct activation")
+                        win32gui.SetForegroundWindow(hwnd)
+                        return
+
+                # 验证通过，跳出重试循环
+                break
+
             remote_thread_id = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
             # 获取当前脚本运行的线程 ID
             current_thread_id = win32api.GetCurrentThreadId()
