@@ -188,7 +188,6 @@ class ImageAssertAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.FAILED,
                     error="Image found but expected not exist",
-                    ocr_info=self._get_last_ocr_info(platform),
                 )
             else:
                 return ActionResult(
@@ -196,7 +195,6 @@ class ImageAssertAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
                     output="Image not found as expected",
-                    ocr_info=self._get_last_ocr_info(platform),
                 )
         else:
             if position:
@@ -212,7 +210,6 @@ class ImageAssertAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.FAILED,
                     error="Image not found" + (f" at index {index}" if index > 0 else ""),
-                    ocr_info=self._get_last_ocr_info(platform),
                 )
 
 
