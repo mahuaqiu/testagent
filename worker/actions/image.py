@@ -277,6 +277,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) near text \"{action.value}\"",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -520,6 +521,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
     def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:
@@ -624,6 +626,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=json.dumps(output_data),
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
     def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:

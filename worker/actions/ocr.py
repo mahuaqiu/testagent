@@ -86,6 +86,7 @@ class OcrClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=output,
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -149,6 +150,7 @@ class OcrInputAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Input at ({x}, {y})",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -191,6 +193,7 @@ class OcrWaitAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
                     output=f"Text appeared: {action.value}",
+                    ocr_info=self._get_last_ocr_info(platform),
                 )
 
             time.sleep(0.5)
@@ -234,6 +237,7 @@ class OcrAssertAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.SUCCESS,
                 output=f"Text found: {action.value}",
+                ocr_info=self._get_last_ocr_info(platform),
             )
         else:
             return ActionResult(
@@ -275,6 +279,7 @@ class OcrGetTextAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=all_text,
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -352,6 +357,7 @@ class OcrPasteAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Pasted at ({x}, {y})",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -407,6 +413,7 @@ class OcrMoveAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.SUCCESS,
                 output=f"Moved to ({x}, {y})",
+                ocr_info=self._get_last_ocr_info(platform),
             )
         except NotImplementedError as e:
             return ActionResult(
@@ -470,6 +477,7 @@ class OcrDoubleClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Double clicked at ({x}, {y})",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -578,6 +586,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -673,6 +682,7 @@ class OcrCheckSameRowTextAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=json.dumps(output_data),
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 
@@ -720,4 +730,5 @@ class OcrExistAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=json.dumps({"exists": exists}),
+            ocr_info=self._get_last_ocr_info(platform),
         )
