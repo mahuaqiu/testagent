@@ -231,22 +231,41 @@ class OcrAssertAction(BaseActionExecutor):
         # 使用统一匹配策略（已处理 reg_ 前缀）
         position = self._find_text_with_fallback(platform, screenshot, action.value, match_mode=action.match_mode)
 
-        if position:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.SUCCESS,
-                output=f"Text found: {action.value}",
-                ocr_info=self._get_last_ocr_info(platform),
-            )
+        # 根据 negate 参数返回结果
+        if action.negate:
+            if position:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error=f"Text found but expected not exist: {action.value}",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
+            else:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output=f"Text not found as expected: {action.value}",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
         else:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}",
-                ocr_info=self._get_last_ocr_info(platform),
-            )
+            if position:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output=f"Text found: {action.value}",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
+            else:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error=f"Text not found: {action.value}",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
 
 
 class OcrGetTextAction(BaseActionExecutor):

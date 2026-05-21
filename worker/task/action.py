@@ -126,6 +126,9 @@ class Action:
     # 窗口激活参数
     name: str | None = None               # 进程 exe 名称（如 "chrome.exe"），用于 activate_window
 
+    # 断言参数
+    negate: bool = False                  # 断言不存在（ocr_assert/image_assert 专用）
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -190,6 +193,7 @@ class Action:
             device=data.get("device"),
             state=data.get("state"),
             name=data.get("name"),
+            negate=data.get("negate", False),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -270,5 +274,7 @@ class Action:
             result["state"] = self.state
         if self.name is not None:
             result["name"] = self.name
+        if self.negate:
+            result["negate"] = self.negate
 
         return result

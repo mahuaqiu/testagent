@@ -180,21 +180,40 @@ class ImageAssertAction(BaseActionExecutor):
             platform, screenshot, action.image_base64, threshold, index
         )
 
-        if position:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.SUCCESS,
-                output="Image found",
-            )
+        # 根据 negate 参数返回结果
+        if action.negate:
+            if position:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error="Image found but expected not exist",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
+            else:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output="Image not found as expected",
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
         else:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error="Image not found" + (f" at index {index}" if index > 0 else ""),
-                ocr_info=self._get_last_ocr_info(platform),
-            )
+            if position:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output="Image found",
+                )
+            else:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                    ocr_info=self._get_last_ocr_info(platform),
+                )
 
 
 class ImageClickNearTextAction(BaseActionExecutor):
