@@ -61,6 +61,20 @@ class UnlockScreenAction(ActionExecutor):
         "0": {"x": 540, "y": 1150},
     }
 
+    # Harmony 1080x2400（与 Android 布局相同）
+    DEFAULT_HARMONY_KEYPAD = {
+        "1": {"x": 180, "y": 850},
+        "2": {"x": 540, "y": 850},
+        "3": {"x": 900, "y": 850},
+        "4": {"x": 180, "y": 950},
+        "5": {"x": 540, "y": 950},
+        "6": {"x": 900, "y": 950},
+        "7": {"x": 180, "y": 1050},
+        "8": {"x": 540, "y": 1050},
+        "9": {"x": 900, "y": 1050},
+        "0": {"x": 540, "y": 1150},
+    }
+
     def execute(
         self,
         platform: "PlatformManager",
@@ -244,6 +258,11 @@ class UnlockScreenAction(ActionExecutor):
             coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_ANDROID_KEYPAD))
             logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
             return coords
+        elif platform_type == "harmony":
+            keypad = unlock_config.get("harmony_keypad", {})
+            coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_HARMONY_KEYPAD))
+            logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
+            return coords
         else:
             logger.warning(f"Unsupported platform for unlock: {platform_type}")
             return {}
@@ -276,6 +295,20 @@ class UnlockScreenAction(ActionExecutor):
                     return (info.get("displayWidth", 1080), info.get("displayHeight", 2400))
                 except Exception as e:
                     logger.warning(f"Failed to get Android screen size: {e}")
+
+        elif platform_type == "harmony":
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                try:
+                    # 通过截图获取分辨率
+                    screenshot_bytes = platform.take_screenshot(context)
+                    if screenshot_bytes:
+                        import io
+                        from PIL import Image
+                        img = Image.open(io.BytesIO(screenshot_bytes))
+                        return img.size
+                except Exception as e:
+                    logger.warning(f"Failed to get Harmony screen size: {e}")
 
         return None
 
@@ -315,6 +348,10 @@ class UnlockScreenAction(ActionExecutor):
             # Android 不需要缩放
             return 1
 
+        elif platform_type == "harmony":
+            # Harmony 不需要缩放
+            return 1
+
         return 1
 
     def _check_locked(self, platform: "PlatformManager", context: object) -> bool:
@@ -336,6 +373,20 @@ class UnlockScreenAction(ActionExecutor):
                 return not info.get("screenOn", True)
             return True
 
+        elif platform_type == "harmony":
+            # Harmony: 通过 HDC 检测屏幕状态
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                try:
+                    result = hdc.shell("dumpsys display | grep 'mScreenState'")
+                    if "ON" in result:
+                        return False  # 已解锁
+                    elif "OFF" in result:
+                        return True  # 已锁屏
+                except Exception as e:
+                    logger.warning(f"Failed to check Harmony lock status: {e}")
+            return True
+
         return True
 
     def _check_screen_brightness(self, platform: "PlatformManager", context: object) -> bool:
@@ -349,6 +400,34 @@ class UnlockScreenAction(ActionExecutor):
                 info = device.info
                 return info.get("screenOn", True)
             return True
+
+        if platform_type == "harmony":
+            # Harmony: 通过截图亮度判断（与 iOS 相同）
+            try:
+                screenshot_bytes = platform.take_screenshot(context)
+                if not screenshot_bytes:
+                    logger.warning("Failed to take screenshot, assuming screen is off")
+                    return False
+
+                import io
+                from PIL import Image
+
+                img = Image.open(io.BytesIO(screenshot_bytes))
+                # 转换为灰度图
+                gray_img = img.convert("L")
+                # 计算平均亮度
+                pixels = list(gray_img.getdata())
+                avg_brightness = sum(pixels) / len(pixels)
+                logger.info(f"Screenshot average brightness: {avg_brightness}")
+
+                # 亮度阈值：低于 10 认为屏幕熄灭（全黑）
+                is_screen_on = avg_brightness > 10
+                logger.info(f"Screen on detected via brightness: {is_screen_on}")
+                return is_screen_on
+
+            except Exception as e:
+                logger.warning(f"Failed to check screen brightness: {e}")
+                return True
 
         # iOS: 通过截图亮度判断（WDA 没有 screenOn API）
         try:
@@ -395,6 +474,12 @@ class UnlockScreenAction(ActionExecutor):
                 device.screen_on()
                 logger.info("Android screen awakened")
 
+        elif platform_type == "harmony":
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                hdc.shell("input keyevent POWER")
+                logger.info("Harmony screen awakened via POWER key")
+
     def _swipe_unlock(self, platform: "PlatformManager", context: object) -> None:
         """滑动解锁界面（旧方法，保留兼容）。"""
         platform_type = platform.platform
@@ -423,6 +508,10 @@ class UnlockScreenAction(ActionExecutor):
             logger.info(f"iOS unlock method for {resolution_key}: {method}")
             return method
 
+        # Harmony 默认使用 swipe
+        if platform.platform == "harmony":
+            return "swipe_up"
+
         # Android 默认使用 swipe
         return "swipe_up"
 
@@ -450,6 +539,13 @@ class UnlockScreenAction(ActionExecutor):
                 device.unlock()
                 logger.info("Android unlock via swipe")
 
+        elif platform_type == "harmony":
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                # Harmony: 向上滑动解锁
+                hdc.swipe(540, 2000, 540, 500)
+                logger.info("Harmony unlock via swipe up")
+
     def _tap_digit(self, platform: "PlatformManager", context: object, x: int, y: int, scale_factor: int = 1) -> None:
         """点击密码数字（配置使用物理坐标，点击时转换）。"""
         platform_type = platform.platform
@@ -467,3 +563,9 @@ class UnlockScreenAction(ActionExecutor):
             if device:
                 # Android: 直接使用物理坐标
                 device.click(x, y)
+
+        elif platform_type == "harmony":
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                # Harmony: 直接使用物理坐标
+                hdc.tap(x, y)

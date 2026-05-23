@@ -8,6 +8,7 @@ from worker.platforms.android import AndroidPlatformManager
 from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
 from worker.platforms.mac import MacPlatformManager
+from worker.platforms.harmony import HarmonyPlatformManager
 
 __all__ = [
     "PlatformManager",
@@ -16,4 +17,5 @@ __all__ = [
     "iOSPlatformManager",
     "WindowsPlatformManager",
     "MacPlatformManager",
+    "HarmonyPlatformManager",
 ]
