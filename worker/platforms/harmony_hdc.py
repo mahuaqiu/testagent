@@ -86,15 +86,18 @@ def _execute_hdc_command(
         error = error.decode("utf-8", errors="ignore")
         exit_code = process.returncode
 
-        # HDC 命令失败标识
+        # HDC 命令失败标识 - 只记录警告，不改变返回值
         if "error:" in output.lower() or "[fail]" in output.lower():
-            return CommandResult("", output, -1)
+            logger.warning(f"HDC 命令可能失败: {output.strip()}")
 
         return CommandResult(output, error, exit_code)
 
     except subprocess.TimeoutExpired:
         process.kill()
-        output, error = process.communicate()
+        try:
+            output, error = process.communicate()
+        except Exception:
+            output, error = b"", b""
         return CommandResult("", "命令执行超时", -1)
 
     except Exception as e:
@@ -173,7 +176,7 @@ def list_devices(hdc_path: Optional[str] = None) -> List[str]:
         lines = result.output.strip().split("\n")
         for line in lines:
             line = line.strip()
-            if line and not line.__contains__("Empty"):
+            if line and "Empty" not in line:
                 devices.append(line)
 
     return devices
@@ -287,10 +290,10 @@ class HarmonyHdcWrapper:
             命令会自动用双引号包裹，确保正确执行。
         """
         # 确保命令用双引号包裹
-        if cmd[0] != '"':
-            cmd = '"' + cmd
-        if cmd[-1] != '"':
-            cmd += '"'
+        if not cmd:
+            return CommandResult("", "Empty command", -1)
+        if not (cmd.startswith('"') and cmd.endswith('"')):
+            cmd = f'"{cmd}"'
 
         result = self._execute(["shell", cmd], timeout)
 
