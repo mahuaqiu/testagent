@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 import uuid
 import re
 import json
@@ -261,6 +262,22 @@ class HarmonyHdcWrapper:
         full_args = ["-t", self.serial] + args
         return _execute_hdc_command(self.hdc_path, full_args, timeout)
 
+    def _check_result(self, result: CommandResult, operation: str) -> bool:
+        """
+        统一检查命令执行结果。
+
+        Args:
+            result: 命令执行结果
+            operation: 操作名称（用于日志）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"{operation}失败: {result.output}")
+            return False
+        return True
+
     def is_online(self) -> bool:
         """
         检查设备是否在线。
@@ -325,23 +342,23 @@ class HarmonyHdcWrapper:
                 remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.png"
                 result = self.shell(f"uitest screenCap -p {remote_path}")
 
-                if result.exit_code != 0 or "fail" in result.output.lower():
-                    logger.error(f"uitest 截图失败: {result.output}")
+                if not self._check_result(result, "uitest 截图"):
                     return False
 
                 # 拉取到本地
                 pull_result = self.pull_file(remote_path, local_path)
 
                 # 清理远程文件
-                self.shell(f"rm {remote_path}")
+                rm_result = self.shell(f"rm {remote_path}")
+                if rm_result.exit_code != 0:
+                    logger.warning(f"清理远程截图文件失败: {rm_result.output}")
 
                 return pull_result
             else:
                 # 使用 snapshot_display 截图
                 result = self.shell(f"snapshot_display -f {local_path}")
 
-                if result.exit_code != 0 or "fail" in result.output.lower():
-                    logger.error(f"snapshot_display 截图失败: {result.output}")
+                if not self._check_result(result, "snapshot_display 截图"):
                     return False
 
                 return os.path.exists(local_path)
@@ -423,12 +440,7 @@ class HarmonyHdcWrapper:
             bool: True 表示成功，False 表示失败
         """
         result = self.shell(f"uitest uiInput click {x} {y}")
-
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"点击失败: {result.output}")
-            return False
-
-        return True
+        return self._check_result(result, "点击")
 
     def double_tap(self, x: int, y: int) -> bool:
         """
@@ -446,7 +458,6 @@ class HarmonyHdcWrapper:
         if not result1:
             return False
 
-        import time
         time.sleep(0.1)  # 短暂延迟
 
         result2 = self.tap(x, y)
@@ -464,13 +475,13 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        result = self.shell(f"uitest uiInput click {x} {y} {duration}")
-
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"长按失败: {result.output}")
+        # 验证 duration 参数
+        if duration <= 0:
+            logger.error(f"长按时长必须大于 0: {duration}")
             return False
 
-        return True
+        result = self.shell(f"uitest uiInput click {x} {y} {duration}")
+        return self._check_result(result, "长按")
 
     def swipe(
         self, x1: int, y1: int, x2: int, y2: int, speed: int = 1000
@@ -494,12 +505,7 @@ class HarmonyHdcWrapper:
             return False
 
         result = self.shell(f"uitest uiInput swipe {x1} {y1} {x2} {y2} {speed}")
-
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"滑动失败: {result.output}")
-            return False
-
-        return True
+        return self._check_result(result, "滑动")
 
     def input_text_at(self, x: int, y: int, text: str) -> bool:
         """
@@ -520,12 +526,7 @@ class HarmonyHdcWrapper:
 
         # 使用 input text 命令输入文本
         result = self.shell(f"uitest uiInput inputText {x} {y} '{text}'")
-
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"输入文本失败: {result.output}")
-            return False
-
-        return True
+        return self._check_result(result, "输入文本")
 
     # ========================================================================
     # 按键操作
@@ -542,12 +543,7 @@ class HarmonyHdcWrapper:
             bool: True 表示成功，False 表示失败
         """
         result = self.shell(f"uitest uiInput keyEvent {key_code}")
-
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"发送按键失败: {result.output}")
-            return False
-
-        return True
+        return self._check_result(result, "发送按键")
 
     def press_key(self, key_name: str) -> bool:
         """
