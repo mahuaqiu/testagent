@@ -243,3 +243,127 @@ class HarmonyPlatformManager(PlatformManager):
         else:
             # 保持 wrapper 用于后续任务复用
             logger.debug(f"保持设备 wrapper 用于复用: {context.serial}")
+
+    # ========== 基础操作方法 ==========
+
+    def get_screenshot(self, context: Any) -> bytes:
+        """
+        获取截图。
+
+        Args:
+            context: 执行上下文（HarmonyHdcWrapper）
+
+        Returns:
+            bytes: 截图数据（JPEG 格式）
+        """
+        client: HarmonyHdcWrapper = context
+        with tempfile.NamedTemporaryFile(suffix=".jpeg", delete=False) as f:
+            temp_path = f.name
+        try:
+            client.screenshot(temp_path)
+            with open(temp_path, "rb") as f:
+                return f.read()
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def take_screenshot(self, context=None) -> bytes:
+        """
+        基类方法别名。
+
+        Args:
+            context: 执行上下文（可选）
+
+        Returns:
+            bytes: 截图数据
+        """
+        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        if not client:
+            raise HarmonyError("No device context")
+        return self.get_screenshot(client)
+
+    def click(self, x: int, y: int, duration: int = 0, context=None) -> None:
+        """
+        点击屏幕坐标。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 按压时长（毫秒，未使用）
+            context: 执行上下文（可选）
+        """
+        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        if not client:
+            raise HarmonyError("No device context")
+        client.tap(x, y)
+
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
+        """
+        滑动操作。
+
+        Args:
+            start_x: 起点 X 坐标
+            start_y: 起点 Y 坐标
+            end_x: 终点 X 坐标
+            end_y: 终点 Y 坐标
+            duration: 滑动时长（毫秒）
+            steps: 步数（未使用）
+            context: 执行上下文（可选）
+        """
+        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        if not client:
+            raise HarmonyError("No device context")
+        distance = abs(end_x - start_x) + abs(end_y - start_y)
+        speed = int(distance * 1000 / duration) if duration > 0 else 1000
+        speed = max(200, min(speed, 40000))
+        client.swipe(start_x, start_y, end_x, end_y, speed)
+
+    def move(self, x: int, y: int, context=None) -> None:
+        """
+        移动（鸿蒙无 hover 操作，忽略）。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            context: 执行上下文（可选）
+        """
+        pass
+
+    def input_text(self, text: str, context=None) -> None:
+        """
+        输入文本。
+
+        注意：需要先点击输入框获取焦点。
+
+        Args:
+            text: 要输入的文本
+            context: 执行上下文（可选）
+        """
+        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        if not client:
+            raise HarmonyError("No device context")
+        client.input_text(text)
+
+    def press(self, key: str, context=None) -> None:
+        """
+        按键操作。
+
+        Args:
+            key: 按键名称或数字键
+            context: 执行上下文（可选）
+
+        Raises:
+            ValueError: 不支持的按键
+        """
+        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        if not client:
+            raise HarmonyError("No device context")
+        key_upper = key.upper() if key else ""
+        key_code = self.KEY_MAP.get(key_upper)
+        if key_code:
+            client.send_key(key_code)
+        elif key and key.isdigit():
+            client.send_key(int(key))
+        else:
+            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
