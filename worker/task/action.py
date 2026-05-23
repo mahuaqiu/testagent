@@ -129,6 +129,11 @@ class Action:
     # 断言参数
     negate: bool = False                  # 断言不存在（ocr_assert/image_assert 专用）
 
+    # Web 代理参数（start_app 专用）
+    # 格式："http://user:pass@proxy.example.com:8080" 或 "http://proxy.example.com:8080"
+    # 默认 None 表示显式禁用代理（不走系统代理）
+    proxy: str | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -194,6 +199,7 @@ class Action:
             state=data.get("state"),
             name=data.get("name"),
             negate=data.get("negate", False),
+            proxy=data.get("proxy"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -276,5 +282,7 @@ class Action:
             result["name"] = self.name
         if self.negate:
             result["negate"] = self.negate
+        if self.proxy is not None:
+            result["proxy"] = self.proxy
 
         return result

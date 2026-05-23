@@ -482,6 +482,21 @@ components:
 
             示例：
             {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
+        proxy:
+          type: string
+          description: |
+            代理配置字符串，仅 Web 平台 start_app 动作可选：
+            - 格式："http://user:pass@proxy.example.com:8080"（带认证）
+            - 格式："http://proxy.example.com:8080"（无认证）
+            - 不传 proxy 参数：显式禁用代理，即使系统配置了代理也不会走系统代理
+            - Playwright 使用 direct:// 模式禁用代理
+
+            使用场景：
+            - 测试需要通过代理访问的内部网站
+            - 避免系统代理干扰测试环境
+
+            示例：
+            {"action_type": "start_app", "value": "chromium", "proxy": "http://admin:pwd123@proxy.internal.com:8080"}
         width:
           type: integer
           description: |
@@ -1018,6 +1033,12 @@ components:
   # {"action_type": "start_app", "value": "com.example.app"}
   # 示例 4 (iOS): 启动应用
   # {"action_type": "start_app", "value": "com.example.app"}
+  # 示例 5 (Web): 启动浏览器并通过代理访问（带认证）
+  # {"action_type": "start_app", "value": "chromium", "proxy": "http://user:pass@proxy.example.com:8080"}
+  # 示例 6 (Web): 启动浏览器并通过代理访问（无认证）
+  # {"action_type": "start_app", "value": "chromium", "proxy": "http://proxy.example.com:8080"}
+  # 示例 7 (Web): 启动浏览器，不传 proxy 参数则显式禁用代理（不走系统代理）
+  # {"action_type": "start_app", "value": "chromium"}
 
   # stop_app - 关闭应用/浏览器
   # 示例 1: 关闭当前应用/浏览器

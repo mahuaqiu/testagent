@@ -107,6 +107,9 @@ class WebPlatformManager(PlatformManager):
         self.clear_profile_on_start = config.clear_profile_on_start  # 启动前清理 Default 目录
         self.request_blacklist = config.request_blacklist  # 请求黑名单
 
+        # 代理配置（由 start_app 动作参数传入）
+        self._proxy_config: Optional[Dict[str, str]] = None  # Playwright proxy 格式
+
         # Token 捕获
         self._token_headers: List[str] = config.token_headers or []
         self._captured_tokens: Dict[str, str] = {}  # 存储捕获的 token
@@ -119,6 +122,58 @@ class WebPlatformManager(PlatformManager):
         """获取用户数据目录的绝对路径。"""
         app_dir = self._get_app_dir()
         return os.path.join(app_dir, self.user_data_dir)
+
+    def _parse_proxy_string(self, proxy_str: Optional[str]) -> Optional[Dict[str, str]]:
+        """解析代理字符串为 Playwright proxy 格式。
+
+        Args:
+            proxy_str: 代理字符串，格式：
+                - "http://user:pass@proxy.example.com:8080" (带认证)
+                - "http://proxy.example.com:8080" (无认证)
+                - None (禁用代理，返回 None，由 _async_start 设置 direct://)
+
+        Returns:
+            Playwright proxy dict: {"server": "...", "username": "...", "password": "..."}
+            或 None（由调用方处理禁用代理）
+        """
+        if not proxy_str:
+            return None
+
+        try:
+            # 使用 urllib 解析代理 URL
+            from urllib.parse import urlparse
+
+            parsed = urlparse(proxy_str)
+
+            # 构建 server 地址（不含用户名密码）
+            scheme = parsed.scheme or "http"
+            host = parsed.hostname
+            port = parsed.port
+
+            if not host:
+                logger.warning(f"Invalid proxy string: {proxy_str}, missing host")
+                return None
+
+            # 构建 server URL
+            if port:
+                server = f"{scheme}://{host}:{port}"
+            else:
+                server = f"{scheme}://{host}"
+
+            proxy_config = {"server": server}
+
+            # 提取用户名密码（如果有）
+            if parsed.username:
+                proxy_config["username"] = parsed.username
+            if parsed.password:
+                proxy_config["password"] = parsed.password
+
+            logger.debug(f"Parsed proxy: server={server}, username={parsed.username or 'none'}")
+            return proxy_config
+
+        except Exception as e:
+            logger.warning(f"Failed to parse proxy string: {proxy_str}, error: {e}")
+            return None
 
     def _clear_profile_data(self, user_data_dir: str) -> None:
         """清理表单相关数据（保留 HTTP 缓存和其他非敏感数据）。"""
@@ -258,6 +313,16 @@ class WebPlatformManager(PlatformManager):
                 "--disable-session-crashed-bubble",  # 禁用"上次不正常关闭"恢复弹窗
                 "--disable-infobars",  # 禁用信息栏（包括各种提示条）
             ]
+
+        # 代理配置：显式设置代理，禁用系统代理
+        # 如果传入代理参数，使用配置的代理；否则显式禁用代理
+        if self._proxy_config:
+            context_options["proxy"] = self._proxy_config
+            logger.info(f"Using proxy: {self._proxy_config.get('server')}")
+        else:
+            # 显式禁用代理，不走系统代理
+            context_options["proxy"] = {"server": "direct://"}
+            logger.info("Proxy disabled (direct://), bypassing system proxy")
 
         if self.ignore_https_errors:
             context_options["ignore_https_errors"] = True
@@ -926,11 +991,17 @@ class WebPlatformManager(PlatformManager):
         self._playwright = None
         self._sessions.clear()
         self._current_page = None
+        self._proxy_config = None  # 清除代理配置，下次启动时重新解析
         # 不清除 _captured_tokens，保持跨会话持久化
 
     def _action_start_app(self, action: Action) -> ActionResult:
         """启动/新建浏览器页面。"""
         browser_name = action.value or self.browser_type
+
+        # 解析代理参数
+        # 格式："http://user:pass@proxy.example.com:8080" 或 "http://proxy.example.com:8080"
+        # None 表示禁用代理（不走系统代理）
+        self._proxy_config = self._parse_proxy_string(action.proxy)
 
         # 尝试复用已有会话
         if self.has_active_session():

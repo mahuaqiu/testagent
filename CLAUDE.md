@@ -125,6 +125,7 @@ PlatformManager (抽象基类)
 |------|------|----------|
 | `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page、cmd_exec |
 | `value` | 命令字符串，`@tools/脚本名` 自动替换为完整脚本路径 | cmd_exec |
+| `proxy` | 代理配置字符串（Web 平台 start_app 专用），格式 `"http://user:pass@proxy.example.com:8080"`，默认禁用代理不走系统代理 | start_app |
 | `x`, `y` | 目标坐标（或拖拽起点） | click, right_click, move, swipe, drag, input |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_paste, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
