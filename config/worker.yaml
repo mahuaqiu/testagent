@@ -77,6 +77,13 @@ platforms:
     session_timeout: 300
     screenshot_dir: data/screenshots
 
+  harmony:
+    enabled: null                   # Only on Windows
+    hdc_path: tools/hdc/hdc.exe     # HDC tool path
+    screenshot_method: snapshot_display  # Screenshot method
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
 # Image Matching Settings
 image_matching:
   default_threshold: 0.8            # Default matching threshold
@@ -231,6 +238,31 @@ unlock:
       "8": {x: 270, y: 1050}
       "9": {x: 450, y: 1050}
       "0": {x: 270, y: 1150}
+
+  # HarmonyOS password keypad coordinates (physical resolution)
+  harmony_keypad:
+    "1080x2400":
+      "1": {x: 180, y: 850}
+      "2": {x: 540, y: 850}
+      "3": {x: 900, y: 850}
+      "4": {x: 180, y: 950}
+      "5": {x: 540, y: 950}
+      "6": {x: 900, y: 950}
+      "7": {x: 180, y: 1050}
+      "8": {x: 540, y: 1050}
+      "9": {x: 900, y: 1050}
+      "0": {x: 540, y: 1150}
+    default:
+      "1": {x: 180, y: 850}
+      "2": {x: 540, y: 850}
+      "3": {x: 900, y: 850}
+      "4": {x: 180, y: 950}
+      "5": {x: 540, y: 950}
+      "6": {x: 900, y: 950}
+      "7": {x: 180, y: 1050}
+      "8": {x: 540, y: 1050}
+      "9": {x: 900, y: 1050}
+      "0": {x: 540, y: 1150}
 
 # Recording Settings
 recording:
