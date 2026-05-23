@@ -367,3 +367,90 @@ class HarmonyPlatformManager(PlatformManager):
         else:
             supported = ", ".join(sorted(self.KEY_MAP.keys()))
             raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
+
+    # ========== 动作执行 ==========
+
+    def execute_action(self, context: Any, action: Action) -> ActionResult:
+        """
+        执行动作。
+
+        Args:
+            context: 执行上下文（HarmonyHdcWrapper）
+            action: 动作对象
+
+        Returns:
+            ActionResult: 动作执行结果
+        """
+        client: HarmonyHdcWrapper = context
+
+        # 平台特有动作
+        if action.action_type == "start_app":
+            return self._action_start_app(client, action)
+        elif action.action_type == "stop_app":
+            return self._action_stop_app(client, action)
+        elif action.action_type == "unlock_screen":
+            # 使用 ActionRegistry 执行
+            executor = ActionRegistry.get(action.action_type)
+            if executor:
+                return executor.execute(self, action, context)
+            else:
+                return ActionResult(action.number, action.action_type, ActionStatus.FAILED, error="unlock_screen executor not found")
+
+        # 通用动作（通过 ActionRegistry）
+        executor = ActionRegistry.get(action.action_type)
+        if executor:
+            return executor.execute(self, action, context)
+
+        return ActionResult(action.number, action.action_type, ActionStatus.FAILED, error=f"Unsupported action: {action.action_type}")
+
+    def _action_start_app(self, client: HarmonyHdcWrapper, action: Action) -> ActionResult:
+        """
+        启动应用。
+
+        Args:
+            client: HDC wrapper 实例
+            action: 动作对象
+
+        Returns:
+            ActionResult: 执行结果
+        """
+        package = action.value
+        if not package:
+            return ActionResult(action.number, "start_app", ActionStatus.FAILED, error="Missing package name")
+
+        try:
+            # 检查屏幕状态
+            if not client.is_screen_on():
+                client.wakeup()
+                time.sleep(0.5)
+
+            # 启动应用（默认 EntryAbility）
+            ability = "EntryAbility"
+            client.start_app(package, ability)
+
+            return ActionResult(action.number, "start_app", ActionStatus.SUCCESS, output=f"App started: {package}")
+        except Exception as e:
+            logger.error(f"start_app failed: {e}")
+            return ActionResult(action.number, "start_app", ActionStatus.FAILED, error=str(e))
+
+    def _action_stop_app(self, client: HarmonyHdcWrapper, action: Action) -> ActionResult:
+        """
+        停止应用。
+
+        Args:
+            client: HDC wrapper 实例
+            action: 动作对象
+
+        Returns:
+            ActionResult: 执行结果
+        """
+        package = action.value
+        if not package:
+            return ActionResult(action.number, "stop_app", ActionStatus.FAILED, error="Missing package name")
+
+        try:
+            client.stop_app(package)
+            return ActionResult(action.number, "stop_app", ActionStatus.SUCCESS, output=f"App stopped: {package}")
+        except Exception as e:
+            logger.error(f"stop_app failed: {e}")
+            return ActionResult(action.number, "stop_app", ActionStatus.FAILED, error=str(e))
