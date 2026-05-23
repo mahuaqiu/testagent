@@ -9,6 +9,7 @@ worker:
   namespace: meeting_public         # Namespace for categorizing Workers
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
+  discover_harmony_devices: false   # Enable HarmonyOS device discovery
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
   service_retry_interval: 10        # Retry interval (seconds)

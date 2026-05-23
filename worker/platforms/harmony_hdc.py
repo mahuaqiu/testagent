@@ -330,38 +330,39 @@ class HarmonyHdcWrapper:
         Args:
             local_path: 本地保存路径
             method: 截图方法
-                - "snapshot_display": 使用 snapshot_display -f 命令（默认）
-                - "uitest": 使用 uitest screenCap -p 命令
+                - "snapshot_display": 使用 snapshot_display -f 命令（默认，快速）
+                - "uitest": 使用 uitest screenCap -p 命令（高质量）
 
         Returns:
             bool: True 表示成功，False 表示失败
         """
         try:
+            # 生成设备临时路径
+            remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.jpeg"
+
             if method == "uitest":
-                # 使用 uitest 截图
+                # 使用 uitest 截图（PNG 格式）
                 remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.png"
                 result = self.shell(f"uitest screenCap -p {remote_path}")
 
                 if not self._check_result(result, "uitest 截图"):
                     return False
-
-                # 拉取到本地
-                pull_result = self.pull_file(remote_path, local_path)
-
-                # 清理远程文件
-                rm_result = self.shell(f"rm {remote_path}")
-                if rm_result.exit_code != 0:
-                    logger.warning(f"清理远程截图文件失败: {rm_result.output}")
-
-                return pull_result
             else:
-                # 使用 snapshot_display 截图
-                result = self.shell(f"snapshot_display -f {local_path}")
+                # 使用 snapshot_display 截图（JPEG 格式，速度更快）
+                result = self.shell(f"snapshot_display -f {remote_path}")
 
                 if not self._check_result(result, "snapshot_display 截图"):
                     return False
 
-                return os.path.exists(local_path)
+            # 拉取到本地
+            pull_result = self.pull_file(remote_path, local_path)
+
+            # 清理远程文件
+            rm_result = self.shell(f"rm -rf {remote_path}")
+            if rm_result.exit_code != 0:
+                logger.warning(f"清理远程截图文件失败: {rm_result.output}")
+
+            return pull_result
 
         except Exception as e:
             logger.error(f"截图失败: {e}")
@@ -527,6 +528,31 @@ class HarmonyHdcWrapper:
         # 使用 input text 命令输入文本
         result = self.shell(f"uitest uiInput inputText {x} {y} '{text}'")
         return self._check_result(result, "输入文本")
+
+    def input_text(self, text: str) -> bool:
+        """
+        输入文本（使用剪贴板粘贴方式）。
+
+        注意：调用此方法前应确保输入框已获取焦点。
+
+        Args:
+            text: 要输入的文本
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        # 使用 clipboard 命令设置剪贴板内容
+        # 然后模拟粘贴操作（Ctrl+V 或长按粘贴）
+        # 鸿蒙通过 aa paste 命令粘贴剪贴板内容
+        try:
+            # 设置剪贴板内容（通过 param 或直接 shell 命令）
+            # 鸿蒙暂时使用 uitest uiInput inputText 在坐标 (0, 0) 输入
+            # 这需要在输入框已聚焦的情况下使用
+            result = self.shell(f"uitest uiInput inputText 0 0 '{text}'")
+            return self._check_result(result, "输入文本")
+        except Exception as e:
+            logger.error(f"输入文本失败: {e}")
+            return False
 
     # ========================================================================
     # 按键操作
@@ -705,7 +731,7 @@ class HarmonyHdcWrapper:
         Returns:
             str: 系统版本
         """
-        result = self.shell("param get const.product.devicetype")
+        result = self.shell("param get const.product.software.version")
 
         if result.exit_code != 0:
             logger.warning(f"获取系统版本失败: {result.error}")

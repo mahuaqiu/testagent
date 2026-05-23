@@ -44,7 +44,7 @@ class HarmonyPlatformManager(PlatformManager):
         "POWER": 18,
         # 音量键
         "VOLUME_UP": 16,
-        "VOLUMEDOWN": 17,
+        "VOLUME_DOWN": 17,
         "VOLUME_MUTE": 22,
         # 功能键
         "ENTER": 2054,
@@ -66,8 +66,9 @@ class HarmonyPlatformManager(PlatformManager):
             unlock_config: 解锁配置（可选）
         """
         super().__init__(config, ocr_client)
-        self._device_wrappers: dict[str, HarmonyHdcWrapper] = {}
+        self._device_clients: dict[str, HarmonyHdcWrapper] = {}
         self._hdc_path: Optional[str] = None
+        self._current_device: Optional[str] = None
         self._unlock_config = unlock_config or {}  # 解锁配置
 
     @property
@@ -101,7 +102,8 @@ class HarmonyPlatformManager(PlatformManager):
 
         清理所有设备连接。
         """
-        self._device_wrappers.clear()
+        self._device_clients.clear()
+        self._current_device = None
         self._started = False
         logger.info("Harmony platform stopped")
 
@@ -127,20 +129,20 @@ class HarmonyPlatformManager(PlatformManager):
             tuple[str, str]: (status, message) - status 为 "online" 或 "faulty"
         """
         try:
-            # 尝试获取或创建设备 wrapper
-            wrapper = self._device_wrappers.get(udid)
+            # 尝试获取或创建设备客户端
+            client = self._device_clients.get(udid)
 
-            if wrapper:
+            if client:
                 # 检查现有连接是否有效
-                if wrapper.is_online():
+                if client.is_online():
                     return ("online", "OK")
                 else:
-                    # 连接失效，移除旧的 wrapper
-                    del self._device_wrappers[udid]
+                    # 连接失效，移除旧的客户端
+                    del self._device_clients[udid]
 
-            # 创建新的 wrapper
-            wrapper = HarmonyHdcWrapper(udid, self._hdc_path)
-            self._device_wrappers[udid] = wrapper
+            # 创建新的客户端
+            client = HarmonyHdcWrapper(udid, self._hdc_path)
+            self._device_clients[udid] = client
 
             logger.info(f"Harmony device service ready: {udid}")
             return ("online", "OK")
@@ -162,8 +164,10 @@ class HarmonyPlatformManager(PlatformManager):
         Args:
             udid: 设备 UDID（序列号）
         """
-        if udid in self._device_wrappers:
-            del self._device_wrappers[udid]
+        if udid in self._device_clients:
+            del self._device_clients[udid]
+        if self._current_device == udid:
+            self._current_device = None
         logger.info(f"Harmony device marked faulty: {udid}")
 
     def get_online_devices(self) -> list[str]:
@@ -185,6 +189,15 @@ class HarmonyPlatformManager(PlatformManager):
             logger.error(f"获取在线设备列表失败: {e}")
             return []
 
+    def get_current_device(self) -> Optional[str]:
+        """
+        获取当前设备 ID。
+
+        Returns:
+            Optional[str]: 当前设备 ID
+        """
+        return self._current_device
+
     # ========== 执行上下文管理 ==========
 
     def create_context(self, device_id: Optional[str] = None, options: Optional[dict] = None) -> Any:
@@ -205,21 +218,23 @@ class HarmonyPlatformManager(PlatformManager):
         if not device_id:
             raise ValueError("鸿蒙平台必须提供 device_id")
 
-        # 尝试获取已有的 wrapper
-        wrapper = self._device_wrappers.get(device_id)
+        # 尝试获取已有的客户端
+        client = self._device_clients.get(device_id)
 
-        if wrapper and wrapper.is_online():
-            logger.debug(f"使用已有的设备 wrapper: {device_id}")
-            return wrapper
+        if client and client.is_online():
+            logger.debug(f"使用已有的设备客户端: {device_id}")
+            self._current_device = device_id
+            return client
 
-        # 创建新的 wrapper
+        # 创建新的客户端
         try:
-            wrapper = HarmonyHdcWrapper(device_id, self._hdc_path)
-            self._device_wrappers[device_id] = wrapper
-            logger.info(f"创建新的设备 wrapper: {device_id}")
-            return wrapper
+            client = HarmonyHdcWrapper(device_id, self._hdc_path)
+            self._device_clients[device_id] = client
+            self._current_device = device_id
+            logger.info(f"创建新的设备客户端: {device_id}")
+            return client
         except HarmonyError as e:
-            logger.error(f"创建设备 wrapper 失败: {device_id}, {e}")
+            logger.error(f"创建设备客户端失败: {device_id}, {e}")
             raise
 
     def close_context(self, context: Any, close_session: bool = False) -> None:
@@ -228,21 +243,23 @@ class HarmonyPlatformManager(PlatformManager):
 
         Args:
             context: 执行上下文（HarmonyHdcWrapper）
-            close_session: 是否关闭整个会话（True=移除 wrapper，False=保持 wrapper）
+            close_session: 是否关闭整个会话（True=移除客户端，False=保持客户端）
         """
         if not isinstance(context, HarmonyHdcWrapper):
             logger.warning(f"无效的上下文类型: {type(context)}")
             return
 
         if close_session:
-            # 移除 wrapper
+            # 移除客户端
             serial = context.serial
-            if serial in self._device_wrappers:
-                del self._device_wrappers[serial]
+            if serial in self._device_clients:
+                del self._device_clients[serial]
+                if self._current_device == serial:
+                    self._current_device = None
                 logger.info(f"关闭设备会话: {serial}")
         else:
-            # 保持 wrapper 用于后续任务复用
-            logger.debug(f"保持设备 wrapper 用于复用: {context.serial}")
+            # 保持客户端用于后续任务复用
+            logger.debug(f"保持设备客户端用于复用: {context.serial}")
 
     # ========== 基础操作方法 ==========
 
@@ -277,7 +294,7 @@ class HarmonyPlatformManager(PlatformManager):
         Returns:
             bytes: 截图数据
         """
-        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         return self.get_screenshot(client)
@@ -292,7 +309,7 @@ class HarmonyPlatformManager(PlatformManager):
             duration: 按压时长（毫秒，未使用）
             context: 执行上下文（可选）
         """
-        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         client.tap(x, y)
@@ -310,7 +327,7 @@ class HarmonyPlatformManager(PlatformManager):
             steps: 步数（未使用）
             context: 执行上下文（可选）
         """
-        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         distance = abs(end_x - start_x) + abs(end_y - start_y)
@@ -339,7 +356,7 @@ class HarmonyPlatformManager(PlatformManager):
             text: 要输入的文本
             context: 执行上下文（可选）
         """
-        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         client.input_text(text)
@@ -355,7 +372,7 @@ class HarmonyPlatformManager(PlatformManager):
         Raises:
             ValueError: 不支持的按键
         """
-        client = context or self._device_wrappers.get(list(self._device_wrappers.keys())[0] if self._device_wrappers else None)
+        client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         key_upper = key.upper() if key else ""
