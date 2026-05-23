@@ -193,6 +193,11 @@ Function KillProcessesAndCleanup
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
     RMDir /r "$INSTDIR\playwright"
   NoPlaywright:
+
+  ; 5. Delete data directory (clear cache on upgrade install)
+  IfFileExists "$INSTDIR\data\*.*" 0 NoData
+    RMDir /r "$INSTDIR\data"
+  NoData:
 FunctionEnd
 
 ; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)
