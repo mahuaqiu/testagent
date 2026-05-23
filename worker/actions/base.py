@@ -301,3 +301,22 @@ class BaseActionExecutor(ActionExecutor):
             )
 
         return position
+
+    def _smart_wait_before_loop(self, timeout_ms: int) -> int:
+        """
+        智能等待策略：计算循环等待前的固定等待时间（向下取整）。
+
+        如果 timeout >= 5 秒，先固定等待 timeout/2 时间（取整），然后再开始循环识别。
+        这样可以减少不必要的 OCR/图像识别调用。
+
+        Args:
+            timeout_ms: 超时时间（毫秒）
+
+        Returns:
+            固定等待时间（秒，整数）
+        """
+        timeout_sec = timeout_ms / 1000
+        if timeout_sec >= 5:
+            # 向下取整：5秒→2秒，8秒→4秒，10秒→5秒
+            return int(timeout_sec // 2)
+        return 0

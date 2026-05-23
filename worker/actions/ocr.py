@@ -173,8 +173,15 @@ class OcrWaitAction(BaseActionExecutor):
         if action.time:
             time.sleep(action.time)
 
-        start_time = time.time()
         timeout = action.timeout / 1000
+
+        # 智能等待：如果 timeout >= 5 秒，先固定等待 timeout/2 时间
+        pre_wait = self._smart_wait_before_loop(action.timeout)
+        if pre_wait > 0:
+            logger.debug(f"Smart wait: sleeping {pre_wait}s before loop (timeout={timeout}s)")
+            time.sleep(pre_wait)
+
+        start_time = time.time()
 
         while time.time() - start_time < timeout:
             screenshot = platform.take_screenshot(context)
@@ -196,7 +203,7 @@ class OcrWaitAction(BaseActionExecutor):
                     ocr_info=self._get_last_ocr_info(platform),
                 )
 
-            time.sleep(0.5)
+            time.sleep(1)  # 每次间隔 1 秒
 
         return ActionResult(
             number=0,
