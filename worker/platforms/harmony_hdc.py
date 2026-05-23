@@ -978,30 +978,41 @@ class HarmonyHdcWrapper:
         output = result.output
         lines = output.split("\n")
 
-        current_package = None
-        current_ability = None
-        in_foreground_mission = False
+        # 先收集所有 mission 块的信息，再查找 FOREGROUND 状态
+        missions = []
+        current_mission = {}
 
         for line in lines:
             line = line.strip()
 
-            # 检测状态行
-            if "State:" in line or "state:" in line:
-                if "FOREGROUND" in line.upper():
-                    in_foreground_mission = True
-                else:
-                    in_foreground_mission = False
+            # 检测新的 mission 开始
+            if "Mission ID" in line or "mission ID" in line:
+                # 保存之前的 mission（如果有）
+                if current_mission:
+                    missions.append(current_mission)
+                # 开始新的 mission 块
+                current_mission = {}
 
-            # 在 FOREGROUND mission 中提取包名和 Ability
-            if in_foreground_mission:
-                if "BundleName:" in line or "bundleName:" in line:
-                    current_package = line.split(":")[-1].strip()
-                elif "AbilityName:" in line or "abilityName:" in line:
-                    current_ability = line.split(":")[-1].strip()
+            # 收集字段信息
+            if "BundleName:" in line or "bundleName:" in line:
+                current_mission["bundle"] = line.split(":")[-1].strip()
+            elif "AbilityName:" in line or "abilityName:" in line:
+                current_mission["ability"] = line.split(":")[-1].strip()
+            elif "State:" in line or "state:" in line:
+                current_mission["state"] = line.split(":")[-1].strip()
 
-        if current_package and current_ability:
-            logger.info(f"当前前台应用: {current_package}/{current_ability}")
-            return (current_package, current_ability)
+        # 保存最后一个 mission
+        if current_mission:
+            missions.append(current_mission)
+
+        # 查找 FOREGROUND 状态的 mission
+        for mission in missions:
+            if mission.get("state") == "FOREGROUND":
+                current_package = mission.get("bundle")
+                current_ability = mission.get("ability")
+                if current_package and current_ability:
+                    logger.info(f"当前前台应用: {current_package}/{current_ability}")
+                    return (current_package, current_ability)
 
         logger.warning("未找到前台应用")
         return (None, None)
