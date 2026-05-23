@@ -207,6 +207,12 @@ class SettingsWindow(QDialog):
         self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
         grid.addWidget(self.discover_ios_checkbox, row, 1)
 
+        # 新增一行显示 Harmony checkbox
+        row += 1
+        self.discover_harmony_checkbox = QCheckBox("Harmony")
+        self.discover_harmony_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        grid.addWidget(self.discover_harmony_checkbox, row, 0)
+
         layout.addLayout(grid)
 
         # 弹性空间
@@ -348,6 +354,9 @@ class SettingsWindow(QDialog):
         discover_ios = worker.get("discover_ios_devices", False)
         self.discover_ios_checkbox.setChecked(discover_ios)
 
+        discover_harmony = worker.get("discover_harmony_devices", False)
+        self.discover_harmony_checkbox.setChecked(discover_harmony)
+
     def _validate(self) -> bool:
         """验证输入。"""
         port_text = self.port_input.text().strip()
@@ -433,6 +442,7 @@ class SettingsWindow(QDialog):
             original_content = self._update_yaml_value(original_content, "level", self.log_level_combo.currentText())
             original_content = self._update_yaml_value(original_content, "discover_android_devices", "true" if self.discover_android_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_ios_devices", "true" if self.discover_ios_checkbox.isChecked() else "false")
+            original_content = self._update_yaml_value(original_content, "discover_harmony_devices", "true" if self.discover_harmony_checkbox.isChecked() else "false")
 
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
@@ -451,6 +461,7 @@ class SettingsWindow(QDialog):
             self._config["worker"]["namespace"] = self.namespace_input.text().strip()
             self._config["worker"]["discover_android_devices"] = self.discover_android_checkbox.isChecked()
             self._config["worker"]["discover_ios_devices"] = self.discover_ios_checkbox.isChecked()
+            self._config["worker"]["discover_harmony_devices"] = self.discover_harmony_checkbox.isChecked()
 
             self._config.setdefault("external_services", {})
             self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()

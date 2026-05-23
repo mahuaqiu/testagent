@@ -24,6 +24,7 @@ from worker.discovery.host import HostDiscoverer, HostInfo
 from worker.discovery.ios import iOSDeviceInfo, iOSDiscoverer
 from worker.platforms.android import AndroidPlatformManager
 from worker.platforms.base import PlatformManager
+from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.mac import MacPlatformManager
 from worker.platforms.web import WebPlatformManager
@@ -162,6 +163,7 @@ class Worker:
         self.platform_managers: dict[str, PlatformManager] = {}
         self.android_manager: AndroidPlatformManager | None = None
         self.ios_manager: iOSPlatformManager | None = None
+        self.harmony_manager: HarmonyPlatformManager | None = None
 
         # 任务调度器
         self.scheduler = TaskScheduler()
@@ -207,11 +209,13 @@ class Worker:
         self._init_platform_managers()
 
         # 4. 启动移动端平台管理器（必须在设备发现之前，否则 GoIOSClient 未初始化）
-        for platform in ("android", "ios"):
+        for platform in ("android", "ios", "harmony"):
             # 根据开关跳过
             if platform == "android" and not self.config.discover_android_devices:
                 continue
             if platform == "ios" and not self.config.discover_ios_devices:
+                continue
+            if platform == "harmony" and not self.config.discover_harmony_devices:
                 continue
 
             manager = self.platform_managers.get(platform)
@@ -324,12 +328,15 @@ class Worker:
         unlock_config = self.config.unlock  # 获取解锁配置
 
         for platform in self.supported_platforms:
-            # Android/iOS 平台根据开关跳过初始化
+            # Android/iOS/Harmony 平台根据开关跳过初始化
             if platform == "android" and not self.config.discover_android_devices:
                 logger.info("Android platform skipped: discover_android_devices=false")
                 continue
             if platform == "ios" and not self.config.discover_ios_devices:
                 logger.info("iOS platform skipped: discover_ios_devices=false")
+                continue
+            if platform == "harmony" and not self.config.discover_harmony_devices:
+                logger.info("Harmony platform skipped: discover_harmony_devices=false")
                 continue
 
             platform_config = PlatformConfig.from_dict(
@@ -345,6 +352,9 @@ class Worker:
                 elif platform == "ios":
                     manager = iOSPlatformManager(platform_config, self.ocr_client, unlock_config)
                     self.ios_manager = manager
+                elif platform == "harmony":
+                    manager = HarmonyPlatformManager(platform_config, self.ocr_client, unlock_config)
+                    self.harmony_manager = manager
                 elif platform == "windows":
                     manager = WindowsPlatformManager(platform_config, self.ocr_client)
                 elif platform == "mac":
@@ -364,12 +374,13 @@ class Worker:
         self.device_monitor = DeviceMonitor(self.config)
         self.device_monitor.set_platform_managers(
             android_manager=self.android_manager,
-            ios_manager=self.ios_manager
+            ios_manager=self.ios_manager,
+            harmony_manager=self.harmony_manager
         )
         self.device_monitor.on_device_change = self._on_device_change
 
         # 设置帧捕获失败回调（仅移动端）
-        if self.config.discover_android_devices or self.config.discover_ios_devices:
+        if self.config.discover_android_devices or self.config.discover_ios_devices or self.config.discover_harmony_devices:
             from worker.screen.manager import set_capture_failed_callback
             set_capture_failed_callback(self._on_capture_failed)
 
@@ -608,10 +619,12 @@ class Worker:
                 "mac": [],
                 "android": devices.get("android", []),
                 "ios": devices.get("ios", []),
+                "harmony": devices.get("harmony", []),
             },
             "faulty_devices": {
                 "android": devices.get("faulty_android", []),
                 "ios": devices.get("faulty_ios", []),
+                "harmony": devices.get("faulty_harmony", []),
             },
             "namespace": self.reporter.namespace if self.reporter else "",
             "config_version": self.config.config_version,

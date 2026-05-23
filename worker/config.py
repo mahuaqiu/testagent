@@ -53,6 +53,7 @@ class WorkerConfig:
     action_step_delay: float = 0.5  # 动作间隔延迟(秒)
     discover_android_devices: bool = False  # 是否发现 Android 设备
     discover_ios_devices: bool = False      # 是否发现 iOS 设备
+    discover_harmony_devices: bool = False  # 是否发现鸿蒙设备
 
     # 外部服务地址
     platform_api: str = "http://192.168.0.102:8000"
@@ -135,6 +136,7 @@ class WorkerConfig:
             action_step_delay=worker_data.get("action_step_delay", 0.5),
             discover_android_devices=worker_data.get("discover_android_devices", False),
             discover_ios_devices=worker_data.get("discover_ios_devices", False),
+            discover_harmony_devices=worker_data.get("discover_harmony_devices", False),
             platform_api=external.get("platform_api", "http://192.168.0.102:8000"),
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
