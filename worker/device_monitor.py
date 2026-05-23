@@ -29,6 +29,7 @@ class DeviceMonitor:
         self.config = config
         self.discover_android = config.discover_android_devices
         self.discover_ios = config.discover_ios_devices
+        self.discover_harmony = config.discover_harmony_devices
         self.check_interval = config.device_check_interval
         self.retry_count = config.service_retry_count
         self.retry_interval = config.service_retry_interval
@@ -36,12 +37,15 @@ class DeviceMonitor:
         # 设备列表
         self._android_devices: list[dict[str, Any]] = []
         self._ios_devices: list[dict[str, Any]] = []
+        self._harmony_devices: list[dict[str, Any]] = []
         self._faulty_android_devices: list[dict[str, Any]] = []
         self._faulty_ios_devices: list[dict[str, Any]] = []
+        self._faulty_harmony_devices: list[dict[str, Any]] = []
 
         # 平台管理器引用
         self._android_manager: Any | None = None
         self._ios_manager: Any | None = None
+        self._harmony_manager: Any | None = None
 
         # 线程控制
         self._monitor_thread: threading.Thread | None = None
@@ -50,12 +54,14 @@ class DeviceMonitor:
         # 回调
         self.on_device_change: Callable[[dict], None] | None = None
 
-    def set_platform_managers(self, android_manager=None, ios_manager=None) -> None:
+    def set_platform_managers(self, android_manager=None, ios_manager=None, harmony_manager=None) -> None:
         """设置平台管理器引用。"""
         if self.discover_android:
             self._android_manager = android_manager
         if self.discover_ios:
             self._ios_manager = ios_manager
+        if self.discover_harmony:
+            self._harmony_manager = harmony_manager
 
     def start(self) -> None:
         """启动监控。"""
@@ -143,6 +149,26 @@ class DeviceMonitor:
             except Exception as e:
                 logger.error(f"iOS device detection failed: {e}")
 
+        # 鸿蒙设备检测
+        if self._harmony_manager and self.discover_harmony:
+            try:
+                from worker.discovery.harmony import HarmonyDiscoverer
+                devices = HarmonyDiscoverer.discover()
+
+                existing_udids = {d["udid"] for d in self._harmony_devices}
+                existing_udids.update({d["udid"] for d in self._faulty_harmony_devices})
+
+                for device in devices:
+                    if device.udid not in existing_udids:
+                        logger.info(f"New Harmony device detected: {device.udid}")
+                        self._add_device("harmony", {
+                            "udid": device.udid,
+                            "name": device.name,
+                            "model": device.model,
+                        })
+            except Exception as e:
+                logger.error(f"Harmony device detection failed: {e}")
+
     def _add_device(self, platform: str, device_info: dict[str, Any]) -> None:
         """添加新设备到异常列表。
 
@@ -152,9 +178,12 @@ class DeviceMonitor:
         if platform == "android":
             self._faulty_android_devices.append(device_info)
             logger.info(f"New Android device added to faulty list: {device_info['udid']}")
-        else:
+        elif platform == "ios":
             self._faulty_ios_devices.append(device_info)
             logger.info(f"New iOS device added to faulty list: {device_info['udid']}")
+        else:
+            self._faulty_harmony_devices.append(device_info)
+            logger.info(f"New Harmony device added to faulty list: {device_info['udid']}")
 
     def _try_start_service(self, platform: str, udid: str) -> None:
         """尝试启动设备服务。
@@ -164,7 +193,13 @@ class DeviceMonitor:
         2. 未连接则直接清理端口并从 faulty 列表移除（不进入重连流程）
         3. 已连接则正常尝试启动服务
         """
-        manager = self._android_manager if platform == "android" else self._ios_manager
+        if platform == "android":
+            manager = self._android_manager
+        elif platform == "ios":
+            manager = self._ios_manager
+        else:
+            manager = self._harmony_manager
+
         if not manager:
             return
 
@@ -175,9 +210,13 @@ class DeviceMonitor:
                 from worker.discovery.android import AndroidDiscoverer
                 devices = AndroidDiscoverer.discover()
                 physical_udids = {d.udid for d in devices}
-            else:
+            elif platform == "ios":
                 from worker.discovery.ios import iOSDiscoverer
                 physical_udids = set(iOSDiscoverer.list_devices())
+            else:
+                from worker.discovery.harmony import HarmonyDiscoverer
+                devices = HarmonyDiscoverer.discover()
+                physical_udids = {d.udid for d in devices}
         except Exception as e:
             logger.warning(f"Physical detection failed for {platform}: {e}")
 
@@ -206,7 +245,7 @@ class DeviceMonitor:
                 self._faulty_android_devices = [
                     d for d in self._faulty_android_devices if d["udid"] != udid
                 ]
-            else:
+            elif platform == "ios":
                 # iOS: 清理端口转发进程和更新持久化文件
                 if hasattr(manager, 'cleanup_disconnected_device'):
                     manager.cleanup_disconnected_device(udid)
@@ -214,6 +253,16 @@ class DeviceMonitor:
                 # 从 faulty 列表移除
                 self._faulty_ios_devices = [
                     d for d in self._faulty_ios_devices if d["udid"] != udid
+                ]
+            else:
+                # harmony
+                # 清理设备客户端缓存
+                if hasattr(manager, 'mark_device_faulty'):
+                    manager.mark_device_faulty(udid)
+
+                # 从 faulty 列表移除
+                self._faulty_harmony_devices = [
+                    d for d in self._faulty_harmony_devices if d["udid"] != udid
                 ]
 
             logger.info(f"Device {udid} removed from faulty list (not physically connected)")
@@ -231,13 +280,20 @@ class DeviceMonitor:
                     # 添加到正常列表（避免重复）
                     if udid not in [d["udid"] for d in self._android_devices]:
                         self._android_devices.append({"udid": udid})
-                else:
+                elif platform == "ios":
                     self._faulty_ios_devices = [
                         d for d in self._faulty_ios_devices if d["udid"] != udid
                     ]
                     # 添加到正常列表（避免重复）
                     if udid not in [d["udid"] for d in self._ios_devices]:
                         self._ios_devices.append({"udid": udid})
+                else:
+                    self._faulty_harmony_devices = [
+                        d for d in self._faulty_harmony_devices if d["udid"] != udid
+                    ]
+                    # 添加到正常列表（避免重复）
+                    if udid not in [d["udid"] for d in self._harmony_devices]:
+                        self._harmony_devices.append({"udid": udid})
 
                 logger.info(f"Device service started: {udid}")
                 return
@@ -260,6 +316,10 @@ class DeviceMonitor:
         if self.discover_ios:
             for device in self._faulty_ios_devices[:]:
                 self._try_start_service("ios", device["udid"])
+
+        if self.discover_harmony:
+            for device in self._faulty_harmony_devices[:]:
+                self._try_start_service("harmony", device["udid"])
 
         self._check_online_devices()
 
@@ -345,16 +405,20 @@ class DeviceMonitor:
         return {
             "android": self._android_devices,
             "ios": self._ios_devices,
+            "harmony": self._harmony_devices,
             "faulty_android": self._faulty_android_devices,
             "faulty_ios": self._faulty_ios_devices,
+            "faulty_harmony": self._faulty_harmony_devices,
         }
 
     def get_online_devices(self, platform: str) -> list[str]:
         """获取在线设备 UDID 列表。"""
         if platform == "android":
             return [d["udid"] for d in self._android_devices]
-        else:
+        elif platform == "ios":
             return [d["udid"] for d in self._ios_devices]
+        else:
+            return [d["udid"] for d in self._harmony_devices]
 
     def is_device_online(self, platform: str, udid: str) -> bool:
         """检查设备是否在线。"""
@@ -371,7 +435,7 @@ class DeviceMonitor:
             if udid not in [d["udid"] for d in self._android_devices]:
                 self._android_devices.append({"udid": udid})
                 logger.info(f"Device marked online: {udid}")
-        else:
+        elif platform == "ios":
             # 从 faulty 列表移除
             self._faulty_ios_devices = [
                 d for d in self._faulty_ios_devices if d["udid"] != udid
@@ -380,18 +444,28 @@ class DeviceMonitor:
             if udid not in [d["udid"] for d in self._ios_devices]:
                 self._ios_devices.append({"udid": udid})
                 logger.info(f"Device marked online: {udid}")
+        else:
+            # harmony
+            # 从 faulty 列表移除
+            self._faulty_harmony_devices = [
+                d for d in self._faulty_harmony_devices if d["udid"] != udid
+            ]
+            # 添加到正常列表（避免重复）
+            if udid not in [d["udid"] for d in self._harmony_devices]:
+                self._harmony_devices.append({"udid": udid})
+                logger.info(f"Device marked online: {udid}")
     def mark_device_offline(self, platform: str, udid: str) -> None:
         """将设备标记为离线（供外部调用，如帧捕获失败时）。
 
         Args:
-            platform: 平台类型 ("android" 或 "ios")
+            platform: 平台类型 ("android" 或 "ios" 或 "harmony")
             udid: 设备 UDID
         """
-        if platform == "android":
-            # 关闭 ScreenManager
-            from worker.screen.manager import close_screen_manager
-            close_screen_manager(udid)
+        # 关闭 ScreenManager
+        from worker.screen.manager import close_screen_manager
+        close_screen_manager(udid)
 
+        if platform == "android":
             # 从正常列表移除
             self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
 
@@ -399,15 +473,20 @@ class DeviceMonitor:
             if udid not in [d["udid"] for d in self._faulty_android_devices]:
                 self._faulty_android_devices.append({"udid": udid})
                 logger.warning(f"Device marked offline: {udid}")
-        else:
-            # 关闭 ScreenManager
-            from worker.screen.manager import close_screen_manager
-            close_screen_manager(udid)
-
+        elif platform == "ios":
             # 从正常列表移除
             self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
 
             # 添加到 faulty 列表（避免重复）
             if udid not in [d["udid"] for d in self._faulty_ios_devices]:
                 self._faulty_ios_devices.append({"udid": udid})
+                logger.warning(f"Device marked offline: {udid}")
+        else:
+            # harmony
+            # 从正常列表移除
+            self._harmony_devices = [d for d in self._harmony_devices if d["udid"] != udid]
+
+            # 添加到 faulty 列表（避免重复）
+            if udid not in [d["udid"] for d in self._faulty_harmony_devices]:
+                self._faulty_harmony_devices.append({"udid": udid})
                 logger.warning(f"Device marked offline: {udid}")
