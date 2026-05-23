@@ -730,3 +730,278 @@ class HarmonyHdcWrapper:
             "screen_on": self.is_screen_on(),
             "screen_state": self.screen_state(),
         }
+
+    # ========================================================================
+    # 应用管理
+    # ========================================================================
+
+    def install(self, hap_path: str) -> bool:
+        """
+        安装 HAP 应用。
+
+        Args:
+            hap_path: HAP 文件路径
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+
+        Raises:
+            FileNotFoundError: HAP 文件不存在
+        """
+        if not os.path.exists(hap_path):
+            raise FileNotFoundError(f"HAP 文件不存在: {hap_path}")
+
+        logger.info(f"安装应用: {hap_path}")
+
+        # 使用 hdc install 命令
+        result = self._execute(["install", hap_path], timeout=120)
+
+        if not self._check_result(result, "安装应用"):
+            return False
+
+        # 检查输出中是否包含成功标识
+        if "success" in result.output.lower() or result.exit_code == 0:
+            logger.info(f"应用安装成功: {hap_path}")
+            return True
+
+        return False
+
+    def uninstall(self, package: str) -> bool:
+        """
+        卸载应用。
+
+        Args:
+            package: 应用包名
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        logger.info(f"卸载应用: {package}")
+
+        # 使用 hdc uninstall 命令
+        result = self._execute(["uninstall", package], timeout=60)
+
+        if not self._check_result(result, "卸载应用"):
+            return False
+
+        # 检查输出中是否包含成功标识
+        if "success" in result.output.lower() or result.exit_code == 0:
+            logger.info(f"应用卸载成功: {package}")
+            return True
+
+        return False
+
+    def start_app(self, package: str, ability: str) -> bool:
+        """
+        启动应用。
+
+        Args:
+            package: 应用包名
+            ability: Ability 名称
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        logger.info(f"启动应用: {package}/{ability}")
+
+        # 使用 aa start -a ability -b package 命令
+        result = self.shell(f"aa start -a {ability} -b {package}")
+
+        if not self._check_result(result, "启动应用"):
+            return False
+
+        # 检查输出中是否包含成功标识
+        # 成功的输出通常包含 "start ability successfully" 或类似标识
+        if (
+            "success" in result.output.lower()
+            or "successfully" in result.output.lower()
+            or result.exit_code == 0
+        ):
+            logger.info(f"应用启动成功: {package}/{ability}")
+            return True
+
+        return False
+
+    def stop_app(self, package: str) -> bool:
+        """
+        强制停止应用。
+
+        Args:
+            package: 应用包名
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        logger.info(f"强制停止应用: {package}")
+
+        # 使用 aa force-stop 命令
+        result = self.shell(f"aa force-stop {package}")
+
+        if not self._check_result(result, "强制停止应用"):
+            return False
+
+        logger.info(f"应用已停止: {package}")
+        return True
+
+    def clear_app(self, package: str) -> bool:
+        """
+        清除应用数据。
+
+        Args:
+            package: 应用包名
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        logger.info(f"清除应用数据: {package}")
+
+        # 使用 bm clean 命令
+        result = self.shell(f"bm clean -n {package}")
+
+        if not self._check_result(result, "清除应用数据"):
+            return False
+
+        logger.info(f"应用数据已清除: {package}")
+        return True
+
+    def list_apps(self, include_system: bool = False) -> List[str]:
+        """
+        获取已安装应用列表。
+
+        Args:
+            include_system: 是否包含系统应用，默认 False
+
+        Returns:
+            List[str]: 应用包名列表
+        """
+        logger.debug("获取已安装应用列表")
+
+        # 使用 bm dump -a 列出所有应用
+        result = self.shell("bm dump -a", timeout=30)
+
+        if result.exit_code != 0:
+            logger.error(f"获取应用列表失败: {result.error}")
+            return []
+
+        # 解析输出，提取包名
+        packages = []
+        output = result.output
+
+        # 包名格式示例：
+        # "com.example.app"
+        # 或者更复杂的输出格式
+        for line in output.split("\n"):
+            line = line.strip()
+            # 匹配包名格式（通常为 com.xxx.xxx 格式）
+            if re.match(r"^[a-zA-Z][\w\.]*$", line):
+                # 如果不包含系统应用，需要过滤
+                # 系统应用通常在特定路径下，这里简化处理
+                if include_system or not self._is_system_package(line, output):
+                    packages.append(line)
+
+        logger.info(f"找到 {len(packages)} 个应用")
+        return packages
+
+    def _is_system_package(self, package: str, dump_output: str) -> bool:
+        """
+        检查是否为系统应用（内部辅助方法）。
+
+        Args:
+            package: 包名
+            dump_output: bm dump 命令的完整输出
+
+        Returns:
+            bool: True 表示系统应用，False 表示第三方应用
+        """
+        # 简化的系统应用判断逻辑
+        # 通常系统应用的包名包含特定前缀
+        system_prefixes = [
+            "com.huawei.",
+            "com.android.",
+            "com.ohos.",
+            "ohos.",
+            "system_",
+        ]
+
+        for prefix in system_prefixes:
+            if package.startswith(prefix):
+                return True
+
+        return False
+
+    def has_app(self, package: str) -> bool:
+        """
+        检查应用是否安装。
+
+        Args:
+            package: 应用包名
+
+        Returns:
+            bool: True 表示已安装，False 表示未安装
+        """
+        logger.debug(f"检查应用是否安装: {package}")
+
+        # 使用 bm dump -n 查询指定包名
+        result = self.shell(f"bm dump -n {package}")
+
+        # 如果命令成功执行且输出不为空，则应用已安装
+        if result.exit_code == 0 and result.output.strip():
+            return True
+
+        return False
+
+    def current_app(self) -> Tuple[Optional[str], Optional[str]]:
+        """
+        获取当前前台应用。
+
+        通过解析 aa dump -l 输出，查找 FOREGROUND 状态的 mission。
+
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (包名, Ability名称)
+                如果未找到前台应用，返回 (None, None)
+        """
+        logger.debug("获取当前前台应用")
+
+        # 使用 aa dump -l 查看任务列表
+        result = self.shell("aa dump -l", timeout=10)
+
+        if result.exit_code != 0:
+            logger.warning(f"获取前台应用失败: {result.error}")
+            return (None, None)
+
+        # 解析输出，查找 FOREGROUND 状态的 mission
+        # 输出格式示例：
+        # Mission ID: #1
+        #   BundleName: com.example.app
+        #   AbilityName: MainAbility
+        #   State: FOREGROUND
+        output = result.output
+        lines = output.split("\n")
+
+        current_package = None
+        current_ability = None
+        in_foreground_mission = False
+
+        for line in lines:
+            line = line.strip()
+
+            # 检测状态行
+            if "State:" in line or "state:" in line:
+                if "FOREGROUND" in line.upper():
+                    in_foreground_mission = True
+                else:
+                    in_foreground_mission = False
+
+            # 在 FOREGROUND mission 中提取包名和 Ability
+            if in_foreground_mission:
+                if "BundleName:" in line or "bundleName:" in line:
+                    current_package = line.split(":")[-1].strip()
+                elif "AbilityName:" in line or "abilityName:" in line:
+                    current_ability = line.split(":")[-1].strip()
+
+        if current_package and current_ability:
+            logger.info(f"当前前台应用: {current_package}/{current_ability}")
+            return (current_package, current_ability)
+
+        logger.warning("未找到前台应用")
+        return (None, None)
