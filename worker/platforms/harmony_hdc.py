@@ -301,3 +301,436 @@ class HarmonyHdcWrapper:
             logger.warning(f"Shell 命令执行失败: {cmd}\n{result.output}\n{result.error}")
 
         return result
+
+    # ========================================================================
+    # 截图和文件操作
+    # ========================================================================
+
+    def screenshot(self, local_path: str, method: str = "snapshot_display") -> bool:
+        """
+        截取屏幕并保存到本地。
+
+        Args:
+            local_path: 本地保存路径
+            method: 截图方法
+                - "snapshot_display": 使用 snapshot_display -f 命令（默认）
+                - "uitest": 使用 uitest screenCap -p 命令
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        try:
+            if method == "uitest":
+                # 使用 uitest 截图
+                remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.png"
+                result = self.shell(f"uitest screenCap -p {remote_path}")
+
+                if result.exit_code != 0 or "fail" in result.output.lower():
+                    logger.error(f"uitest 截图失败: {result.output}")
+                    return False
+
+                # 拉取到本地
+                pull_result = self.pull_file(remote_path, local_path)
+
+                # 清理远程文件
+                self.shell(f"rm {remote_path}")
+
+                return pull_result
+            else:
+                # 使用 snapshot_display 截图
+                result = self.shell(f"snapshot_display -f {local_path}")
+
+                if result.exit_code != 0 or "fail" in result.output.lower():
+                    logger.error(f"snapshot_display 截图失败: {result.output}")
+                    return False
+
+                return os.path.exists(local_path)
+
+        except Exception as e:
+            logger.error(f"截图失败: {e}")
+            return False
+
+    def pull_file(self, remote_path: str, local_path: str) -> bool:
+        """
+        从设备拉取文件到本地。
+
+        Args:
+            remote_path: 设备上的文件路径
+            local_path: 本地保存路径
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        try:
+            # 确保本地目录存在
+            local_dir = os.path.dirname(local_path)
+            if local_dir and not os.path.exists(local_dir):
+                os.makedirs(local_dir, exist_ok=True)
+
+            result = self._execute(["file", "recv", remote_path, local_path])
+
+            if result.exit_code != 0:
+                logger.error(f"拉取文件失败: {result.error}")
+                return False
+
+            return os.path.exists(local_path)
+
+        except Exception as e:
+            logger.error(f"拉取文件失败: {e}")
+            return False
+
+    def push_file(self, local_path: str, remote_path: str) -> bool:
+        """
+        推送本地文件到设备。
+
+        Args:
+            local_path: 本地文件路径
+            remote_path: 设备上的目标路径
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        try:
+            if not os.path.exists(local_path):
+                logger.error(f"本地文件不存在: {local_path}")
+                return False
+
+            result = self._execute(["file", "send", local_path, remote_path])
+
+            if result.exit_code != 0:
+                logger.error(f"推送文件失败: {result.error}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"推送文件失败: {e}")
+            return False
+
+    # ========================================================================
+    # 点击和滑动
+    # ========================================================================
+
+    def tap(self, x: int, y: int) -> bool:
+        """
+        点击屏幕指定位置。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uitest uiInput click {x} {y}")
+
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"点击失败: {result.output}")
+            return False
+
+        return True
+
+    def double_tap(self, x: int, y: int) -> bool:
+        """
+        双击屏幕指定位置。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        # 执行两次快速点击
+        result1 = self.tap(x, y)
+        if not result1:
+            return False
+
+        import time
+        time.sleep(0.1)  # 短暂延迟
+
+        result2 = self.tap(x, y)
+        return result2
+
+    def long_tap(self, x: int, y: int, duration: int = 1000) -> bool:
+        """
+        长按屏幕指定位置。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            duration: 长按时长（毫秒），默认 1000ms
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uitest uiInput click {x} {y} {duration}")
+
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"长按失败: {result.output}")
+            return False
+
+        return True
+
+    def swipe(
+        self, x1: int, y1: int, x2: int, y2: int, speed: int = 1000
+    ) -> bool:
+        """
+        滑动屏幕。
+
+        Args:
+            x1: 起点 X 坐标
+            y1: 起点 Y 坐标
+            x2: 终点 X 坐标
+            y2: 终点 Y 坐标
+            speed: 滑动速度（范围 200-40000），默认 1000
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        # 验证 speed 范围
+        if speed < 200 or speed > 40000:
+            logger.error(f"滑动速度超出范围 [200, 40000]: {speed}")
+            return False
+
+        result = self.shell(f"uitest uiInput swipe {x1} {y1} {x2} {y2} {speed}")
+
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"滑动失败: {result.output}")
+            return False
+
+        return True
+
+    def input_text_at(self, x: int, y: int, text: str) -> bool:
+        """
+        在指定坐标位置输入文本。
+
+        Args:
+            x: X 坐标
+            y: Y 坐标
+            text: 要输入的文本
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        # 先点击目标位置
+        if not self.tap(x, y):
+            logger.error("点击目标位置失败")
+            return False
+
+        # 使用 input text 命令输入文本
+        result = self.shell(f"uitest uiInput inputText {x} {y} '{text}'")
+
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"输入文本失败: {result.output}")
+            return False
+
+        return True
+
+    # ========================================================================
+    # 按键操作
+    # ========================================================================
+
+    def send_key(self, key_code: int) -> bool:
+        """
+        发送按键事件。
+
+        Args:
+            key_code: 按键代码
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uitest uiInput keyEvent {key_code}")
+
+        if result.exit_code != 0 or "fail" in result.output.lower():
+            logger.error(f"发送按键失败: {result.output}")
+            return False
+
+        return True
+
+    def press_key(self, key_name: str) -> bool:
+        """
+        按键（使用按键名）。
+
+        Args:
+            key_name: 按键名称（如 HOME, BACK, POWER 等）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+
+        Raises:
+            ValueError: 按键名称不存在
+        """
+        key_name_upper = key_name.upper()
+
+        if key_name_upper not in self.KEY_MAP:
+            raise ValueError(
+                f"未知按键名称: {key_name}. 可用按键: {list(self.KEY_MAP.keys())}"
+            )
+
+        key_code = self.KEY_MAP[key_name_upper]
+        return self.send_key(key_code)
+
+    # ========================================================================
+    # 屏幕控制
+    # ========================================================================
+
+    def wakeup(self) -> bool:
+        """
+        唤醒屏幕。
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        # 发送 POWER 键唤醒屏幕
+        return self.press_key("POWER")
+
+    def screen_state(self) -> str:
+        """
+        获取屏幕状态。
+
+        Returns:
+            str: 屏幕状态
+                - "AWAKE": 屏幕亮起
+                - "INACTIVE": 屏幕变暗但未关闭
+                - "SLEEP": 屏幕关闭
+        """
+        result = self.shell("hidumper -s 10", timeout=10)
+
+        if result.exit_code != 0:
+            logger.warning(f"获取屏幕状态失败: {result.error}")
+            return "UNKNOWN"
+
+        # 解析输出，查找屏幕状态
+        output = result.output.upper()
+        if "AWAKE" in output:
+            return "AWAKE"
+        elif "INACTIVE" in output:
+            return "INACTIVE"
+        elif "SLEEP" in output:
+            return "SLEEP"
+        else:
+            return "UNKNOWN"
+
+    def is_screen_on(self) -> bool:
+        """
+        检查屏幕是否点亮。
+
+        Returns:
+            bool: True 表示屏幕点亮，False 表示屏幕关闭
+        """
+        state = self.screen_state()
+        return state in ("AWAKE", "INACTIVE")
+
+    # ========================================================================
+    # 设备信息
+    # ========================================================================
+
+    def display_size(self) -> Tuple[int, int]:
+        """
+        获取屏幕分辨率。
+
+        Returns:
+            Tuple[int, int]: (宽度, 高度)
+        """
+        result = self.shell("hidumper -s 10", timeout=10)
+
+        if result.exit_code != 0:
+            logger.warning(f"获取屏幕分辨率失败: {result.error}")
+            return (0, 0)
+
+        # 解析输出，查找分辨率信息
+        # 格式示例: "width: 1080, height: 1920" 或 "Display 0: 1080x1920"
+        output = result.output
+
+        # 尝试匹配 "width: X, height: Y" 格式
+        match = re.search(r"width:\s*(\d+).*height:\s*(\d+)", output, re.IGNORECASE)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
+
+        # 尝试匹配 "XxY" 格式
+        match = re.search(r"(\d+)\s*x\s*(\d+)", output)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
+
+        logger.warning("未能解析屏幕分辨率")
+        return (0, 0)
+
+    def model(self) -> str:
+        """
+        获取设备型号。
+
+        Returns:
+            str: 设备型号
+        """
+        result = self.shell("param get const.product.model")
+
+        if result.exit_code != 0:
+            logger.warning(f"获取设备型号失败: {result.error}")
+            return ""
+
+        return result.output.strip()
+
+    def product_name(self) -> str:
+        """
+        获取产品名称。
+
+        Returns:
+            str: 产品名称
+        """
+        result = self.shell("param get const.product.name")
+
+        if result.exit_code != 0:
+            logger.warning(f"获取产品名称失败: {result.error}")
+            return ""
+
+        return result.output.strip()
+
+    def sdk_version(self) -> str:
+        """
+        获取 SDK 版本。
+
+        Returns:
+            str: SDK 版本
+        """
+        result = self.shell("param get const.ohos.apiversion")
+
+        if result.exit_code != 0:
+            logger.warning(f"获取 SDK 版本失败: {result.error}")
+            return ""
+
+        return result.output.strip()
+
+    def sys_version(self) -> str:
+        """
+        获取系统版本。
+
+        Returns:
+            str: 系统版本
+        """
+        result = self.shell("param get const.product.devicetype")
+
+        if result.exit_code != 0:
+            logger.warning(f"获取系统版本失败: {result.error}")
+            return ""
+
+        return result.output.strip()
+
+    def device_info(self) -> Dict:
+        """
+        获取设备信息字典。
+
+        Returns:
+            Dict: 设备信息字典，包含型号、产品名称、SDK版本、系统版本等
+        """
+        return {
+            "serial": self.serial,
+            "model": self.model(),
+            "product_name": self.product_name(),
+            "sdk_version": self.sdk_version(),
+            "sys_version": self.sys_version(),
+            "display_size": self.display_size(),
+            "screen_on": self.is_screen_on(),
+            "screen_state": self.screen_state(),
+        }
