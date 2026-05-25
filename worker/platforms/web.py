@@ -308,21 +308,26 @@ class WebPlatformManager(PlatformManager):
             logger.info("Using system Edge browser")
 
         # Chromium 系浏览器添加启动参数，禁用恢复提示弹窗
-        if self.browser_type in ("chromium", "chrome", "msedge", "edge"):
-            context_options["args"] = [
-                "--disable-session-crashed-bubble",  # 禁用"上次不正常关闭"恢复弹窗
-                "--disable-infobars",  # 禁用信息栏（包括各种提示条）
-            ]
+        chromium_args = [
+            "--disable-session-crashed-bubble",  # 禁用"上次不正常关闭"恢复弹窗
+            "--disable-infobars",  # 禁用信息栏（包括各种提示条）
+        ]
 
         # 代理配置：显式设置代理，禁用系统代理
         # 如果传入代理参数，使用配置的代理；否则显式禁用代理
         if self._proxy_config:
             context_options["proxy"] = self._proxy_config
+            # 同时添加 Chromium 启动参数确保代理生效
+            chromium_args.append(f"--proxy-server={self._proxy_config.get('server')}")
             logger.info(f"Using proxy: {self._proxy_config.get('server')}")
         else:
             # 显式禁用代理，不走系统代理
-            context_options["proxy"] = {"server": "direct://"}
+            # 使用 Chromium 启动参数强制禁用（比 Playwright proxy 选项更可靠）
+            chromium_args.append("--proxy-server=direct://")
             logger.info("Proxy disabled (direct://), bypassing system proxy")
+
+        if self.browser_type in ("chromium", "chrome", "msedge", "edge"):
+            context_options["args"] = chromium_args
 
         if self.ignore_https_errors:
             context_options["ignore_https_errors"] = True
