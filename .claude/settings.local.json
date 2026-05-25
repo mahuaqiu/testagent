@@ -280,7 +280,8 @@
       "Bash(venv\\\\Scripts\\\\pip install *)",
       "Skill(systematic-debugging)",
       "Bash(Get-ChildItem -Path . -Filter \"*.log\" -Recurse)",
-      "Bash(Select-Object -First 10 FullName)"
+      "Bash(Select-Object -First 10 FullName)",
+      "Bash(netsh winhttp *)"
     ]
   }
 }
