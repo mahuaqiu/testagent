@@ -308,9 +308,9 @@ class WebPlatformManager(PlatformManager):
             logger.info("Using system Edge browser")
 
         # Chromium 系浏览器添加启动参数，禁用恢复提示弹窗
+        # 注意：旧参数 --disable-session-crashed-bubble 和 --disable-infobars 已失效
         chromium_args = [
-            "--disable-session-crashed-bubble",  # 禁用"上次不正常关闭"恢复弹窗
-            "--disable-infobars",  # 禁用信息栏（包括各种提示条）
+            "--hide-crash-restore-bubble",  # 禁用"恢复页面"弹窗（替代失效的 --disable-session-crashed-bubble）
         ]
 
         # 代理配置：显式设置代理，禁用系统代理
@@ -437,6 +437,11 @@ class WebPlatformManager(PlatformManager):
 
         if self._browser_context or self._playwright:
             try:
+                # 关闭前写入 Preferences 文件，确保 Chromium 记录"正常退出"状态
+                user_data_dir = self._get_user_data_dir()
+                self._disable_restore_bubble(user_data_dir)
+                logger.info("Updated Preferences before stopping browser")
+
                 _run_async(self._async_stop())
             except Exception as e:
                 logger.warning(f"Failed to stop Web platform: {e}")
@@ -492,6 +497,12 @@ class WebPlatformManager(PlatformManager):
         session = self._sessions.get("default")
         if session:
             try:
+                # 关闭前写入 Preferences 文件，确保 Chromium 记录"正常退出"状态
+                # 这样下次启动时不会显示"恢复页面"弹窗
+                user_data_dir = self._get_user_data_dir()
+                self._disable_restore_bubble(user_data_dir)
+                logger.info("Updated Preferences before closing browser")
+
                 page = session.get("page")
                 if page:
                     _run_async(self._async_close_page(page))
