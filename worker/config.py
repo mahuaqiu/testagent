@@ -13,7 +13,6 @@ import yaml
 
 from common.utils import popen_cmd
 from common.packaging import is_packaged, get_base_dir
-from worker.discovery.host import HostDiscoverer
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,9 @@ def _generate_worker_id() -> str:
     Returns:
         str: Worker ID，格式为 MAC 地址去掉冒号（如 AABBCCDDEEFF）
     """
+    # 延迟导入避免循环依赖
+    from worker.discovery.host import HostDiscoverer
+
     mac = HostDiscoverer.get_mac_address()
     if mac:
         # 去掉冒号分隔符，得到纯 MAC 地址字符串
