@@ -176,7 +176,11 @@ class WebPlatformManager(PlatformManager):
             return None
 
     def _clear_profile_data(self, user_data_dir: str) -> None:
-        """清理表单相关数据（保留 HTTP 缓存和其他非敏感数据）。"""
+        """清理表单相关数据（保留 HTTP 缓存和其他非敏感数据）。
+
+        Raises:
+            RuntimeError: 当清理失败且可能导致启动问题时抛出
+        """
         default_dir = os.path.join(user_data_dir, "Default")
         if not os.path.exists(default_dir):
             return
@@ -186,17 +190,24 @@ class WebPlatformManager(PlatformManager):
             "Local Storage"
         ]
 
+        failed_items = []
         for item in form_items:
             item_path = os.path.join(default_dir, item)
             if os.path.exists(item_path):
                 try:
                     if os.path.isdir(item_path):
-                        shutil.rmtree(item_path, ignore_errors=True)
+                        shutil.rmtree(item_path, ignore_errors=False)
                     else:
                         os.remove(item_path)
                     logger.debug(f"Removed form data: {item}")
                 except Exception as e:
-                    logger.warning(f"Failed to remove {item}: {e}")
+                    logger.error(f"Failed to remove {item}: {e}")
+                    failed_items.append(item)
+
+        if failed_items:
+            # 清理失败可能导致浏览器启动冲突，需要警告用户
+            logger.error(f"Profile data cleanup failed for: {failed_items}, browser may use stale data")
+            # 不抛出异常，因为清理失败不一定导致启动失败，但记录错误日志
 
         logger.info(f"Cleared form/profile data in {default_dir}, kept cache dirs")
 
@@ -242,6 +253,70 @@ class WebPlatformManager(PlatformManager):
         except Exception as e:
             logger.warning(f"Failed to update Preferences file: {e}")
 
+    def _cleanup_browser_processes(self) -> None:
+        """清理残留的浏览器进程，避免启动冲突导致网络服务崩溃。
+
+        当之前的浏览器会话异常结束时（崩溃、手动关闭、超时），Chromium 进程可能
+        没有完全退出，导致用户数据目录被锁定或端口被占用。这会导致新启动的浏览器
+        网络服务崩溃。
+
+        此方法通过查找并杀掉残留的 Chromium/Chrome/Edge 进程来避免冲突。
+        """
+        from common.utils import run_cmd
+
+        # 根据浏览器类型选择要清理的进程名
+        # Playwright 内置 Chromium 的进程名是 chrome.exe（基于 Chromium 编译）
+        # 系统 Chrome 的进程名也是 chrome.exe
+        process_names = []
+        if self.browser_type in ("chromium", "chrome"):
+            process_names = ["chrome.exe"]
+        elif self.browser_type in ("msedge", "edge"):
+            process_names = ["msedge.exe"]
+        else:
+            # 其他浏览器类型（如 firefox/webkit）跳过清理
+            logger.debug(f"Browser type {self.browser_type} doesn't need process cleanup on Windows")
+            return
+
+        try:
+            # 使用 tasklist 查找进程
+            result = run_cmd(["tasklist", "/FO", "CSV"], check=True, timeout=10)
+            killed_count = 0
+
+            for line in result.stdout.splitlines():
+                # tasklist CSV 格式: "Image Name","PID","Session Name","Session#","Mem Usage"
+                if not line.startswith('"'):
+                    continue
+
+                # 解析 CSV 行
+                parts = line.split(',')
+                if len(parts) < 2:
+                    continue
+
+                process_name = parts[0].strip('"')
+                pid_str = parts[1].strip('"')
+
+                # 检查是否是目标进程
+                if process_name.lower() in [p.lower() for p in process_names]:
+                    try:
+                        pid = int(pid_str)
+                        logger.info(f"Killing residual browser process: {process_name} (PID: {pid})")
+                        run_cmd(["taskkill", "/F", "/PID", str(pid)], check=True, timeout=10)
+                        killed_count += 1
+                    except ValueError:
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Failed to kill process {pid}: {e}")
+
+            if killed_count > 0:
+                logger.info(f"Cleaned up {killed_count} residual browser processes")
+                # 等待进程完全退出（给操作系统时间释放文件锁）
+                time.sleep(1)
+            else:
+                logger.debug("No residual browser processes found")
+
+        except Exception as e:
+            logger.warning(f"Failed to cleanup browser processes: {e}")
+
     @property
     def platform(self) -> str:
         return "web"
@@ -263,6 +338,10 @@ class WebPlatformManager(PlatformManager):
 
     async def _async_start(self) -> None:
         """异步启动 Playwright 和浏览器（使用持久化用户数据目录）。"""
+        # 首先清理残留的浏览器进程，避免启动冲突导致网络服务崩溃
+        # 这是偶现问题的根本原因：之前会话异常结束后进程未完全退出
+        self._cleanup_browser_processes()
+
         self._playwright = await async_playwright().start()
 
         # 获取用户数据目录
