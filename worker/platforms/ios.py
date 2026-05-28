@@ -1385,13 +1385,6 @@ class iOSPlatformManager(PlatformManager):
                         status=ActionStatus.FAILED,
                         error=f"Unknown action type: {action.action_type}",
                     )
-            elif action.action_type == "ocr_paste":
-                result = ActionResult(
-                    number=0,
-                    action_type="ocr_paste",
-                    status=ActionStatus.FAILED,
-                    error="ocr_paste is not supported on iOS",
-                )
             else:
                 executor = ActionRegistry.get(action.action_type)
                 if executor:

@@ -15,7 +15,6 @@ from worker.actions.ocr import (
     OcrWaitAction,
     OcrAssertAction,
     OcrGetTextAction,
-    OcrPasteAction,
     OcrMoveAction,
     OcrDoubleClickAction,
     OcrExistAction,
@@ -39,6 +38,7 @@ from worker.actions.coordinate import (
     DoubleClickAction,
     MoveAction,
     InputAction,
+    PasteAction,
     SwipeAction,
     DragAction,
     PressAction,
@@ -62,7 +62,6 @@ def _register_all_actions():
     ActionRegistry.register(OcrWaitAction())
     ActionRegistry.register(OcrAssertAction())
     ActionRegistry.register(OcrGetTextAction())
-    ActionRegistry.register(OcrPasteAction())
     ActionRegistry.register(OcrMoveAction())
     ActionRegistry.register(OcrDoubleClickAction())
     ActionRegistry.register(OcrExistAction())
@@ -86,6 +85,7 @@ def _register_all_actions():
     ActionRegistry.register(DoubleClickAction())
     ActionRegistry.register(MoveAction())
     ActionRegistry.register(InputAction())
+    ActionRegistry.register(PasteAction())
     ActionRegistry.register(SwipeAction())
     ActionRegistry.register(DragAction())
     ActionRegistry.register(PressAction())
@@ -131,7 +131,6 @@ __all__ = [
     "OcrWaitAction",
     "OcrAssertAction",
     "OcrGetTextAction",
-    "OcrPasteAction",
     "OcrMoveAction",
     "OcrDoubleClickAction",
     "OcrExistAction",
@@ -153,6 +152,7 @@ __all__ = [
     "DoubleClickAction",
     "MoveAction",
     "InputAction",
+    "PasteAction",
     "SwipeAction",
     "DragAction",
     "PressAction",
