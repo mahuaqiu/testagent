@@ -5,16 +5,23 @@
 """
 
 import base64
-import time
 import logging
-from typing import Optional, TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING
 
 from common.utils import compress_image_to_jpeg
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
+
+# pyperclip 用于剪贴板操作（PasteAction）
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +31,7 @@ class ClickAction(BaseActionExecutor):
 
     name = "click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -59,7 +66,7 @@ class RightClickAction(BaseActionExecutor):
 
     name = "right_click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -86,7 +93,7 @@ class DoubleClickAction(BaseActionExecutor):
 
     name = "double_click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -116,7 +123,7 @@ class MoveAction(BaseActionExecutor):
 
     name = "move"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -153,7 +160,7 @@ class InputAction(BaseActionExecutor):
 
     name = "input"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -180,12 +187,81 @@ class InputAction(BaseActionExecutor):
         )
 
 
+class PasteAction(BaseActionExecutor):
+    """坐标粘贴（使用剪贴板）。"""
+
+    name = "paste"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
+        # 检查 pyperclip 是否可用
+        if not PYPERCLIP_AVAILABLE:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="pyperclip not available",
+            )
+
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        if not action.text:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="text is required for paste",
+            )
+
+        # 点击（普通点击，duration=0）
+        platform.click(action.x, action.y, duration=0, context=context)
+
+        # 使用剪贴板粘贴（增加异常处理）
+        try:
+            original_clipboard = pyperclip.paste()
+        except Exception:
+            original_clipboard = ""
+
+        try:
+            pyperclip.copy(action.text)
+            platform.press("Control+v", context)
+        except Exception as e:
+            # 粘贴失败时返回错误
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Clipboard operation failed: {e}",
+            )
+        finally:
+            # 恢复原始剪贴板内容（恢复失败不影响主流程）
+            try:
+                pyperclip.copy(original_clipboard)
+            except Exception:
+                pass
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Pasted at ({action.x}, {action.y})",
+        )
+
+
 class DragAction(BaseActionExecutor):
     """拖拽（与 swipe 功能相同，语义化命名）。"""
 
     name = "drag"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -222,7 +298,7 @@ class SwipeAction(BaseActionExecutor):
 
     name = "swipe"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -259,7 +335,7 @@ class PressAction(BaseActionExecutor):
 
     name = "press"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -286,7 +362,7 @@ class ScreenshotAction(BaseActionExecutor):
 
     name = "screenshot"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -312,7 +388,7 @@ class WaitAction(BaseActionExecutor):
     name = "wait"
     requires_context = False
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # time 参数（秒）优先，其次是 wait（毫秒），最后是 value
         if action.time is not None:
             wait_time_sec = action.time

@@ -9,12 +9,11 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
+from worker.task import Action, ActionResult
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +27,8 @@ class PlatformManager(ABC):
     """
 
     # 通用动作列表（所有平台支持）
-    BASE_SUPPORTED_ACTIONS: Set[str] = {
-        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
+    BASE_SUPPORTED_ACTIONS: set[str] = {
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
         "ocr_move", "ocr_double_click", "ocr_exist",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
@@ -37,7 +36,7 @@ class PlatformManager(ABC):
         "image_click", "image_wait", "image_assert", "image_click_near_text",
         "image_move", "image_double_click", "image_exist",
         "image_get_position",
-        "click", "right_click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "click", "right_click", "double_click", "swipe", "drag", "input", "paste", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
         "pinch",  # 双指缩放（Android/iOS）
@@ -47,7 +46,7 @@ class PlatformManager(ABC):
     }
 
     # 子类可覆盖，定义平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = set()
+    SUPPORTED_ACTIONS: set[str] = set()
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         """
@@ -61,7 +60,7 @@ class PlatformManager(ABC):
         self.ocr_client = ocr_client
         self._started = False
         # 存储当前活跃的执行上下文（driver/context）
-        self._contexts: Dict[str, Any] = {}
+        self._contexts: dict[str, Any] = {}
         # TaskScheduler 引用（用于检查设备忙碌状态）
         self._scheduler = None
 
@@ -123,7 +122,7 @@ class PlatformManager(ABC):
         pass
 
     @abstractmethod
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
         """
         创建执行上下文。
 
@@ -226,7 +225,7 @@ class PlatformManager(ABC):
 
     @abstractmethod
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None) -> None:
         """
         滑动/拖拽。
 
@@ -316,7 +315,7 @@ class PlatformManager(ABC):
         """
         return []
 
-    def get_supported_actions(self) -> Set[str]:
+    def get_supported_actions(self) -> set[str]:
         """
         获取支持的动作列表。
 
@@ -339,7 +338,7 @@ class PlatformManager(ABC):
 
     # ========== OCR/图像识别辅助方法 ==========
 
-    def _find_text_position(self, image_bytes: bytes, text: str, match_mode: str = "exact", index: int = 0) -> Optional[tuple[int, int]]:
+    def _find_text_position(self, image_bytes: bytes, text: str, match_mode: str = "exact", index: int = 0) -> tuple[int, int] | None:
         """
         在图像中查找文字位置，支持 index 参数选择第几个匹配结果。
 
@@ -408,7 +407,7 @@ class PlatformManager(ABC):
         # 在本地结果中查找（不调用 OCR 服务）
         return self.ocr_client.find_text_in_results(ocr_results, text, match_mode, index)
 
-    def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.8, index: int = 0) -> Optional[tuple[int, int]]:
+    def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.8, index: int = 0) -> tuple[int, int] | None:
         """
         在源图像中查找模板图像位置，支持 index 参数选择第几个匹配结果。
 
@@ -444,7 +443,7 @@ class PlatformManager(ABC):
                 return matches[index].center
         return None
 
-    def _find_all_text_positions(self, image_bytes: bytes, text: str) -> List[tuple[int, int]]:
+    def _find_all_text_positions(self, image_bytes: bytes, text: str) -> list[tuple[int, int]]:
         """
         获取所有匹配文字的坐标列表。
 
@@ -473,7 +472,7 @@ class PlatformManager(ABC):
         source_bytes: bytes,
         template_base64: str,
         threshold: float = 0.8
-    ) -> List[tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """
         获取所有匹配图片的坐标列表。
 
@@ -503,7 +502,7 @@ class PlatformManager(ABC):
 
         return positions
 
-    def _apply_offset(self, x: int, y: int, offset: Optional[Dict[str, int]]) -> tuple[int, int]:
+    def _apply_offset(self, x: int, y: int, offset: dict[str, int] | None) -> tuple[int, int]:
         """
         应用偏移量。
 
@@ -556,7 +555,7 @@ class PlatformManager(ABC):
 
     # ========== 会话管理方法（可由子类覆盖） ==========
 
-    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+    def has_active_session(self, device_id: str | None = None) -> bool:
         """
         检查是否有活跃的会话。
 
@@ -568,7 +567,7 @@ class PlatformManager(ABC):
         """
         return False
 
-    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+    def get_session_context(self, device_id: str | None = None) -> Any:
         """
         获取当前会话的上下文。
 
@@ -580,7 +579,7 @@ class PlatformManager(ABC):
         """
         return None
 
-    def close_session(self, device_id: Optional[str] = None) -> None:
+    def close_session(self, device_id: str | None = None) -> None:
         """
         关闭会话（由 stop_app 调用）。
 

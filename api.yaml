@@ -310,7 +310,6 @@ components:
             - ocr_wait
             - ocr_assert
             - ocr_get_text
-            - ocr_paste
             - ocr_move
             - ocr_double_click
             - ocr_exist
@@ -331,6 +330,7 @@ components:
             - move
             - swipe
             - input
+            - paste
             - press
             - screenshot
             - wait
@@ -357,7 +357,6 @@ components:
             - ocr_wait: 等待指定文字出现
             - ocr_assert: 断言指定文字存在或不存在（negate: true 时断言不存在），支持 list 传参批量验证多个文字
             - ocr_get_text: 获取屏幕上所有文字
-            - ocr_paste: OCR 定位后粘贴剪贴板内容
             - ocr_move: 移动鼠标到识别到的文字位置（仅桌面端）
             - ocr_double_click: 双击屏幕上识别到的文字
             - ocr_exist: 检查文字是否存在，返回 {"exists": true/false}，始终返回 SUCCESS 状态，支持 list 传参批量检查多个文字
@@ -384,6 +383,7 @@ components:
             - move: 移动鼠标到指定坐标（仅桌面端）
             - swipe: 滑动手势
             - input: 在指定坐标输入文本
+            - paste: 在指定坐标粘贴文本（使用剪贴板）
 
             【其他动作】
             - press: 按键操作
@@ -436,12 +436,12 @@ components:
           type: string
           description: |
             动作核心值，根据 action_type 不同含义不同：
-            - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_paste/ocr_exist: 要识别的文字内容
+            - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_exist: 要识别的文字内容
               - 支持 `reg_` 前缀正则匹配，如 `reg_\\d+` 匹配数字
               - OCR 统一匹配策略：精确匹配 → 模糊匹配，reg_ 前缀直接使用正则匹配
               - ocr_assert/ocr_exist 支持 list 传参批量验证：["文字1", "文字2", "文字3"]，一次 OCR 识别后批量检查
             - image_click_near_text: 要查找的目标文字
-            - click/input: 此字段不使用
+            - click/input/paste: 此字段不使用（坐标由 x/y 指定）
             - swipe: 此字段不使用
             - screenshot: 截图名称/标识
             - wait: 等待的毫秒数，如 "1000"
@@ -531,7 +531,7 @@ components:
             - disabled: 停用音频设备
         text:
           type: string
-          description: "输入/粘贴的文本内容，仅 ocr_input、input、ocr_paste 动作必填"
+          description: "输入/粘贴的文本内容，仅 ocr_input、input、paste 动作必填"
         image_base64:
           type: string
           description: |
@@ -544,7 +544,7 @@ components:
           default: 0
           description: |
             选择第几个匹配结果（从 0 开始），用于多个相同文字/图像的场景：
-            - ocr_click/ocr_input/ocr_paste/ocr_move/ocr_double_click: 点击第 N 个匹配的文字
+            - ocr_click/ocr_input/ocr_move/ocr_double_click: 点击第 N 个匹配的文字
             - ocr_assert/ocr_exist: 不支持 index 参数，list 模式下每个文字只检查是否存在
             - image_click/image_wait/image_assert/image_move/image_double_click/image_exist: 点击第 N 个匹配的图像
             示例：index=1 表示点击第二个匹配结果
@@ -678,7 +678,7 @@ components:
             点击持续时间（毫秒），用于实现长按效果：
             - 0: 普通点击（默认）
             - >0: 长按指定时间，如 2000 表示长按 2 秒
-            适用动作：ocr_click、image_click、click、ocr_input、ocr_paste、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
+            适用动作：ocr_click、image_click、click、ocr_input、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
             示例：长按 2 秒 {"action_type": "ocr_click", "value": "确认", "click_duration": 2000}
         steps:
           type: integer
@@ -848,12 +848,6 @@ components:
   # 示例: 获取当前屏幕文字内容
   # {"action_type": "ocr_get_text", "value": ""}
 
-  # ocr_paste - OCR 定位后粘贴剪贴板内容
-  # 示例 1: 定位"备注"标签并粘贴内容
-  # {"action_type": "ocr_paste", "value": "备注", "text": "这是粘贴的内容", "offset": {"x": 50, "y": 0}}
-  # 示例 2: 定位第二个"输入"标签并粘贴内容
-  # {"action_type": "ocr_paste", "value": "输入", "text": "粘贴文本", "index": 1}
-
   # ocr_move - 移动鼠标到识别到的文字位置（仅桌面端支持）
   # 示例 1: 移动鼠标到"登录"文字位置
   # {"action_type": "ocr_move", "value": "登录"}
@@ -995,6 +989,10 @@ components:
   # input - 在指定坐标输入文本
   # 示例: 在 (300, 400) 位置输入 "hello world"
   # {"action_type": "input", "x": 300, "y": 400, "text": "hello world"}
+
+  # paste - 在指定坐标粘贴文本（使用剪贴板）
+  # 示例: 在 (300, 400) 位置粘贴 "hello world"
+  # {"action_type": "paste", "x": 300, "y": 400, "text": "hello world"}
 
   # ---------- 其他动作 ----------
   # press - 按键操作
