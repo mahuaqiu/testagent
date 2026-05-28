@@ -441,7 +441,8 @@ components:
               - OCR 统一匹配策略：精确匹配 → 模糊匹配，reg_ 前缀直接使用正则匹配
               - ocr_assert/ocr_exist 支持 list 传参批量验证：["文字1", "文字2", "文字3"]，一次 OCR 识别后批量检查
             - image_click_near_text: 要查找的目标文字
-            - click/input/paste: 此字段不使用（坐标由 x/y 指定）
+            - click/input: 此字段不使用（坐标由 x/y 指定）
+            - paste: 要粘贴的文本内容
             - swipe: 此字段不使用
             - screenshot: 截图名称/标识
             - wait: 等待的毫秒数，如 "1000"
@@ -990,9 +991,9 @@ components:
   # 示例: 在 (300, 400) 位置输入 "hello world"
   # {"action_type": "input", "x": 300, "y": 400, "text": "hello world"}
 
-  # paste - 在指定坐标粘贴文本（使用剪贴板）
-  # 示例: 在 (300, 400) 位置粘贴 "hello world"
-  # {"action_type": "paste", "x": 300, "y": 400, "text": "hello world"}
+  # paste - 直接粘贴文本（使用剪贴板 Ctrl+V，不点击坐标）
+  # 示例: 直接粘贴 "hello world"
+  # {"action_type": "paste", "text": "hello world"}
 
   # ---------- 其他动作 ----------
   # press - 按键操作
