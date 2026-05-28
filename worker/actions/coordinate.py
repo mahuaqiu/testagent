@@ -16,6 +16,13 @@ from worker.actions.base import BaseActionExecutor
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
 
+# pyperclip 用于剪贴板操作（PasteAction）
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,6 +196,15 @@ class PasteAction(BaseActionExecutor):
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
+        # 检查 pyperclip 是否可用
+        if not PYPERCLIP_AVAILABLE:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="pyperclip not available",
+            )
+
         if action.x is None or action.y is None:
             return ActionResult(
                 number=0,
@@ -208,15 +224,29 @@ class PasteAction(BaseActionExecutor):
         # 点击（普通点击，duration=0）
         platform.click(action.x, action.y, duration=0, context=context)
 
-        # 使用剪贴板粘贴
-        import pyperclip
-        original_clipboard = pyperclip.paste()
+        # 使用剪贴板粘贴（增加异常处理）
+        try:
+            original_clipboard = pyperclip.paste()
+        except Exception:
+            original_clipboard = ""
+
         try:
             pyperclip.copy(action.text)
             platform.press("Control+v", context)
+        except Exception as e:
+            # 粘贴失败时返回错误
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Clipboard operation failed: {e}",
+            )
         finally:
-            # 恢复原始剪贴板内容
-            pyperclip.copy(original_clipboard)
+            # 恢复原始剪贴板内容（恢复失败不影响主流程）
+            try:
+                pyperclip.copy(original_clipboard)
+            except Exception:
+                pass
 
         return ActionResult(
             number=0,
