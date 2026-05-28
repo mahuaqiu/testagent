@@ -141,7 +141,9 @@ class ImageWaitAction(BaseActionExecutor):
             )
 
         # 继续剩余时间的循环检查
+        # 如果剩余时间超过5秒，改为每2秒循环（减少识别调用）
         remaining_timeout = timeout - elapsed
+        loop_interval = 2 if remaining_timeout > 5 else 1
         start_time = time.time()
 
         while time.time() - start_time < remaining_timeout:
@@ -160,7 +162,7 @@ class ImageWaitAction(BaseActionExecutor):
                     output="Image appeared",
                 )
 
-            time.sleep(1)  # 每次间隔 1 秒
+            time.sleep(loop_interval)
 
         return ActionResult(
             number=0,
