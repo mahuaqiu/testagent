@@ -180,6 +180,52 @@ class InputAction(BaseActionExecutor):
         )
 
 
+class PasteAction(BaseActionExecutor):
+    """坐标粘贴（使用剪贴板）。"""
+
+    name = "paste"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="x and y coordinates are required",
+            )
+
+        if not action.text:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="text is required for paste",
+            )
+
+        # 点击（普通点击，duration=0）
+        platform.click(action.x, action.y, duration=0, context=context)
+
+        # 使用剪贴板粘贴
+        import pyperclip
+        original_clipboard = pyperclip.paste()
+        try:
+            pyperclip.copy(action.text)
+            platform.press("Control+v", context)
+        finally:
+            # 恢复原始剪贴板内容
+            pyperclip.copy(original_clipboard)
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Pasted at ({action.x}, {action.y})",
+        )
+
+
 class DragAction(BaseActionExecutor):
     """拖拽（与 swipe 功能相同，语义化命名）。"""
 
