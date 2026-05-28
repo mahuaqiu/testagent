@@ -229,23 +229,36 @@ class OcrAssertAction(BaseActionExecutor):
         if error:
             return error
 
-        screenshot = platform.take_screenshot(context)
+        # 解析 texts 列表（支持单字符串和 list）
+        texts = action.value if isinstance(action.value, list) else [action.value]
+        if not texts or texts == [None]:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="value is required",
+            )
 
-        # 应用 region 裁剪
+        # 获取截图并 OCR 识别（只识别一次）
+        screenshot = platform.take_screenshot(context)
         if action.region:
             screenshot = self._crop_region(screenshot, action.region)
 
-        # 使用统一匹配策略（已处理 reg_ 前缀）
-        position = self._find_text_with_fallback(platform, screenshot, action.value, match_mode=action.match_mode)
+        # 调用一次 OCR，结果缓存在 ocr_client 中
+        platform.ocr_client.recognize(screenshot)
+
+        # 在缓存结果中批量检查
+        found, not_found = self._check_texts_in_ocr_result(platform, texts, action.match_mode)
 
         # 根据 negate 参数返回结果
         if action.negate:
-            if position:
+            # negate=true: 要求所有文字都不存在
+            if found:
                 return ActionResult(
                     number=0,
                     action_type=self.name,
                     status=ActionStatus.FAILED,
-                    error=f"Text found but expected not exist: {action.value}",
+                    error=f"Texts found but expected not exist: {found}",
                     ocr_info=self._get_last_ocr_info(platform),
                 )
             else:
@@ -253,24 +266,25 @@ class OcrAssertAction(BaseActionExecutor):
                     number=0,
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
-                    output=f"Text not found as expected: {action.value}",
+                    output=f"All texts not found as expected: {texts}",
                     ocr_info=self._get_last_ocr_info(platform),
                 )
         else:
-            if position:
+            # negate=false: 要求所有文字都存在
+            if not_found:
                 return ActionResult(
                     number=0,
                     action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output=f"Text found: {action.value}",
+                    status=ActionStatus.FAILED,
+                    error=f"Texts not found: {not_found}",
                     ocr_info=self._get_last_ocr_info(platform),
                 )
             else:
                 return ActionResult(
                     number=0,
                     action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error=f"Text not found: {action.value}",
+                    status=ActionStatus.SUCCESS,
+                    output=f"All texts found: {texts}",
                     ocr_info=self._get_last_ocr_info(platform),
                 )
 
@@ -728,7 +742,8 @@ class OcrExistAction(BaseActionExecutor):
             return error
 
         # 检查必填参数
-        if not action.value:
+        texts = action.value if isinstance(action.value, list) else [action.value]
+        if not texts or texts == [None]:
             return ActionResult(
                 number=0,
                 action_type=self.name,
@@ -736,21 +751,25 @@ class OcrExistAction(BaseActionExecutor):
                 error="value is required",
             )
 
-        # 获取截图
+        # 获取截图并 OCR 识别（只识别一次）
         screenshot = platform.take_screenshot(context)
-
-        # 应用 region 裁剪
         if action.region:
             screenshot = self._crop_region(screenshot, action.region)
 
-        # 使用统一匹配策略查找文字
-        index = action.index if action.index is not None else 0
-        position = self._find_text_with_fallback(
-            platform, screenshot, action.value, index, action.match_mode
-        )
+        # 调用一次 OCR，结果缓存在 ocr_client 中
+        platform.ocr_client.recognize(screenshot)
 
-        # 返回结果（始终 SUCCESS，通过 output 返回存在性）
-        exists = position is not None
+        # 在缓存结果中批量检查
+        found, not_found = self._check_texts_in_ocr_result(platform, texts, action.match_mode)
+
+        # 根据 negate 参数返回结果（保持兼容格式）
+        if action.negate:
+            # negate=true: 要求所有文字都不存在
+            exists = len(found) == 0
+        else:
+            # negate=false: 要求所有文字都存在
+            exists = len(not_found) == 0
+
         return ActionResult(
             number=0,
             action_type=self.name,

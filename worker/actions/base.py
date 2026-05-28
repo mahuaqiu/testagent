@@ -320,3 +320,39 @@ class BaseActionExecutor(ActionExecutor):
             # 向下取整：5秒→2秒，8秒→4秒，10秒→5秒
             return int(timeout_sec // 2)
         return 0
+
+    def _check_texts_in_ocr_result(
+        self,
+        platform: "PlatformManager",
+        texts: list[str],
+        match_mode: str = "exact"
+    ) -> tuple[list[str], list[str]]:
+        """
+        在 OCR 缓存结果中批量检查多个文字是否存在（不重新调用 OCR）。
+
+        Args:
+            platform: 平台管理器
+            texts: 待检查的文字列表
+            match_mode: 匹配模式
+
+        Returns:
+            tuple[list[str], list[str]]: (found_texts, not_found_texts)
+        """
+        found = []
+        not_found = []
+
+        for text in texts:
+            # 处理正则模式
+            actual_text = text
+            if match_mode == "regex" and not text.startswith("reg_"):
+                actual_text = f"reg_{text}"
+
+            # 在 OCR 缓存结果中查找（不调用 OCR 服务）
+            position = platform._find_text_position_cached(actual_text, match_mode, 0)
+
+            if position:
+                found.append(text)
+            else:
+                not_found.append(text)
+
+        return (found, not_found)

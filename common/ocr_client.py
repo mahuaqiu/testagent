@@ -105,6 +105,7 @@ class OCRClient:
         self.lang = lang
         self._client = httpx.Client(timeout=self.timeout, trust_env=False)
         self._last_response: dict = {}  # 缓存最后一次调用结果
+        self._last_ocr_results: list[TextBlock] = []  # 新增：缓存最后识别结果
 
     def recognize(
         self,
@@ -157,6 +158,9 @@ class OCRClient:
             logger.info(f"OCR识别结果: {texts}")
         else:
             logger.info("OCR识别完成，未识别到文字")
+
+        # 缓存识别结果（新增）
+        self._last_ocr_results = results
 
         return results
 
@@ -488,6 +492,68 @@ class OCRClient:
             list: ocr_info 列表，失败或无数据时返回空列表
         """
         return self._last_response.get("ocr_info", [])
+
+    def get_last_ocr_results(self) -> list[TextBlock]:
+        """
+        获取最后一次 OCR 识别的结果列表（recognize 方法的返回值）。
+
+        Returns:
+            list[TextBlock]: OCR 识别结果列表
+        """
+        return self._last_ocr_results
+
+    def find_text_in_results(
+        self,
+        ocr_results: list[TextBlock],
+        target_text: str,
+        match_mode: str = "exact",
+        index: int = 0
+    ) -> tuple[int, int] | None:
+        """
+        在 OCR 结果列表中查找指定文字的位置（本地查找，不调用 OCR 服务）。
+
+        匹配策略（与 OCR 服务端一致）：
+        - 正则匹配：reg_ 前缀使用正则表达式
+        - 精确匹配优先：target_text == text
+        - 包含匹配降级：target_text in text
+
+        Args:
+            ocr_results: OCR 识别结果列表（TextBlock）
+            target_text: 目标文字（以 reg_ 开头表示正则表达式）
+            match_mode: 匹配模式
+            index: 选择第几个匹配结果
+
+        Returns:
+            tuple[int, int] | None: 文字中心坐标
+        """
+        import re
+
+        matches = []
+
+        # 正则匹配（reg_ 前缀）
+        if target_text.startswith("reg_"):
+            pattern = target_text[4:]  # 去掉 reg_ 前缀
+            for block in ocr_results:
+                if re.search(pattern, block.text):
+                    matches.append(block)
+        else:
+            # 精确匹配优先，然后降级为包含匹配
+            # 分两轮匹配：先收集精确匹配，再收集包含匹配
+            exact_matches = []
+            fuzzy_matches = []
+
+            for block in ocr_results:
+                if block.text == target_text:
+                    exact_matches.append(block)
+                elif target_text in block.text:
+                    fuzzy_matches.append(block)
+
+            # 精确匹配有结果时使用精确匹配，否则降级为包含匹配
+            matches = exact_matches if exact_matches else fuzzy_matches
+
+        if index < len(matches):
+            return matches[index].center
+        return None
 
 
 # 全局客户端实例

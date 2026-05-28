@@ -376,6 +376,38 @@ class PlatformManager(ABC):
                 return all_texts[index].center
         return None
 
+    def _find_text_position_cached(
+        self,
+        text: str,
+        match_mode: str = "exact",
+        index: int = 0
+    ) -> tuple[int, int] | None:
+        """
+        在 OCR 缓存结果中查找文字位置（不重新调用 OCR 服务）。
+
+        用于批量验证场景：一次 OCR 识别后，多次查询缓存结果。
+
+        Args:
+            text: 目标文字
+            match_mode: 匹配模式
+            index: 选择第几个匹配结果
+
+        Returns:
+            tuple[int, int] | None: 文字中心坐标
+        """
+        if not self.ocr_client:
+            logger.error("OCR client not available")
+            return None
+
+        # 获取缓存的 OCR 结果
+        ocr_results = self.ocr_client.get_last_ocr_results()
+        if not ocr_results:
+            logger.warning("No cached OCR results available")
+            return None
+
+        # 在本地结果中查找（不调用 OCR 服务）
+        return self.ocr_client.find_text_in_results(ocr_results, text, match_mode, index)
+
     def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.8, index: int = 0) -> Optional[tuple[int, int]]:
         """
         在源图像中查找模板图像位置，支持 index 参数选择第几个匹配结果。
