@@ -5,53 +5,54 @@ Action 执行器模块。
 """
 
 from worker.actions.base import ActionExecutor, BaseActionExecutor
-from worker.actions.registry import ActionRegistry
-from worker.task import ActionResult, ActionStatus
+from worker.actions.cmd_exec import CmdExecAction
+from worker.actions.coordinate import (
+    ClickAction,
+    DoubleClickAction,
+    DragAction,
+    InputAction,
+    MoveAction,
+    PasteAction,
+    PressAction,
+    RightClickAction,
+    ScreenshotAction,
+    SwipeAction,
+    WaitAction,
+)
+from worker.actions.gesture import PinchAction
+from worker.actions.image import (
+    ImageAssertAction,
+    ImageClickAction,
+    ImageClickNearTextAction,
+    ImageDoubleClickAction,
+    ImageExistAction,
+    ImageMoveAction,
+    ImageWaitAction,
+    OcrCheckSameRowImageAction,
+    OcrClickSameRowImageAction,
+)
 
 # 导入所有 Action 执行器
 from worker.actions.ocr import (
-    OcrClickAction,
-    OcrInputAction,
-    OcrWaitAction,
     OcrAssertAction,
-    OcrGetTextAction,
-    OcrMoveAction,
+    OcrCheckSameRowTextAction,
+    OcrClickAction,
+    OcrClickSameRowTextAction,
     OcrDoubleClickAction,
     OcrExistAction,
-    OcrClickSameRowTextAction,
-    OcrCheckSameRowTextAction,
+    OcrGetTextAction,
+    OcrInputAction,
+    OcrMoveAction,
+    OcrWaitAction,
 )
-from worker.actions.image import (
-    ImageClickAction,
-    ImageWaitAction,
-    ImageAssertAction,
-    ImageClickNearTextAction,
-    ImageMoveAction,
-    ImageDoubleClickAction,
-    ImageExistAction,
-    OcrClickSameRowImageAction,
-    OcrCheckSameRowImageAction,
-)
-from worker.actions.coordinate import (
-    ClickAction,
-    RightClickAction,
-    DoubleClickAction,
-    MoveAction,
-    InputAction,
-    PasteAction,
-    SwipeAction,
-    DragAction,
-    PressAction,
-    ScreenshotAction,
-    WaitAction,
-)
-from worker.actions.cmd_exec import CmdExecAction
-from worker.actions.web_token import GetTokenAction
-from worker.actions.position import OcrGetPositionExecutor, ImageGetPositionExecutor
-from worker.actions.unlock import UnlockScreenAction
-from worker.actions.gesture import PinchAction
+from worker.actions.position import ImageGetPositionExecutor, OcrGetPositionExecutor
 from worker.actions.recording import StartRecordingAction, StopRecordingAction
+from worker.actions.registry import ActionRegistry
+from worker.actions.unlock import UnlockScreenAction
+from worker.actions.web_token import GetTokenAction
 from worker.actions.window import ActivateWindowAction
+from worker.task import ActionResult, ActionStatus
+
 
 # 注册所有 Actions
 def _register_all_actions():

@@ -5,13 +5,13 @@
 """
 
 import base64
-import time
 import logging
-from typing import Optional, TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING
 
 from common.utils import compress_image_to_jpeg
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -31,7 +31,7 @@ class ClickAction(BaseActionExecutor):
 
     name = "click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -66,7 +66,7 @@ class RightClickAction(BaseActionExecutor):
 
     name = "right_click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -93,7 +93,7 @@ class DoubleClickAction(BaseActionExecutor):
 
     name = "double_click"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -123,7 +123,7 @@ class MoveAction(BaseActionExecutor):
 
     name = "move"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -160,7 +160,7 @@ class InputAction(BaseActionExecutor):
 
     name = "input"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -192,7 +192,7 @@ class PasteAction(BaseActionExecutor):
 
     name = "paste"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -261,7 +261,7 @@ class DragAction(BaseActionExecutor):
 
     name = "drag"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -298,7 +298,7 @@ class SwipeAction(BaseActionExecutor):
 
     name = "swipe"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -335,7 +335,7 @@ class PressAction(BaseActionExecutor):
 
     name = "press"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -362,7 +362,7 @@ class ScreenshotAction(BaseActionExecutor):
 
     name = "screenshot"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
@@ -388,7 +388,7 @@ class WaitAction(BaseActionExecutor):
     name = "wait"
     requires_context = False
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # time 参数（秒）优先，其次是 wait（毫秒），最后是 value
         if action.time is not None:
             wait_time_sec = action.time
