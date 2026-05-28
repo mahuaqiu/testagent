@@ -188,7 +188,7 @@ class InputAction(BaseActionExecutor):
 
 
 class PasteAction(BaseActionExecutor):
-    """坐标粘贴（使用剪贴板）。"""
+    """剪贴板粘贴（直接 Ctrl+V，不点击坐标）。"""
 
     name = "paste"
 
@@ -205,14 +205,6 @@ class PasteAction(BaseActionExecutor):
                 error="pyperclip not available",
             )
 
-        if action.x is None or action.y is None:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error="x and y coordinates are required",
-            )
-
         if not action.text:
             return ActionResult(
                 number=0,
@@ -220,9 +212,6 @@ class PasteAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error="text is required for paste",
             )
-
-        # 点击（普通点击，duration=0）
-        platform.click(action.x, action.y, duration=0, context=context)
 
         # 使用剪贴板粘贴（增加异常处理）
         try:
