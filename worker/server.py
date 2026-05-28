@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from common.request_context import clear_request_id, generate_request_id, set_request_id
-from worker.config import load_config_version, merge_config_with_ip_protection, save_config_with_version
+from worker.config import load_config_version, merge_config_with_local_protection, merge_config_with_ip_protection, save_config_with_version
 from worker.log_query import (
     LogQueryError,
     query_by_lines,
@@ -577,7 +577,7 @@ async def update_worker_config(request: ConfigUpdateRequest):
                 "restart_triggered": False
             }
 
-        # 4. 配置合并（保留本地 IP）
+        # 4. 配置合并（保留本地 IP 和设备发现配置）
         try:
             merged_config = merge_config_with_ip_protection(request.config_content)
         except yaml.YAMLError as e:

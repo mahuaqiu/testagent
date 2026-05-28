@@ -435,12 +435,21 @@ def save_config_version(version: str) -> None:
     os.replace(temp_path, version_path)
 
 
-def merge_config_with_ip_protection(
+def merge_config_with_local_protection(
     new_config_yaml: str,
     existing_config_path: str = get_user_config_path()
 ) -> dict:
     """
-    合并配置：保留本地 IP 地址。
+    合并配置：保留本地特定字段。
+
+    保留字段（不被远程配置覆盖）：
+    - worker.ip: 本机 IP 地址
+    - worker.discover_android_devices: Android 设备发现开关
+    - worker.discover_ios_devices: iOS 设备发现开关
+    - worker.discover_harmony_devices: 鸿蒙设备发现开关
+
+    Why: 移动设备连接的机器是固定的，这些配置需要用户手动在机器上设置，
+         共用一套模板时不应覆盖这些本地配置。
 
     Args:
         new_config_yaml: 新配置的 YAML 字符串
@@ -452,19 +461,42 @@ def merge_config_with_ip_protection(
     # 解析新配置
     new_data = yaml.safe_load(new_config_yaml) or {}
 
-    # 读取现有配置的 IP
+    # 读取现有配置的保留字段
     if os.path.exists(existing_config_path):
         with open(existing_config_path, encoding="utf-8") as f:
             existing_data = yaml.safe_load(f) or {}
-        existing_ip = existing_data.get("worker", {}).get("ip")
+        existing_worker = existing_data.get("worker", {})
     else:
-        existing_ip = None
+        existing_worker = {}
 
-    # 合并：保留本地 IP
-    if existing_ip is not None and "worker" in new_data:
-        new_data["worker"]["ip"] = existing_ip
+    # 保留字段列表（不被远程配置覆盖）
+    preserved_fields = [
+        "ip",
+        "discover_android_devices",
+        "discover_ios_devices",
+        "discover_harmony_devices",
+    ]
+
+    # 合并：保留本地特定字段
+    if "worker" in new_data:
+        for field in preserved_fields:
+            if field in existing_worker and existing_worker[field] is not None:
+                new_data["worker"][field] = existing_worker[field]
 
     return new_data
+
+
+# 兼容旧函数名（保持向后兼容）
+def merge_config_with_ip_protection(
+    new_config_yaml: str,
+    existing_config_path: str = get_user_config_path()
+) -> dict:
+    """
+    合并配置：保留本地 IP 地址和设备发现配置。
+
+    deprecated: 使用 merge_config_with_local_protection 替代。
+    """
+    return merge_config_with_local_protection(new_config_yaml, existing_config_path)
 
 
 def save_config_with_version(

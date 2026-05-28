@@ -61,12 +61,21 @@ def save_config_version(version: str) -> None:
 继续在 `worker/config.py` 添加：
 
 ```python
-def merge_config_with_ip_protection(
+def merge_config_with_local_protection(
     new_config_yaml: str,
     existing_config_path: str = get_user_config_path()
 ) -> dict:
     """
-    合并配置：保留本地 IP 地址。
+    合并配置：保留本地特定字段。
+
+    保留字段（不被远程配置覆盖）：
+    - worker.ip: 本机 IP 地址
+    - worker.discover_android_devices: Android 设备发现开关
+    - worker.discover_ios_devices: iOS 设备发现开关
+    - worker.discover_harmony_devices: 鸿蒙设备发现开关
+
+    Why: 移动设备连接的机器是固定的，这些配置需要用户手动在机器上设置，
+         共用一套模板时不应覆盖这些本地配置。
 
     Args:
         new_config_yaml: 新配置的 YAML 字符串
@@ -78,19 +87,42 @@ def merge_config_with_ip_protection(
     # 解析新配置
     new_data = yaml.safe_load(new_config_yaml) or {}
 
-    # 读取现有配置的 IP
+    # 读取现有配置的保留字段
     if os.path.exists(existing_config_path):
         with open(existing_config_path, encoding="utf-8") as f:
             existing_data = yaml.safe_load(f) or {}
-        existing_ip = existing_data.get("worker", {}).get("ip")
+        existing_worker = existing_data.get("worker", {})
     else:
-        existing_ip = None
+        existing_worker = {}
 
-    # 合并：保留本地 IP
-    if existing_ip is not None and "worker" in new_data:
-        new_data["worker"]["ip"] = existing_ip
+    # 保留字段列表（不被远程配置覆盖）
+    preserved_fields = [
+        "ip",
+        "discover_android_devices",
+        "discover_ios_devices",
+        "discover_harmony_devices",
+    ]
+
+    # 合并：保留本地特定字段
+    if "worker" in new_data:
+        for field in preserved_fields:
+            if field in existing_worker and existing_worker[field] is not None:
+                new_data["worker"][field] = existing_worker[field]
 
     return new_data
+
+
+# 兼容旧函数名（保持向后兼容）
+def merge_config_with_ip_protection(
+    new_config_yaml: str,
+    existing_config_path: str = get_user_config_path()
+) -> dict:
+    """
+    合并配置：保留本地 IP 地址和设备发现配置。
+
+    deprecated: 使用 merge_config_with_local_protection 替代。
+    """
+    return merge_config_with_local_protection(new_config_yaml, existing_config_path)
 ```
 
 - [ ] **Step 3: 添加安全保存函数（带备份回滚）**
@@ -240,7 +272,7 @@ import re
 import threading
 import yaml
 
-from worker.config import load_config_version, merge_config_with_ip_protection, save_config_with_version
+from worker.config import load_config_version, merge_config_with_local_protection, merge_config_with_ip_protection, save_config_with_version
 ```
 
 在导入后添加全局变量：
@@ -284,7 +316,7 @@ async def update_worker_config(request: ConfigUpdateRequest):
     1. 版本格式校验
     2. 并发保护（获取锁）
     3. 版本比较（相同则跳过）
-    4. 配置合并（保留本地 IP）
+    4. 配置合并（保留本地 IP 和设备发现配置）
     5. 保存配置（含版本文件）
     6. 返回响应
     7. 触发重启（异步）
@@ -576,17 +608,23 @@ class TestConfigVersion:
 class TestConfigMerge:
     """配置合并测试。"""
 
-    def test_merge_config_preserves_local_ip(self):
-        """测试合并保留本地 IP。"""
+    def test_merge_config_preserves_local_fields(self):
+        """测试合并保留本地 IP 和设备发现配置。"""
         existing_yaml = """
 worker:
   ip: "192.168.1.100"
+  discover_android_devices: true
+  discover_ios_devices: false
+  discover_harmony_devices: false
   port: 8088
 """
 
         new_yaml = """
 worker:
   ip: null
+  discover_android_devices: false
+  discover_ios_devices: true
+  discover_harmony_devices: true
   port: 8090
   namespace: new_ns
 """
@@ -597,24 +635,29 @@ worker:
                 f.write(existing_yaml)
 
             with patch('worker.config.get_user_config_path', return_value=existing_path):
-                from worker.config import merge_config_with_ip_protection
-                result = merge_config_with_ip_protection(new_yaml, existing_path)
+                from worker.config import merge_config_with_local_protection
+                result = merge_config_with_local_protection(new_yaml, existing_path)
 
-                # 验证 IP 保留
+                # 验证保留字段
                 assert result["worker"]["ip"] == "192.168.1.100"
+                assert result["worker"]["discover_android_devices"] == True
+                assert result["worker"]["discover_ios_devices"] == False
+                assert result["worker"]["discover_harmony_devices"] == False
+                # 验证更新字段
                 assert result["worker"]["port"] == 8090
                 assert result["worker"]["namespace"] == "new_ns"
 
-    def test_merge_config_no_existing_ip(self):
-        """测试现有配置无 IP 时不影响新配置。"""
+    def test_merge_config_no_existing_worker(self):
+        """测试现有配置无 worker 块时不影响新配置。"""
         existing_yaml = """
-worker:
-  port: 8088
+external_services:
+  platform_api: "http://192.168.0.102:8000"
 """
 
         new_yaml = """
 worker:
   ip: "192.168.2.1"
+  discover_android_devices: true
   port: 8090
 """
 
@@ -623,11 +666,12 @@ worker:
             with open(existing_path, "w") as f:
                 f.write(existing_yaml)
 
-            from worker.config import merge_config_with_ip_protection
-            result = merge_config_with_ip_protection(new_yaml, existing_path)
+            from worker.config import merge_config_with_local_protection
+            result = merge_config_with_local_protection(new_yaml, existing_path)
 
-            # 无本地 IP，使用新配置的 IP
+            # 无本地 worker 配置，使用新配置的值
             assert result["worker"]["ip"] == "192.168.2.1"
+            assert result["worker"]["discover_android_devices"] == True
 
 
 class TestConfigSaveWithVersion:

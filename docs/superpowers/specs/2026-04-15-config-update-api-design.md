@@ -150,21 +150,36 @@ def validate_config_version(version: str) -> bool:
 
 ### 合并策略
 
-只保留本地 IP 地址，其他所有字段从下发配置更新。
+保留本地特定字段，其他所有字段从下发配置更新。
 
-**Why**：IP 地址可能是用户手动指定的特殊值（如内网特定 IP），不应该被远程配置覆盖。
+**保留字段列表**：
+- `worker.ip`: 本机 IP 地址
+- `worker.discover_android_devices`: Android 设备发现开关
+- `worker.discover_ios_devices`: iOS 设备发现开关
+- `worker.discover_harmony_devices`: 鸿蒙设备发现开关
 
-**How to apply**：解析下发配置 YAML 后，读取本地配置中的 IP 字段值，替换到新配置中。
+**Why**：
+- IP 地址可能是用户手动指定的特殊值（如内网特定 IP），不应被远程配置覆盖。
+- 移动设备连接的机器是固定的，设备发现配置需要用户手动在机器上设置。
+- 共用一套配置模板时，这些本地配置不应被覆盖，需要修改这些参数时应让用户手动在机器上设置。
+
+**How to apply**：解析下发配置 YAML 后，读取本地配置中的保留字段值，替换到新配置中。
 
 ### 实现方案
 
 ```python
-def merge_config_with_ip_protection(
+def merge_config_with_local_protection(
     new_config_yaml: str,
     existing_config_path: str = get_user_config_path()
 ) -> dict:
     """
-    合并配置：保留本地 IP 地址。
+    合并配置：保留本地特定字段。
+
+    保留字段（不被远程配置覆盖）：
+    - worker.ip: 本机 IP 地址
+    - worker.discover_android_devices: Android 设备发现开关
+    - worker.discover_ios_devices: iOS 设备发现开关
+    - worker.discover_harmony_devices: 鸿蒙设备发现开关
 
     Args:
         new_config_yaml: 新配置的 YAML 字符串
@@ -176,19 +191,38 @@ def merge_config_with_ip_protection(
     # 解析新配置
     new_data = yaml.safe_load(new_config_yaml) or {}
 
-    # 读取现有配置的 IP
+    # 读取现有配置的保留字段
     if os.path.exists(existing_config_path):
         with open(existing_config_path, encoding="utf-8") as f:
             existing_data = yaml.safe_load(f) or {}
-        existing_ip = existing_data.get("worker", {}).get("ip")
+        existing_worker = existing_data.get("worker", {})
     else:
-        existing_ip = None
+        existing_worker = {}
 
-    # 合并：保留本地 IP
-    if existing_ip is not None and "worker" in new_data:
-        new_data["worker"]["ip"] = existing_ip
+    # 保留字段列表（不被远程配置覆盖）
+    preserved_fields = [
+        "ip",
+        "discover_android_devices",
+        "discover_ios_devices",
+        "discover_harmony_devices",
+    ]
+
+    # 合并：保留本地特定字段
+    if "worker" in new_data:
+        for field in preserved_fields:
+            if field in existing_worker and existing_worker[field] is not None:
+                new_data["worker"][field] = existing_worker[field]
 
     return new_data
+
+
+# 兼容旧函数名
+def merge_config_with_ip_protection(
+    new_config_yaml: str,
+    existing_config_path: str = get_user_config_path()
+) -> dict:
+    """兼容旧函数名，调用 merge_config_with_local_protection。"""
+    return merge_config_with_local_protection(new_config_yaml, existing_config_path)
 ```
 
 ### 合并示例
@@ -197,23 +231,32 @@ def merge_config_with_ip_protection(
 ```yaml
 worker:
   ip: "192.168.1.100"  # 本地指定的 IP
+  discover_android_devices: true  # 本地开启 Android 发现
+  discover_ios_devices: false     # 本地关闭 iOS 发现
+  discover_harmony_devices: false # 本地关闭鸿蒙发现
   port: 8088
 ```
 
 **下发配置 config_content**：
 ```yaml
 worker:
-  ip: null             # 下发的 IP（将被忽略）
-  port: 8090           # 新端口（将更新）
-  namespace: new_ns    # 新命名空间（将更新）
+  ip: null                       # 下发的 IP（将被忽略）
+  discover_android_devices: false # 下发的开关（将被忽略）
+  discover_ios_devices: true      # 下发的开关（将被忽略）
+  discover_harmony_devices: true  # 下发的开关（将被忽略）
+  port: 8090                     # 新端口（将更新）
+  namespace: new_ns              # 新命名空间（将更新）
 ```
 
 **合并结果**：
 ```yaml
 worker:
-  ip: "192.168.1.100"  # 保留本地 IP
-  port: 8090           # 更新
-  namespace: new_ns    # 更新
+  ip: "192.168.1.100"            # 保留本地 IP
+  discover_android_devices: true # 保留本地配置
+  discover_ios_devices: false    # 保留本地配置
+  discover_harmony_devices: false # 保留本地配置
+  port: 8090                     # 更新
+  namespace: new_ns              # 更新
 ```
 
 ## 配置保存设计（事务保护）
