@@ -18,7 +18,6 @@ class ActionType(Enum):
     OCR_WAIT = "ocr_wait"             # 等待文字出现
     OCR_INPUT = "ocr_input"           # 在文字附近输入
     OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
-    OCR_PASTE = "ocr_paste"           # OCR定位后粘贴
     OCR_EXIST = "ocr_exist"           # 检查文字是否存在
 
     # 图像匹配操作
@@ -34,6 +33,7 @@ class ActionType(Enum):
     DOUBLE_CLICK = "double_click"     # 双击 (x, y)
     SWIPE = "swipe"                   # 滑动 (方向/坐标)
     INPUT = "input"                   # 输入文本
+    PASTE = "paste"                   # 粘贴文本，坐标定位
     PRESS = "press"                   # 按键
     SCREENSHOT = "screenshot"         # 截图
     WAIT = "wait"                     # 固定等待
