@@ -248,12 +248,14 @@ async def execute_task(request: TaskRequest):
         # 记录原始请求数据（过滤 base64）
         logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
 
-        # 同步执行（不生成 task_id）
-        result = worker.execute_sync(
-            platform=request.platform,
-            actions=request.actions,
-            device_id=request.device_id,
-            window=request.window.model_dump(by_alias=True) if request.window else None,
+        # 同步执行（不生成 task_id）- 使用线程池避免阻塞事件循环
+        window_dict = request.window.model_dump(by_alias=True) if request.window else None
+        result = await asyncio.to_thread(
+            worker.execute_sync,
+            request.platform,
+            request.actions,
+            request.device_id,
+            window_dict,
         )
 
         # 添加 request_id 到返回结果
@@ -430,17 +432,17 @@ async def get_logs(
             lines, request_id, start_time, end_time
         )
 
-        # 执行查询
+        # 执行查询 - 使用线程池避免阻塞事件循环
         if mode == "lines":
-            content, log_count = query_by_lines(log_path, lines_val)
+            content, log_count = await asyncio.to_thread(query_by_lines, log_path, lines_val)
             files_scanned = 1
         elif mode == "request_id":
-            content, log_count, files_scanned = query_by_request_id(
-                log_path, request_id_val
+            content, log_count, files_scanned = await asyncio.to_thread(
+                query_by_request_id, log_path, request_id_val
             )
         else:  # time_range
-            content, log_count, files_scanned = query_by_time_range(
-                log_path, start_dt, end_dt
+            content, log_count, files_scanned = await asyncio.to_thread(
+                query_by_time_range, log_path, start_dt, end_dt
             )
 
         # 构建响应
