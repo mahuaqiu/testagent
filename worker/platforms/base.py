@@ -29,7 +29,7 @@ class PlatformManager(ABC):
 
     # 通用动作列表（所有平台支持）
     BASE_SUPPORTED_ACTIONS: Set[str] = {
-        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_paste",
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
         "ocr_move", "ocr_double_click", "ocr_exist",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
@@ -37,7 +37,7 @@ class PlatformManager(ABC):
         "image_click", "image_wait", "image_assert", "image_click_near_text",
         "image_move", "image_double_click", "image_exist",
         "image_get_position",
-        "click", "right_click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "click", "right_click", "double_click", "swipe", "drag", "input", "paste", "press", "screenshot", "wait",
         "move",
         "cmd_exec",  # 宿主机命令执行
         "pinch",  # 双指缩放（Android/iOS）
