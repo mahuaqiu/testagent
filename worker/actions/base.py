@@ -321,6 +321,51 @@ class BaseActionExecutor(ActionExecutor):
             return int(timeout_sec // 2)
         return 0
 
+    def _smart_wait_with_check(
+        self,
+        timeout_ms: int,
+        check_func: callable,
+        check_interval: int = 3,
+        pre_wait_threshold: int = 6
+    ) -> tuple[bool, float]:
+        """
+        智能等待策略（带中间检查）：在固定等待期间定期检查目标是否出现。
+
+        如果固定等待时间超过阈值，则在等待期间每隔一定时间检查一次。
+        这样既减少了不必要的识别调用，又能提前发现目标。
+
+        Args:
+            timeout_ms: 总超时时间（毫秒）
+            check_func: 检查函数，返回 True 表示目标已出现
+            check_interval: 检查间隔（秒），默认 3 秒
+            pre_wait_threshold: 固定等待阈值（秒），超过此值才进行中间检查，默认 6 秒
+
+        Returns:
+            tuple[bool, float]: (是否已找到目标, 已消耗的时间秒数)
+        """
+        import time
+
+        pre_wait = self._smart_wait_before_loop(timeout_ms)
+
+        # 如果固定等待时间不超过阈值，直接等待
+        if pre_wait <= pre_wait_threshold:
+            if pre_wait > 0:
+                time.sleep(pre_wait)
+            return (False, pre_wait)
+
+        # 固定等待超过阈值，每 check_interval 秒检查一次
+        elapsed = 0.0
+        while elapsed < pre_wait:
+            sleep_time = min(check_interval, pre_wait - elapsed)
+            time.sleep(sleep_time)
+            elapsed += sleep_time
+
+            # 检查目标是否出现
+            if check_func():
+                return (True, elapsed)
+
+        return (False, pre_wait)
+
     def _check_texts_in_ocr_result(
         self,
         platform: "PlatformManager",

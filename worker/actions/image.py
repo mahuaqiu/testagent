@@ -120,15 +120,31 @@ class ImageWaitAction(BaseActionExecutor):
         threshold = action.threshold if action.threshold is not None else 0.8
         index = action.index if action.index is not None else 0
 
-        # 智能等待：如果 timeout >= 5 秒，先固定等待 timeout/2 时间
-        pre_wait = self._smart_wait_before_loop(action.timeout)
-        if pre_wait > 0:
-            logger.debug(f"Smart wait: sleeping {pre_wait}s before loop (timeout={timeout}s)")
-            time.sleep(pre_wait)
+        # 定义检查函数：截图 + 图像匹配
+        def check_image_appeared():
+            screenshot = platform.take_screenshot(context)
+            if action.region:
+                screenshot = self._crop_region(screenshot, action.region)
+            position = self._find_image_position(
+                platform, screenshot, action.image_base64, threshold, index
+            )
+            return position is not None
 
+        # 智能等待（带中间检查）：固定等待超过6秒时每3秒检查一次
+        found, elapsed = self._smart_wait_with_check(action.timeout, check_image_appeared)
+        if found:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output="Image appeared",
+            )
+
+        # 继续剩余时间的循环检查
+        remaining_timeout = timeout - elapsed
         start_time = time.time()
 
-        while time.time() - start_time < timeout:
+        while time.time() - start_time < remaining_timeout:
             screenshot = platform.take_screenshot(context)
             if action.region:
                 screenshot = self._crop_region(screenshot, action.region)
