@@ -49,6 +49,10 @@ platforms:
     token_headers:
       - "X-Auth-Token"
       - "X-Request-Operator"
+    # Chromium 启动参数（字符串列表）
+    # 用于自定义浏览器行为，如禁用翻译、禁用自动化提示等
+    browser_args:
+      - "--disable-features=Translate,TranslateUI"  # 禁用浏览器翻译功能
 
   android:
     enabled: null                   # Only on Windows

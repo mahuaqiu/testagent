@@ -190,6 +190,9 @@ class PlatformConfig:
     # Web 专用 - Token 捕获
     token_headers: List[str] = field(default_factory=list)  # 要监听的 token header 名称列表
 
+    # Web 专用 - Chromium 启动参数（字符串列表）
+    browser_args: List[str] = field(default_factory=list)
+
     # iOS 专用
     wda_base_port: int = 8100
     wda_ipa_path: str = "wda/WebDriverAgent.ipa"
@@ -219,6 +222,7 @@ class PlatformConfig:
             clear_profile_on_start=data.get("clear_profile_on_start", True),
             request_blacklist=data.get("request_blacklist", []),
             token_headers=data.get("token_headers", []),
+            browser_args=data.get("browser_args", []),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),

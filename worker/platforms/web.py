@@ -106,6 +106,7 @@ class WebPlatformManager(PlatformManager):
         self.user_data_dir = config.user_data_dir
         self.clear_profile_on_start = config.clear_profile_on_start  # 启动前清理 Default 目录
         self.request_blacklist = config.request_blacklist  # 请求黑名单
+        self.browser_args = config.browser_args  # 用户配置的启动参数
 
         # 代理配置（由 start_app 动作参数传入）
         self._proxy_config: Optional[Dict[str, str]] = None  # Playwright proxy 格式
@@ -391,6 +392,11 @@ class WebPlatformManager(PlatformManager):
         chromium_args = [
             "--hide-crash-restore-bubble",  # 禁用"恢复页面"弹窗（替代失效的 --disable-session-crashed-bubble）
         ]
+
+        # 合并用户配置的启动参数
+        if self.browser_args:
+            chromium_args.extend(self.browser_args)
+            logger.info(f"Added browser args from config: {self.browser_args}")
 
         # 代理配置：显式设置代理，禁用系统代理
         # 如果传入代理参数，使用配置的代理；否则显式禁用代理
