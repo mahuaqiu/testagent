@@ -84,23 +84,34 @@
 
 ### 2.2 核心优化点
 
-#### 优化点 1：终极零拷贝
+#### 优化点 1：最小化内存拷贝
 
+**注意**：mss 10.x 的 `grab()` 方法不支持 `output` 参数，无法直接写入预分配 buffer。
+
+实际内存流动：
 ```
-Python 端:
-  pre_allocated_bytearray (固定大小，常驻内存)
-      ↑
-      │ sct.grab(output=bytearray) → C-level memcpy
-      │ (无需创建新 bytes 对象)
+mss 内部:
+  DXGI Desktop Duplication → GPU 纹理 → 新建 bytearray (shot.raw)
+      │
+      │ 每帧创建新 bytearray (不可避免，mss API 限制)
+      │
+      ▼ Python 端内存拷贝
+  pre_allocated_buffer[:] = shot.raw  # 一次内存拷贝
 
-Rust 端:
-  &[u8] slice (PyByteArray::as_bytes())
-      │ 物理地址固定，无分配
-      ↓
-  ID3D11Texture2D (GPU 纹理)
+Python → Rust:
+  pre_allocated_buffer (固定地址 bytearray)
+      │
+      ▼ PyByteArray::as_bytes() (零拷贝 slice 引用)
+  &[u8] (物理地址固定，无 Python→Rust 拷贝)
+      │
+      ▼ Staging Texture Upload
+  GPU 纹理
 ```
 
-**效果**：彻底消除每帧内存分配，30fps 录制时 CPU 内存操作接近零。
+**效果**：
+- Python→Rust 零拷贝（PyByteArray slice 直接引用）
+- Python 端一次内存拷贝（不可避免，mss API 限制）
+- Rust→GPU 使用 Staging 纹理高效上传
 
 #### 优化点 2：MF 内置颜色转换
 
@@ -233,8 +244,9 @@ output_path = recorder.stop()
 | monitor 值 | 说明 | 与截图一致性 |
 |------------|------|-------------|
 | `1` | 主屏幕（left=0） | ✅ 与 WindowsFrameSource 一致（默认） |
-| `2` | 副屏幕（另一个） | ✅ 与 WindowsFrameSource 一致 |
-| `0` | 全部屏幕（虚拟屏幕） | ❌ 仅录制支持 |
+| `2` | 副屏幕（另一个显示器） | ✅ 与 WindowsFrameSource 一致 |
+
+**注意**：`monitor=0`（全部屏幕）暂不支持，需要额外的虚拟屏幕合成逻辑，可在后续版本迭代。
 
 ### 5.3 Rust 端核心类
 
@@ -269,11 +281,19 @@ impl WinRecorder {
     fn get_monitor_size(monitor: u32) -> PyResult<(u32, u32)>;
     
     fn start(&mut self) -> PyResult<()>;
-    fn add_frame(&mut self, frame: PyBytes<'_>) -> PyResult<()>;
+    
+    /// 添加帧（使用 PyByteArray 支持可变 bytearray）
+    fn add_frame(&mut self, frame: &PyByteArray) -> PyResult<()> {
+        let bgra_data: &[u8] = frame.as_bytes();  // 零拷贝 slice
+        // ...
+    }
+    
     fn stop(&mut self) -> PyResult<String>;
     fn get_info(&self) -> PyResult<PyObject>;
 }
 ```
+
+**关键修正**：使用 `&PyByteArray` 替代 `PyBytes<'_>`，以支持 Python 的 `bytearray` 类型。
 
 ---
 
@@ -281,17 +301,37 @@ impl WinRecorder {
 
 ### 6.1 D3D11 纹理管理 (`d3d11.rs`)
 
+**双纹理架构**（关键修正）：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  D3D11Context                                               │
+│  ┌─────────────────────┐  ┌─────────────────────┐          │
+│  │ Staging Texture     │  │ GPU Texture (Shared)│          │
+│  │ D3D11_USAGE_STAGING │  │ D3D11_USAGE_DEFAULT │          │
+│  │ CPU_WRITE 可访问     │  │ GPU 默认池          │          │
+│  └─────────────────────┘  └─────────────────────┘          │
+│           │ Map/Unmap              │ CopyResource          │
+│           │ 写入 BGRA              │ Staging → GPU         │
+│           ▼                        ▼                       │
+│     &[u8] 数据               MFCreateDXGISurfaceBuffer      │
+└─────────────────────────────────────────────────────────────┘
+```
+
 | 方法 | 功能 |
 |------|------|
-| `D3D11Context::new()` | 创建 D3D11 设备和 GPU 纹理 |
-| `upload_bgra(&[u8])` | 上传 BGRA 数据到 GPU 纹理（Staging → Default） |
+| `D3D11Context::new()` | 创建 D3D11 设备、Staging 纹理 + GPU 纹理 |
+| `upload_bgra(&[u8])` | Map Staging → 写入 → Unmap → CopyResource 到 GPU |
 | `create_mf_sample()` | 将 GPU 纹理包装成 IMFMediaBuffer |
 | `detect_monitor(u32)` | 检测显示器配置（与 Python 端一致） |
 
-**关键参数**：
-- 纹理格式：`DXGI_FORMAT_B8G8R8A8_UNORM`（BGRA）
-- Usage：`D3D11_USAGE_DEFAULT`（GPU 默认池）
-- MiscFlags：`D3D11_RESOURCE_MISC_SHARED`（可共享给 MF）
+**纹理参数**：
+| 纹理类型 | Format | Usage | CPUAccess | MiscFlags |
+|---------|--------|-------|-----------|-----------|
+| **Staging** | `DXGI_FORMAT_B8G8R8A8_UNORM` | `D3D11_USAGE_STAGING` | `D3D11_CPU_ACCESS_WRITE` | 0 |
+| **GPU** | `DXGI_FORMAT_B8G8R8A8_UNORM` | `D3D11_USAGE_DEFAULT` | 0 | `D3D11_RESOURCE_MISC_SHARED` |
+
+**注意**：`D3D11_USAGE_DEFAULT` 纹理不能直接 Map/Unmap，必须通过 Staging 纹理间接写入。
 
 ### 6.2 Media Foundation SinkWriter (`mf_writer.rs`)
 
@@ -313,12 +353,36 @@ impl WinRecorder {
 | 方法 | 功能 |
 |------|------|
 | `AudioCapture::new()` | 启动 WASAPI 音频捕获线程 |
-| `get_packet()` | 获取音频数据包 |
+| `get_packet()` | 获取音频数据包（带时间戳） |
 | `stop()` | 停止音频捕获 |
 
 **关键配置**：
 - 模式：`AUDCLNT_STREAMFLAGS_LOOPBACK`（捕获系统音频）
 - 格式：44.1kHz, 16bit, stereo
+
+### 6.4 音视频同步机制
+
+**双流写入**：
+```
+┌─────────────────────────────────────────────────────────────┐
+│  IMFSinkWriter                                               │
+│  ┌─────────────────────┐  ┌─────────────────────┐          │
+│  │ Stream 0: Video     │  │ Stream 1: Audio     │          │
+│  │ MFVideoFormat_H264  │  │ MFAudioFormat_AAC   │          │
+│  └─────────────────────┘  └─────────────────────┘          │
+│           │                        │                        │
+│           │ SetSampleTime(t)       │ SetSampleTime(t)      │
+│           │ 按帧时间戳             │ 按音频采样时间戳       │
+│           ▼                        ▼                        │
+│     WriteSample(0)           WriteSample(1)                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**时间戳计算**：
+- 视频：`timestamp = frame_count * frame_duration`（100ns 单位）
+- 音频：`timestamp = sample_count * (1_000_000_000 / sample_rate) / 100`
+
+**同步策略**：SinkWriter 内部会根据时间戳交错写入视频和音频帧，无需手动同步。
 
 ---
 
@@ -378,22 +442,49 @@ pub enum RecorderError {
 class WindowsFrameSource(FrameSource):
     def __init__(self, fps: int = 10, monitor: int = 1):
         self.monitor = monitor
+        self._sct: Optional[mss.mss] = None  # 复用 mss 实例
         self._bgra_buffer: Optional[bytearray] = None
         self._bgra_memview: Optional[memoryview] = None
     
+    def _ensure_sct(self) -> mss.mss:
+        """确保 mss 实例可用（复用，避免重复初始化）"""
+        if self._sct is None:
+            self._sct = mss.mss()
+        return self._sct
+    
     def get_frame_raw(self) -> memoryview:
-        """获取 BGRA 原始帧（录制用，零拷贝）"""
+        """获取 BGRA 原始帧（录制用）
+        
+        内存流动：
+        1. mss.grab() → 新建 bytearray (shot.raw，不可避免)
+        2. buffer[:] = shot.raw → 一次内存拷贝到预分配 buffer
+        3. Rust 端 PyByteArray::as_bytes() → 零拷贝 slice 引用
+        """
         if self._bgra_buffer is None:
             width, height = self.get_screen_size()
             self._bgra_buffer = bytearray(width * height * 4)
             self._bgra_memview = memoryview(self._bgra_buffer)
         
-        with mss.mss() as sct:
-            _, target_monitor = get_mapped_monitor_index(self.monitor)
-            sct.grab(target_monitor, output=self._bgra_buffer)
+        sct = self._ensure_sct()
+        from worker.screen.monitor_utils import get_mapped_monitor_index
+        _, target_monitor = get_mapped_monitor_index(self.monitor)
+        
+        # mss grab 返回新对象，需要拷贝到预分配 buffer
+        shot = sct.grab(target_monitor)
+        self._bgra_buffer[:] = shot.raw  # 内存拷贝
         
         return self._bgra_memview
+    
+    def stop(self) -> None:
+        """清理 mss 实例"""
+        if self._sct:
+            self._sct.close()
+            self._sct = None
 ```
+
+**关键修正**：
+- mss 实例复用（避免重复初始化 DXGI Desktop Duplication）
+- 使用 `buffer[:] = shot.raw` 进行内存拷贝（mss 不支持 output 参数）
 
 ### 8.3 recorder.py 重写
 
@@ -447,18 +538,6 @@ class ScreenRecorder:
 }
 ```
 
-### 9.3 启动录制（全部屏幕）
-
-```json
-{
-  "action_type": "start_recording",
-  "params": {
-    "fps": 15,
-    "monitor": 0
-  }
-}
-```
-
 ---
 
 ## 10. 配置项
@@ -480,9 +559,12 @@ recording:
 | 指标 | 原方案（FFmpeg） | 新方案（win-recorder） |
 |------|-----------------|----------------------|
 | **打包体积** | ~90MB (ffmpeg.exe) | **<1MB (DLL)** |
-| **CPU 占用** | ~15-20%（软编） | **<5%（硬编）** |
-| **内存分配** | 每帧新建 bytes | **零分配（固定 buffer）** |
+| **CPU 占用** | ~15-20%（JPEG 解码 + 软编） | **<5%（GPU 硬编）** |
+| **Python 端内存** | 每帧新建 JPEG bytes | **一次拷贝（mss → buffer）** |
+| **Python→Rust** | 每帧新 bytes 对象 | **零拷贝（PyByteArray slice）** |
 | **录制质量** | 10fps, 1080p | **30fps, 4K** |
+
+**说明**：mss API 限制导致 Python 端无法完全避免内存分配，但通过预分配 buffer + PyByteArray slice，Python→Rust 实现零拷贝。
 
 ---
 
@@ -500,6 +582,7 @@ recording:
 
 | 版本 | 功能 |
 |------|------|
-| v0.2.0 | H.265 HEVC 编码支持 |
-| v0.3.0 | 实时推流（WebSocket） |
-| v0.4.0 | 多显示器合并录制 |
+| v0.2.0 | monitor=0 全部屏幕录制（虚拟屏幕合成） |
+| v0.3.0 | H.265 HEVC 编码支持 |
+| v0.4.0 | 实时推流（WebSocket） |
+| v0.5.0 | 多显示器合并录制 |
