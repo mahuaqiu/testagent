@@ -25,12 +25,13 @@ D:\code\win-recorder\
 │   ├── recorder.rs               # WinRecorder 核心类（Python API）
 │   ├── d3d11.rs                  # D3D11 设备 + 双纹理管理
 │   ├── mf_writer.rs              # Media Foundation SinkWriter
-│   ├── audio.rs                  # WASAPI 音频捕获（可选）
 │   └── error.rs                  # RecorderError 错误类型
 ├── tests/
 │   └── test_recorder.py          # Python 功能测试
 └── README.md                     # 使用文档
 ```
+
+**注意**：`audio.rs`（WASAPI 音频捕获）推迟到 v0.2.0 实现。当前版本仅支持视频录制。
 
 ---
 
@@ -249,6 +250,7 @@ impl D3D11Context {
         // 创建 D3D11 设备
         let mut device = None;
         let mut context = None;
+        let mut feature_level = D3D_FEATURE_LEVEL_11_0;
         let feature_levels = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1];
 
         unsafe {
@@ -260,7 +262,7 @@ impl D3D11Context {
                 Some(&feature_levels),
                 D3D11_SDK_VERSION,
                 Some(&mut device),
-                None,
+                Some(&mut feature_level),  // 输出参数：实际获取的特性级别
                 Some(&mut context),
             )
         }
@@ -517,7 +519,8 @@ pub struct MFSinkWriter {
 ```rust
 /// 启动 Media Foundation
 pub fn mf_startup() -> Result<(), RecorderError> {
-    unsafe { MFStartup(MF_VERSION, MF_STARTUP_LITE) }
+    // MFSTARTUP_LITE = 0x1，轻量级启动（无需初始化 sockets）
+    unsafe { MFStartup(MF_VERSION, MFSTARTUP_LITE) }
         .map_err(|e| RecorderError::MFError(format!("MFStartup failed: {}", e)))?;
     Ok(())
 }
@@ -544,9 +547,19 @@ impl MFSinkWriter {
         mf_startup()?;
 
         unsafe {
-            // 创建 MP4 Media Sink
-            let sink = MFCreateTranscodeSinkActivate()
-                .map_err(|e| RecorderError::MFError(format!("Create sink failed: {}", e)))?;
+            // 方式 1：使用 MFCreateFile + MFCreateMPEG4MediaSink（更简单直接）
+            // 创建输出文件 ByteStream
+            let byte_stream = MFCreateFile(
+                MF_FILE_ACCESSMODE_WRITE,
+                MF_FILE_FLAGS_NONE,
+                MF_FILE_OPENMODE_FAIL_IF_EXISTS,
+                output_path.as_os_str(),
+            )
+            .map_err(|e| RecorderError::MFError(format!("Create file failed: {}", e)))?;
+
+            // 创建 MPEG-4 Media Sink
+            let sink = MFCreateMPEG4MediaSink(&byte_stream)
+                .map_err(|e| RecorderError::MFError(format!("Create MP4 sink failed: {}", e)))?;
 
             // 创建 SinkWriter
             let writer = MFCreateSinkWriterFromMediaSink(&sink, None)
@@ -915,6 +928,7 @@ impl WinRecorder {
     /// 获取录制信息
     fn get_info(&self) -> PyResult<PyObject> {
         Python::with_gil(|py| {
+            // PyO3 0.22: 使用 PyDict::new(py)
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("width", self.width)?;
             dict.set_item("height", self.height)?;
