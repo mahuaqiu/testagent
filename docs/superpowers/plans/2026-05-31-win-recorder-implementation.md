@@ -557,8 +557,8 @@ impl MFSinkWriter {
             )
             .map_err(|e| RecorderError::MFError(format!("Create file failed: {}", e)))?;
 
-            // 创建 MPEG-4 Media Sink
-            let sink = MFCreateMPEG4MediaSink(&byte_stream)
+            // 创建 MPEG-4 Media Sink（视频/音频类型会在 SinkWriter.SetInputMediaType 中设置）
+            let sink = MFCreateMPEG4MediaSink(&byte_stream, None, None)
                 .map_err(|e| RecorderError::MFError(format!("Create MP4 sink failed: {}", e)))?;
 
             // 创建 SinkWriter
