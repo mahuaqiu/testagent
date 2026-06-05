@@ -290,7 +290,8 @@
       "Bash(maturin develop *)",
       "Bash(D:\\\\code\\\\win-recorder\\\\.venv\\\\Scripts\\\\python.exe tests/test_minimal.py)",
       "Bash(echo \".worktrees/\")",
-      "Bash(echo \"worktrees/\")"
+      "Bash(echo \"worktrees/\")",
+      "Bash(perl *)"
     ]
   }
 }
