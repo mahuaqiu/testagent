@@ -102,6 +102,14 @@ class ScreenManager:
             # 队列空时返回空白帧
             return self._frame_source.get_blank_frame()
 
+    def get_frame_bgra(self) -> bytearray:
+        """获取 BGRA 原始帧（供 win-recorder 使用）。
+
+        Returns:
+            bytearray: BGRA 格式的原始像素数据
+        """
+        return self._frame_source.get_frame_bgra()
+
     def _capture_loop(self) -> None:
         """后台截图循环（队列满时丢弃旧帧）。"""
         consecutive_errors = 0
@@ -136,13 +144,16 @@ class ScreenManager:
                     time.sleep(0.5)
 
     def start_recording(self, output_path: str, fps: int = 10,
-                        timeout_ms: int = 7200000) -> bool:
+                        timeout_ms: int = 7200000, audio: bool = False,
+                        monitor: int = 1) -> bool:
         """启动录屏。
 
         Args:
             output_path: 输出文件路径
             fps: 帧率
             timeout_ms: 超时时间（毫秒），默认 2 小时
+            audio: 是否录制音频（仅 win-recorder 支持）
+            monitor: 显示器选择（仅 win-recorder 支持）
 
         Returns:
             bool: 是否成功启动（False 表示已有录屏进行中）
@@ -155,7 +166,7 @@ class ScreenManager:
                 return False
 
             timeout_sec = timeout_ms // 1000
-            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec)
+            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec, audio, monitor)
             self._recorder.start()
             self._is_recording = True
             logger.info(f"Recording started: {output_path}")

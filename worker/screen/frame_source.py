@@ -27,6 +27,18 @@ class FrameSource(ABC):
         pass
 
     @abstractmethod
+    def get_frame_bgra(self) -> bytearray:
+        """获取 BGRA 原始帧（用于 win-recorder 硬件编码）。
+
+        Returns:
+            bytearray: BGRA 格式的原始像素数据
+
+        Note:
+            默认实现抛出 NotImplementedError，子类根据能力选择实现
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support BGRA frame")
+
+    @abstractmethod
     def get_screen_size(self) -> tuple[int, int]:
         """获取屏幕尺寸 (width, height)。"""
         pass
@@ -229,6 +241,40 @@ class WindowsFrameSource(FrameSource):
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=80)
             return buffer.getvalue()
+
+    def get_frame_bgra(self) -> bytearray:
+        """获取 BGRA 原始帧（用于 win-recorder 硬件编码）。
+
+        Returns:
+            bytearray: BGRA 格式的原始像素数据，长度为 width * height * 4
+        """
+        from worker.screen.monitor_utils import get_mapped_monitor_index
+
+        import mss
+
+        with mss.mss() as sct:
+            target_index, target_monitor = get_mapped_monitor_index(self.monitor)
+            self._monitor_offset = (target_monitor['left'], target_monitor['top'])
+            screenshot = sct.grab(target_monitor)
+
+            # mss 返回的是 RGB 格式，需要转换为 BGRA
+            # screenshot.rgb 顺序是 R, G, B (每3字节一个像素)
+            rgb_data = screenshot.rgb
+            width = screenshot.width
+            height = screenshot.height
+
+            # 转换为 BGRA
+            bgra = bytearray(width * height * 4)
+            for i in range(width * height):
+                src_offset = i * 3
+                dst_offset = i * 4
+                # RGB -> BGRA
+                bgra[dst_offset] = rgb_data[src_offset + 2]  # B
+                bgra[dst_offset + 1] = rgb_data[src_offset + 1]  # G
+                bgra[dst_offset + 2] = rgb_data[src_offset]  # R
+                bgra[dst_offset + 3] = 255  # A (完全不透明)
+
+            return bgra
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取显示器尺寸。使用显示器映射逻辑。"""

@@ -28,6 +28,8 @@ class StartRecordingAction(ActionExecutor):
                 - value: 输出文件名（可选，默认自动生成）
                 - params.fps: 帧率（默认 10）
                 - params.timeout: 超时（毫秒，默认 7200000）
+                - params.monitor: 显示器选择（默认 1，主屏幕）
+                - params.audio: 是否录制音频（默认 false）
             context: 执行上下文
         """
         from worker.config import load_config
@@ -48,16 +50,18 @@ class StartRecordingAction(ActionExecutor):
 
         fps = action.params.get("fps", 10) if action.params else 10
         timeout_ms = action.params.get("timeout", 7200000) if action.params else 7200000
+        monitor = action.params.get("monitor", 1) if action.params else 1
+        audio = action.params.get("audio", False) if action.params else False
 
         # 获取设备 ID
         device_id = getattr(platform, "_current_device", None) or "windows"
 
         try:
             # 创建 FrameSource（Windows 默认）
-            frame_source = WindowsFrameSource(fps=fps)
+            frame_source = WindowsFrameSource(fps=fps, monitor=monitor)
 
             screen_manager = get_screen_manager(device_id, frame_source)
-            success = screen_manager.start_recording(output_path, fps, timeout_ms)
+            success = screen_manager.start_recording(output_path, fps, timeout_ms, audio, monitor)
 
             if success:
                 return ActionResult(

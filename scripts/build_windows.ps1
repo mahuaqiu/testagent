@@ -5,6 +5,7 @@ param(
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.4-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel 路径
+    [string]$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-*.whl",  # win-recorder wheel 路径
     [switch]$Clean,
     [switch]$BuildInstaller  # Build installer directly
 )
@@ -85,6 +86,18 @@ if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
 } else {
     Write-Warning "win-control wheel not found at: $WinControlWheel"
     Write-Warning "System control actions (set_resolution, set_volume, audio_device) may not work!"
+}
+
+# 安装 win-recorder wheel (硬件录屏)
+if ($WinRecorderWheel -ne "") {
+    $WinRecorderWheelFile = Get-Item $WinRecorderWheel -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($WinRecorderWheelFile) {
+        Write-Host "  Installing win-recorder wheel: $($WinRecorderWheelFile.FullName)"
+        pip install $WinRecorderWheelFile.FullName
+    } else {
+        Write-Warning "win-recorder wheel not found at pattern: $WinRecorderWheel"
+        Write-Warning "Hardware recording will not be available, will fall back to FFmpeg"
+    }
 }
 
 Write-Host "[3/6] Generating version file..."
