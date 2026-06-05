@@ -278,7 +278,7 @@ class OCRClient:
         self,
         source_bytes: bytes,
         template_bytes: bytes,
-        threshold: float = 0.8,
+        threshold: float = 0.9,
         method: str = "template",
         multi_target: bool = False,
     ) -> list[MatchResult]:
@@ -341,7 +341,7 @@ class OCRClient:
         self,
         source_bytes: bytes,
         template_bytes: bytes,
-        threshold: float = 0.8,
+        threshold: float = 0.9,
         method: str = "template",
     ) -> Optional[MatchResult]:
         """
@@ -365,7 +365,7 @@ class OCRClient:
         target_image_bytes: bytes,
         filter_text: str,
         max_distance: int = 500,
-        threshold: float = 0.8,
+        threshold: float = 0.9,
         method: str = "template",
     ) -> Optional[MatchResult]:
         """

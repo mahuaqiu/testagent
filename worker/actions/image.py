@@ -51,7 +51,7 @@ class ImageClickAction(BaseActionExecutor):
             screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
             platform, screenshot, action.image_base64, threshold, index
@@ -117,7 +117,7 @@ class ImageWaitAction(BaseActionExecutor):
             )
 
         timeout = action.timeout / 1000
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
 
         # 定义检查函数：截图 + 图像匹配
@@ -199,7 +199,7 @@ class ImageAssertAction(BaseActionExecutor):
         screenshot = platform.take_screenshot(context)
         if action.region:
             screenshot = self._crop_region(screenshot, action.region)
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
             platform, screenshot, action.image_base64, threshold, index
@@ -278,7 +278,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
         template_bytes = platform._base64_to_bytes(action.image_base64)
 
         # 调用 match_near_text
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         max_distance = action.end_x if action.end_x is not None else 500  # 复用 end_x 作为 max_distance
 
         match = platform.ocr_client.match_near_text(
@@ -351,7 +351,7 @@ class ImageMoveAction(BaseActionExecutor):
             screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
             platform, screenshot, action.image_base64, threshold, index
@@ -420,7 +420,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
             screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
             platform, screenshot, action.image_base64, threshold, index
@@ -525,7 +525,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
         cropped_bytes = cropped_bytes_io.getvalue()
 
         # 在裁剪区域内查找目标图片
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         target_index = action.target_index if action.target_index is not None else 0
         target_position = self._find_image_position(
             platform, cropped_bytes, action.image_base64, threshold, target_index
@@ -639,7 +639,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
         cropped_bytes = cropped_bytes_io.getvalue()
 
         # 在裁剪区域内查找目标图片
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         target_index = action.target_index if action.target_index is not None else 0
         target_position = self._find_image_position(
             platform, cropped_bytes, action.image_base64, threshold, target_index
@@ -709,7 +709,7 @@ class ImageExistAction(BaseActionExecutor):
             screenshot = self._crop_region(screenshot, action.region)
 
         # 查找图像位置
-        threshold = action.threshold if action.threshold is not None else 0.8
+        threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
         position = self._find_image_position(
             platform, screenshot, action.image_base64, threshold, index

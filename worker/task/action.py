@@ -74,7 +74,7 @@ class Action:
     value: str | list[str] | None = None    # 文字/URL/按键值（支持 list 批量验证）
     image_base64: str | None = None       # 图像模板 base64 编码
     offset: dict[str, int] | None = None  # 点击偏移 {"x": 10, "y": 5}
-    threshold: float = 0.8                   # 图像匹配阈值
+    threshold: float = 0.9                   # 图像匹配阈值
     timeout: int = 30000                     # 超时时间(ms)
     match_mode: str = "exact"                # OCR 匹配模式
     screenshot: bool = False                 # 是否截图
@@ -163,7 +163,7 @@ class Action:
             value=value,
             image_base64=data.get("image_base64"),
             offset=data.get("offset"),
-            threshold=data.get("threshold", 0.8),
+            threshold=data.get("threshold", 0.9),
             timeout=data.get("timeout", 30000),
             match_mode=data.get("match_mode", "exact"),
             screenshot=data.get("screenshot", False),
@@ -212,7 +212,7 @@ class Action:
             result["image_base64"] = self.image_base64
         if self.offset is not None:
             result["offset"] = self.offset
-        if self.threshold != 0.8:
+        if self.threshold != 0.9:
             result["threshold"] = self.threshold
         if self.timeout != 30000:
             result["timeout"] = self.timeout

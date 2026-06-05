@@ -407,7 +407,7 @@ class PlatformManager(ABC):
         # 在本地结果中查找（不调用 OCR 服务）
         return self.ocr_client.find_text_in_results(ocr_results, text, match_mode, index)
 
-    def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.8, index: int = 0) -> tuple[int, int] | None:
+    def _find_image_position(self, source_bytes: bytes, template_base64: str, threshold: float = 0.9, index: int = 0) -> tuple[int, int] | None:
         """
         在源图像中查找模板图像位置，支持 index 参数选择第几个匹配结果。
 
@@ -471,7 +471,7 @@ class PlatformManager(ABC):
         self,
         source_bytes: bytes,
         template_base64: str,
-        threshold: float = 0.8
+        threshold: float = 0.9
     ) -> list[tuple[int, int]]:
         """
         获取所有匹配图片的坐标列表。

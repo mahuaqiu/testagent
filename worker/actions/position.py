@@ -109,7 +109,7 @@ class ImageGetPositionExecutor(BaseActionExecutor):
             )
 
         # 获取阈值
-        threshold = action.threshold if action.threshold else 0.8
+        threshold = action.threshold if action.threshold else 0.9
 
         # 获取所有匹配图片的坐标
         positions = platform._find_all_image_positions(screenshot, action.image_base64, threshold)
