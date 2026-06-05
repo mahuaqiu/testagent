@@ -255,23 +255,108 @@ class MJPEGRenderer {
 | H.264 | 1920x1080 | 10fps | 1-3 Mbps |
 | MJPEG | 1920x1080 | 10fps | 5-15 Mbps |
 
+## 兼容性说明
+
+### 浏览器兼容性
+
+| 浏览器 | MSE H.264 | WASM fallback |
+|--------|-----------|---------------|
+| Chrome/Edge | ✅ | ✅ |
+| Firefox | ✅ | ✅ |
+| Safari Desktop | ⚠️ 有限制 | ✅ |
+| Safari iOS | ❌ | ✅ |
+| Mobile Chrome | ✅ | ✅ |
+
+**说明**：
+- Safari 对 MSE 有严格限制，不支持直接解码原始 H.264 流
+- iOS Safari 不支持 MediaSource API
+- 所有平台均使用 **WASM fallback** 作为兜底方案（推荐使用 jsmpeg 或 h264wasm）
+
+### 各平台功能矩阵
+
+| 平台 | codec=h264 | codec=mjpeg | codec=jpeg |
+|------|------------|-------------|------------|
+| Windows | win-recorder 流编码 | 不支持 | mss+JPEG |
+| iOS | 不支持 | HTTP→WS 代理透传 | 解析 MJPEG |
+| Android | 未来支持 | minicap MJPEG | minicap JPEG |
+| Mac | 不支持 | 不支持 | mss+JPEG |
+
+## 错误处理与降级策略
+
+### Worker 端
+
+| 错误场景 | 处理策略 |
+|----------|----------|
+| H.264 编码器初始化失败 | 降级到 JPEG 模式，发送错误日志 |
+| 编码过程出错（如码流格式错误） | 跳过当前帧，记录错误，返回 None |
+| WebSocket 发送超时 | 断开连接，释放编码器资源 |
+| 帧队列满 | 丢弃最旧帧，保证实时性 |
+
+### 前端
+
+| 错误场景 | 处理策略 |
+|----------|----------|
+| MSE 初始化失败 | 自动切换到 WASM 解码器 |
+| WASM 解码失败 | 降级到 JPEG 单帧模式 |
+| 网络断开 | 显示断连提示，自动重连（最多 3 次） |
+| 解码延迟过高 | 丢弃过旧帧，保持画面同步 |
+
+## 帧类型检测优化
+
+```typescript
+// hooks/useScreenStream.ts
+function detectFrameType(data: ArrayBuffer): FrameType {
+  if (!data || data.byteLength < 4) {
+    return 'unknown';
+  }
+
+  const view = new DataView(data);
+
+  // 优先检测 H.264 (带帧类型前缀)
+  const firstByte = view.getUint8(0);
+  if (firstByte >= 0x01 && firstByte <= 0x03) {
+    return 'h264';
+  }
+
+  // 检测 JPEG/MJPEG 魔数: FFD8
+  const magic = view.getUint16(0);
+  if (magic === 0xFFD8) {
+    // 检测是否为 MJPEG (多个 FFD8 连在一起)
+    if (data.byteLength >= 6 && view.getUint8(2) === 0xFF) {
+      return 'mjpeg';
+    }
+    return 'jpeg';
+  }
+
+  // H.264 SPS (NAL unit type = 7)
+  if (magic === 0x0001 && view.getUint8(4) === 0x07) {
+    return 'h264';
+  }
+
+  return 'unknown';
+}
+```
+
 ## 实施计划
 
 ### 阶段 1: win-recorder 流式编码
 1. Rust 侧新增 `StreamingEncoder` 类
 2. 实现内存输出 `IMFByteStream`
 3. PyO3 绑定 `StreamingRecorder`
+4. 单元测试验证编码输出
 
 ### 阶段 2: Worker 推流改造
 1. 添加 `?codec=` 参数解析
 2. Windows 集成 H.264 编码
 3. iOS 添加 MJPEG 透传模式
+4. 错误处理和降级逻辑
 
 ### 阶段 3: 前端改造
-1. 帧类型自动检测
+1. 帧类型自动检测（优化版）
 2. H.264 解码渲染 (MSE + WASM fallback)
 3. MJPEG canvas 渲染
 4. 兼容单帧 JPEG
+5. 浏览器兼容性测试
 
 ## 兼容性
 
