@@ -193,6 +193,11 @@ class PlatformConfig:
     # Web 专用 - Chromium 启动参数（字符串列表）
     browser_args: List[str] = field(default_factory=list)
 
+    # Web 专用 - 缓存自动清理
+    cache_clear_enabled: bool = True           # 是否启用自动清理
+    cache_clear_interval_hours: int = 24       # 清理间隔（小时）
+    cache_clear_clear_on_idle: bool = True     # 是否仅在空闲时清理
+
     # iOS 专用
     wda_base_port: int = 8100
     wda_ipa_path: str = "wda/WebDriverAgent.ipa"
@@ -223,6 +228,9 @@ class PlatformConfig:
             request_blacklist=data.get("request_blacklist", []),
             token_headers=data.get("token_headers", []),
             browser_args=data.get("browser_args", []),
+            cache_clear_enabled=data.get("cache_clear_enabled", True),
+            cache_clear_interval_hours=data.get("cache_clear_interval_hours", 24),
+            cache_clear_clear_on_idle=data.get("cache_clear_clear_on_idle", True),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),

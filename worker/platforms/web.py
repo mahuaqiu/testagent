@@ -1495,4 +1495,37 @@ class WebPlatformManager(PlatformManager):
             context=new_page,
         )
 
+    def clear_browser_data(self) -> None:
+        """清理整个浏览器数据目录。
+
+        删除范围：
+        - data/chrome_profile（整个目录）
+
+        这会导致：
+        - 清除所有 Cookie、Local Storage、Session Storage
+        - 清除所有缓存（HTTP 缓存、代码缓存）
+        - 清除登录状态（需要重新登录）
+        - 清除浏览器设置
+
+        边界处理：
+        - 目录不存在时直接返回（幂等）
+        - 浏览器进程占用时跳过清理，记录警告日志
+        """
+        user_data_dir = self._get_user_data_dir()
+
+        if not os.path.exists(user_data_dir):
+            logger.debug("User data dir not exists, skip data clear")
+            return
+
+        # 检查浏览器是否在运行（通过检查 context 是否有效）
+        if self._browser_context:
+            logger.warning("Browser is running, skip data clear to avoid lock")
+            return
+
+        try:
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+            logger.info(f"Cleared browser data: {user_data_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to clear browser data {user_data_dir}: {e}")
+
     

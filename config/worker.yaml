@@ -53,6 +53,10 @@ platforms:
     # 用于自定义浏览器行为，如禁用翻译、禁用自动化提示等
     browser_args:
       - "--disable-features=Translate,TranslateUI"  # 禁用浏览器翻译功能
+    # 缓存自动清理配置
+    cache_clear_enabled: true              # 是否启用自动清理
+    cache_clear_interval_hours: 24         # 清理间隔（小时）
+    cache_clear_clear_on_idle: true        # 是否仅在空闲时清理
 
   android:
     enabled: null                   # Only on Windows

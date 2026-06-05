@@ -5,16 +5,19 @@ Worker 主服务。
 """
 
 import base64
+import json
 import logging
+import os
 import sys
 import threading
 import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict
 
 from common.ocr_client import OCRClient
+from common.packaging import get_base_dir
 from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
 from worker.config import PlatformConfig, WorkerConfig
@@ -183,6 +186,11 @@ class Worker:
 
         # 设备监控
         self.device_monitor: DeviceMonitor | None = None
+
+        # 缓存清理状态文件路径
+        self._cache_clear_status_file = os.path.join(
+            get_base_dir(), "data", "cache_clear_status.json"
+        )
 
     @property
     def status(self) -> str:
@@ -811,6 +819,88 @@ class Worker:
 
         return True
 
+    def _get_cache_clear_status(self) -> Dict[str, Any]:
+        """获取缓存清理状态。
+
+        Returns:
+            Dict 包含 last_clear_timestamp 字段
+        """
+        if not os.path.exists(self._cache_clear_status_file):
+            return {"last_clear_timestamp": 0}
+
+        try:
+            with open(self._cache_clear_status_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"last_clear_timestamp": 0}
+
+    def _save_cache_clear_status(self, status: Dict[str, Any]) -> None:
+        """保存缓存清理状态。"""
+        try:
+            os.makedirs(os.path.dirname(self._cache_clear_status_file), exist_ok=True)
+            with open(self._cache_clear_status_file, "w", encoding="utf-8") as f:
+                json.dump(status, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save cache clear status: {e}")
+
+    def _check_and_clear_web_data(self) -> None:
+        """检查并清理 Web 平台数据。
+
+        触发条件：
+        - 缓存清理功能已启用
+        - 距离上次清理超过配置的间隔
+        - 当前状态为 idle（无任务执行）或 clear_on_idle 为 false
+        """
+        # 获取 Web 平台配置
+        web_config = self.platform_configs.get("web")
+        if not web_config:
+            return
+
+        # 检查是否启用
+        if not getattr(web_config, "cache_clear_enabled", True):
+            logger.debug("Cache clear is disabled")
+            return
+
+        # 检查是否仅在空闲时清理
+        clear_on_idle = getattr(web_config, "cache_clear_clear_on_idle", True)
+        if clear_on_idle and self._status != "online":
+            logger.debug("Not idle, skip cache clear check")
+            return
+
+        # 检查时间间隔
+        interval_hours = getattr(web_config, "cache_clear_interval_hours", 24)
+        interval_seconds = interval_hours * 3600
+
+        status = self._get_cache_clear_status()
+        last_clear = status.get("last_clear_timestamp", 0)
+        now = time.time()
+
+        if now - last_clear < interval_seconds:
+            logger.debug(f"Cache clear interval not reached: {now - last_clear}s < {interval_seconds}s")
+            return
+
+        # 获取 Web 平台管理器
+        manager = self.platform_managers.get("web")
+        if not manager:
+            logger.warning("Web platform manager not available")
+            return
+
+        # 检查 Web 平台是否已启动
+        if not manager.is_available():
+            logger.debug("Web platform not started, skip data clear")
+            return
+
+        # 执行清理
+        try:
+            manager.clear_browser_data()
+            # 更新清理时间
+            self._save_cache_clear_status({
+                "last_clear_timestamp": now,
+                "last_clear_time": datetime.now().isoformat()
+            })
+        except Exception as e:
+            logger.warning(f"Failed to clear web data: {e}")
+
     def execute_task(self, task: Task) -> TaskResult:
         """
         执行任务。
@@ -927,6 +1017,9 @@ class Worker:
 
         finally:
             self._status = "online"
+
+            # 检查是否需要清理 Web 数据
+            self._check_and_clear_web_data()
 
             # 清理执行上下文（不关闭会话，保持资源复用）
             if context is not None:
