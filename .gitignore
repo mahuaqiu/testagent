@@ -18,3 +18,5 @@ worker.log
 worker/_version.py
 /build_env_nuitka
 selfIdentity.plist
+.worktrees/
+worktrees/
