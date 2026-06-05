@@ -288,7 +288,9 @@
       "PowerShell(Set-Location \"D:\\\\code\\\\autotest\\\\.claude\\\\worktrees\\\\agent-a7f82932825ae65f7\"; $GIT_DIR = \\(git rev-parse --git-dir\\); $GIT_COMMON = \\(git rev-parse --git-common-dir\\); Write-Output \"GIT_DIR: $GIT_DIR\"; Write-Output \"GIT_COMMON: $GIT_COMMON\"; Write-Output \"Are they equal: $\\($GIT_DIR -eq $GIT_COMMON\\)\")",
       "PowerShell(Get-ChildItem -Path D:\\\\code\\\\win-recorder -Recurse -File | Where-Object { $_.FullName -notmatch 'target|\\\\.git|__pycache__|\\\\.pyc' } | Select-Object -ExpandProperty FullName)",
       "Bash(maturin develop *)",
-      "Bash(D:\\\\code\\\\win-recorder\\\\.venv\\\\Scripts\\\\python.exe tests/test_minimal.py)"
+      "Bash(D:\\\\code\\\\win-recorder\\\\.venv\\\\Scripts\\\\python.exe tests/test_minimal.py)",
+      "Bash(echo \".worktrees/\")",
+      "Bash(echo \"worktrees/\")"
     ]
   }
 }
