@@ -5,10 +5,12 @@ param(
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.4-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel 路径
-    [string]$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-*.whl",  # win-recorder wheel 路径
     [switch]$Clean,
     [switch]$BuildInstaller  # Build installer directly
 )
+
+# 内置 wheel 路径（无需传参）
+$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-0.1.0-cp312-cp312-win_amd64.whl"
 
 # 定义工程根目录（使用绝对路径，避免相对路径问题）
 # $PSScriptRoot 是脚本所在目录（scripts），需要获取其父目录作为项目根目录
