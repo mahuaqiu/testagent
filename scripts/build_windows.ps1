@@ -70,7 +70,7 @@ pip install --upgrade pip
 pip install nuitka ordered-set zstandard
 pip install -e ".[all]"
 
-# 安装 perfwin wheel
+# Install perfwin wheel
 if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
     Write-Host "  Installing perfwin wheel: $PerfwinWheel"
     pip install $PerfwinWheel
@@ -79,7 +79,7 @@ if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
     Write-Warning "Performance monitoring may not work!"
 }
 
-# 安装 win-control wheel
+# Install win-control wheel
 if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
     Write-Host "  Installing win-control wheel: $WinControlWheel"
     pip install $WinControlWheel
@@ -88,7 +88,7 @@ if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
     Write-Warning "System control actions (set_resolution, set_volume, audio_device) may not work!"
 }
 
-# 安装 win-recorder wheel (硬件录屏)
+# Install win-recorder wheel (hardware recording)
 if ($WinRecorderWheel -ne "") {
     $WinRecorderWheelFile = Get-Item $WinRecorderWheel -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($WinRecorderWheelFile) {
@@ -198,7 +198,7 @@ if ($LASTEXITCODE -ne 0) {
 Remove-Item "$ProjectRoot\worker\_version.py" -ErrorAction SilentlyContinue
 
 Write-Host "[7/6] Creating release package..."
-# OutputDir 可能是相对路径或绝对路径，统一转换为绝对路径
+# OutputDir may be relative or absolute, convert to absolute path
 if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
     $OutputDir = "$ProjectRoot\$OutputDir"
 }
@@ -228,10 +228,10 @@ Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "$ProjectRoot\config" -Destination "$PackageDir\config" -Recurse -Force
 
-# 复制 minicap 二进制文件（Nuitka --include-data-dir 可能遗漏）
+# Copy minicap binary files (Nuitka --include-data-dir may miss)
 Write-Host "Copying minicap static files..."
-# Nuitka --include-data-dir 会创建根目录下的目录，但可能不完整
-# 手动复制确保 minicap-shared 目录（包含 .so 文件）也被包含
+# Nuitka --include-data-dir creates directories under root, but may be incomplete
+# Manually copy to ensure minicap-shared directory (with .so files) is also included
 $MinicapSrcDir = "$ProjectRoot\worker\platforms\minicap\static"
 $MinicapTargetDir = "$PackageDir\worker\platforms\minicap\static"
 if (-not (Test-Path $MinicapTargetDir)) {
@@ -246,7 +246,7 @@ $InternalConfigDir = "$PackageDir\_internal\config"
 New-Item -ItemType Directory -Force -Path $InternalConfigDir | Out-Null
 Copy-Item -Path "$ProjectRoot\config\*" -Destination $InternalConfigDir -Recurse -Force
 
-# 复制 HWiNFO64.EXE (Nuitka --include-package-data 不包含 .exe 文件)
+# Copy HWiNFO64.EXE (Nuitka --include-package-data does not include .exe files)
 Write-Host "Copying HWiNFO64.EXE for perfwin..."
 $HwinfoExe = "$VenvPath\Lib\site-packages\perfwin\HWiNFO64\HWiNFO64.EXE"
 if (Test-Path $HwinfoExe) {
