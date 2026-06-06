@@ -3,15 +3,15 @@ param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
-    [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.4-cp312-cp312-win_amd64.whl",  # perfwin wheel 路径
-    [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel 路径
-    [string]$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-0.1.0-cp312-cp312-win_amd64.whl",  # win-recorder wheel 路径
+    [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.4-cp312-cp312-win_amd64.whl",  # perfwin wheel path
+    [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
+    [string]$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-0.1.0-cp312-cp312-win_amd64.whl",  # win-recorder wheel path
     [switch]$Clean,
-    [switch]$BuildInstaller  # Build installer directly
+    [switch]$BuildInstaller
 )
 
-# 定义工程根目录（使用绝对路径，避免相对路径问题）
-# $PSScriptRoot 是脚本所在目录（scripts），需要获取其父目录作为项目根目录
+# Project root directory (absolute path to avoid relative path issues)
+# $PSScriptRoot is the script directory (scripts), get its parent as project root
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 if ($ProjectRoot -eq "") {
     $ProjectRoot = Get-Location
@@ -25,7 +25,7 @@ Write-Host "Output: $OutputDir"
 Write-Host "Compiler: MSVC"
 Write-Host "=========================================="
 
-# 切换到工程根目录
+# Change to project root directory
 Set-Location $ProjectRoot
 if ($PythonPath -ne "") {
     $PythonExe = $PythonPath
