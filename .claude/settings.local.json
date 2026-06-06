@@ -291,7 +291,8 @@
       "Bash(D:\\\\code\\\\win-recorder\\\\.venv\\\\Scripts\\\\python.exe tests/test_minimal.py)",
       "Bash(echo \".worktrees/\")",
       "Bash(echo \"worktrees/\")",
-      "Bash(perl *)"
+      "Bash(perl *)",
+      "Bash(python3 -c \"import win_recorder; print\\(dir\\(win_recorder\\)\\)\")"
     ]
   }
 }
