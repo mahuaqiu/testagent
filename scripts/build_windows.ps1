@@ -302,4 +302,4 @@ Write-Host "=========================================="
 Write-Host "All builds complete!"
 Write-Host "EXE package: $PackageDir"
 Write-Host "Installer: $OutputDir\test-worker-installer.exe (if built)"
-Write-Host "=========================================="\r
+Write-Host "=========================================="\r\r

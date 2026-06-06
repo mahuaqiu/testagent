@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# PowerShell scripts and batch files must keep CRLF line endings
+*.ps1 text eol=crlf
+*.bat text eol=crlf
