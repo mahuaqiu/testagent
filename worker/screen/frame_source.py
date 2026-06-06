@@ -2,6 +2,7 @@
 
 import io
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
@@ -238,13 +239,15 @@ class WindowsFrameSource(FrameSource):
         self._monitor_offset: Optional[tuple[int, int]] = None
         self._mss_instance = None  # 复用 mss 实例
         self._current_monitor_config = None  # 当前显示器配置
+        self._mss_lock = threading.Lock()  # MSS 实例线程安全
 
     def _get_mss(self):
-        """获取或创建 mss 实例（延迟初始化，复用实例）。"""
-        if self._mss_instance is None:
-            import mss
-            self._mss_instance = mss.mss()
-        return self._mss_instance
+        """获取或创建 mss 实例（延迟初始化，复用实例，线程安全）。"""
+        with self._mss_lock:
+            if self._mss_instance is None:
+                import mss
+                self._mss_instance = mss.mss()
+            return self._mss_instance
 
     def get_frame(self) -> bytes:
         """使用 mss 截屏，转为 JPEG。使用显示器映射逻辑。"""
@@ -309,10 +312,11 @@ class WindowsFrameSource(FrameSource):
         self._get_mss()
 
     def stop(self) -> None:
-        """释放 mss 实例。"""
-        if self._mss_instance:
-            self._mss_instance.close()
-            self._mss_instance = None
+        """释放 mss 实例（线程安全）。"""
+        with self._mss_lock:
+            if self._mss_instance:
+                self._mss_instance.close()
+                self._mss_instance = None
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
