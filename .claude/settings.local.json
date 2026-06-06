@@ -292,7 +292,8 @@
       "Bash(echo \".worktrees/\")",
       "Bash(echo \"worktrees/\")",
       "Bash(perl *)",
-      "Bash(python3 -c \"import win_recorder; print\\(dir\\(win_recorder\\)\\)\")"
+      "Bash(python3 -c \"import win_recorder; print\\(dir\\(win_recorder\\)\\)\")",
+      "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -20 {}')"
     ]
   }
 }
