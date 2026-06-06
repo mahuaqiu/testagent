@@ -115,9 +115,16 @@ class ScreenManager:
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误阈值
 
+        # WindowsFrameSource 使用本地 MSS 截屏，不需要重连逻辑
+        # 直接调用 get_frame() 避免重连阻塞导致无法快速响应停止信号
+        use_direct_get_frame = type(self._frame_source).__name__ in ("WindowsFrameSource", "WebFrameSource")
+
         while self._running:
             try:
-                frame = self._frame_source.get_frame_with_reconnect()
+                if use_direct_get_frame:
+                    frame = self._frame_source.get_frame()
+                else:
+                    frame = self._frame_source.get_frame_with_reconnect()
                 consecutive_errors = 0  # 成功后重置计数
 
                 if self._frame_queue.full():
