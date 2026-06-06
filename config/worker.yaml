@@ -284,3 +284,6 @@ recording:
 websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
+  streaming_fps: 10              # Streaming frame rate
+  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg)
+  streaming_bitrate: 2000000     # H.264 bitrate (2Mbps)

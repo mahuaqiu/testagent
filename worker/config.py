@@ -89,6 +89,9 @@ class WorkerConfig:
     # WebSocket 推流配置
     websocket_max_connections_per_device: int = 3
     websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
+    websocket_streaming_fps: int = 10  # 推流帧率
+    websocket_streaming_codec: str = "jpeg"  # 默认编码格式
+    websocket_streaming_bitrate: int = 2000000  # H.264 码率 (2Mbps)
 
     # 配置版本号
     config_version: Optional[str] = None
@@ -156,6 +159,9 @@ class WorkerConfig:
             recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
             websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
             websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
+            websocket_streaming_fps=websocket_cfg.get("streaming_fps", 10),
+            websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
+            websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 2000000),
         )
 
     def get_platform_config(self, platform: str) -> Dict[str, Any]:
