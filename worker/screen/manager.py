@@ -184,12 +184,16 @@ class ScreenManager:
             logger.info(f"Recording stopped: {output_path}")
             return output_path
 
-    def start_streaming(self) -> "WebSocketStreamer":
-        """启动 WebSocket 推流。"""
+    def start_streaming(self, codec: str = "jpeg") -> "WebSocketStreamer":
+        """启动 WebSocket 推流。
+
+        Args:
+            codec: 推流编码格式 (jpeg/h264/mjpeg)
+        """
         from worker.screen.streamer import WebSocketStreamer
 
         if not self._streamer:
-            self._streamer = WebSocketStreamer(self)
+            self._streamer = WebSocketStreamer(self, codec=codec)
             self._streamer.start()
-            logger.info("WebSocket streaming started")
+            logger.info(f"WebSocket streaming started (codec={codec})")
         return self._streamer

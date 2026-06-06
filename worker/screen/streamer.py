@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from worker.screen.manager import ScreenManager
@@ -13,23 +13,48 @@ logger = logging.getLogger(__name__)
 class WebSocketStreamer:
     """WebSocket 屏幕推流器。"""
 
-    def __init__(self, screen_manager: "ScreenManager"):
+    def __init__(self, screen_manager: "ScreenManager", codec: str = "jpeg"):
         self.screen_manager = screen_manager
+        self.codec = codec
         self._running = False
+        self._h264_streamer = None
 
     def start(self) -> None:
         """启动推流。"""
         self._running = True
-        logger.info("WebSocket streamer started")
+
+        # H.264 模式需要初始化编码器
+        if self.codec == "h264":
+            try:
+                from worker.screen.h264_streamer import H264Streamer
+                self._h264_streamer = H264Streamer(
+                    self.screen_manager._frame_source,
+                    fps=10
+                )
+                self._h264_streamer.start()
+                logger.info("H.264 encoder started for streaming")
+            except Exception as e:
+                logger.error(f"Failed to start H.264 encoder: {e}, falling back to JPEG")
+                self.codec = "jpeg"
+
+        logger.info(f"WebSocket streamer started (codec={self.codec})")
 
     def stop(self) -> None:
         """停止推流。"""
         self._running = False
+        if self._h264_streamer:
+            self._h264_streamer.stop()
+            self._h264_streamer = None
         logger.info("WebSocket streamer stopped")
 
-    async def get_frame_async(self) -> bytes:
+    async def get_frame_async(self) -> Optional[bytes]:
         """异步获取帧（避免阻塞 WebSocket）。"""
-        return await asyncio.to_thread(self.screen_manager.get_frame)
+        if self.codec == "h264" and self._h264_streamer:
+            # H.264 模式：直接获取编码帧
+            return await asyncio.to_thread(self._h264_streamer.get_frame)
+        else:
+            # JPEG 模式：从队列获取帧
+            return await asyncio.to_thread(self.screen_manager.get_frame)
 
     def is_running(self) -> bool:
         """检查是否正在运行。"""

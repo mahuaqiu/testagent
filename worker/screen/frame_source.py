@@ -210,6 +210,18 @@ class MJPEGFrameSource(FrameSource):
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)
 
+    def start_mjpeg_proxy(self):
+        """启动 MJPEG 透传（HTTP→WS 代理）。"""
+        from worker.screen.mjpeg_proxy import MJPEGProxy
+
+        # 从 wda_client 获取主机地址
+        host_with_port = self.wda_client.base_url.split('/')[2]
+        host = host_with_port.split(':')[0]
+
+        proxy = MJPEGProxy(host=host, port=9100)
+        proxy.start()
+        return proxy
+
 
 class WindowsFrameSource(FrameSource):
     """Windows: mss 截屏。
@@ -224,23 +236,30 @@ class WindowsFrameSource(FrameSource):
         self.monitor = monitor
         self._screen_size: Optional[tuple[int, int]] = None
         self._monitor_offset: Optional[tuple[int, int]] = None
+        self._mss_instance = None  # 复用 mss 实例
+        self._current_monitor_config = None  # 当前显示器配置
+
+    def _get_mss(self):
+        """获取或创建 mss 实例（延迟初始化，复用实例）。"""
+        if self._mss_instance is None:
+            import mss
+            self._mss_instance = mss.mss()
+        return self._mss_instance
 
     def get_frame(self) -> bytes:
         """使用 mss 截屏，转为 JPEG。使用显示器映射逻辑。"""
         from worker.screen.monitor_utils import get_mapped_monitor_index
 
-        import mss
-
-        with mss.mss() as sct:
-            # 使用映射后的显示器配置
-            target_index, target_monitor = get_mapped_monitor_index(self.monitor)
-            # 缓存偏移量供坐标转换使用
-            self._monitor_offset = (target_monitor['left'], target_monitor['top'])
-            screenshot = sct.grab(target_monitor)
-            img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=80)
-            return buffer.getvalue()
+        sct = self._get_mss()
+        target_index, target_monitor = get_mapped_monitor_index(self.monitor)
+        # 缓存偏移量供坐标转换使用
+        self._monitor_offset = (target_monitor['left'], target_monitor['top'])
+        self._current_monitor_config = target_monitor
+        screenshot = sct.grab(target_monitor)
+        img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=80)
+        return buffer.getvalue()
 
     def get_frame_bgra(self) -> bytearray:
         """获取 BGRA 原始帧（用于 win-recorder 硬件编码）。
@@ -250,31 +269,25 @@ class WindowsFrameSource(FrameSource):
         """
         from worker.screen.monitor_utils import get_mapped_monitor_index
 
-        import mss
+        sct = self._get_mss()
+        target_index, target_monitor = get_mapped_monitor_index(self.monitor)
+        self._monitor_offset = (target_monitor['left'], target_monitor['top'])
+        self._current_monitor_config = target_monitor
+        screenshot = sct.grab(target_monitor)
 
-        with mss.mss() as sct:
-            target_index, target_monitor = get_mapped_monitor_index(self.monitor)
-            self._monitor_offset = (target_monitor['left'], target_monitor['top'])
-            screenshot = sct.grab(target_monitor)
+        # mss 返回的是 RGB 格式，需要转换为 BGRA
+        # 使用 numpy 批量转换，避免 Python 循环
+        width = screenshot.width
+        height = screenshot.height
+        rgb_array = numpy.frombuffer(screenshot.rgb, dtype=numpy.uint8).reshape(height, width, 3)
+        # RGB -> BGRA: [R,G,B] -> [B,G,R,A]
+        bgra = numpy.empty((height, width, 4), dtype=numpy.uint8)
+        bgra[:, :, 0] = rgb_array[:, :, 2]  # B
+        bgra[:, :, 1] = rgb_array[:, :, 1]  # G
+        bgra[:, :, 2] = rgb_array[:, :, 0]  # R
+        bgra[:, :, 3] = 255  # A (完全不透明)
 
-            # mss 返回的是 RGB 格式，需要转换为 BGRA
-            # screenshot.rgb 顺序是 R, G, B (每3字节一个像素)
-            rgb_data = screenshot.rgb
-            width = screenshot.width
-            height = screenshot.height
-
-            # 转换为 BGRA
-            bgra = bytearray(width * height * 4)
-            for i in range(width * height):
-                src_offset = i * 3
-                dst_offset = i * 4
-                # RGB -> BGRA
-                bgra[dst_offset] = rgb_data[src_offset + 2]  # B
-                bgra[dst_offset + 1] = rgb_data[src_offset + 1]  # G
-                bgra[dst_offset + 2] = rgb_data[src_offset]  # R
-                bgra[dst_offset + 3] = 255  # A (完全不透明)
-
-            return bgra
+        return bytearray(bgra.tobytes())
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取显示器尺寸。使用显示器映射逻辑。"""
@@ -292,18 +305,28 @@ class WindowsFrameSource(FrameSource):
         return self._monitor_offset
 
     def start(self) -> None:
-        """mss 不需要启动。"""
-        pass
+        """启动 mss（预初始化实例）。"""
+        self._get_mss()
 
     def stop(self) -> None:
-        """mss 不需要停止。"""
-        pass
+        """释放 mss 实例。"""
+        if self._mss_instance:
+            self._mss_instance.close()
+            self._mss_instance = None
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
         width, height = self.get_screen_size()
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)
+
+    def get_frame_encoded(self, codec: str = "jpeg") -> bytes:
+        """获取编码帧（支持 H.264）。"""
+        if codec == "h264":
+            # 由 streamer 统一管理编码器，这里返回 None 触发 JPEG 回退
+            return self.get_frame()
+        else:
+            return self.get_frame()
 
 
 class WebFrameSource(FrameSource):

@@ -49,6 +49,7 @@ _ws_connections: dict[str, int] = {}
 # 默认 WebSocket 配置（会被 worker.config 覆盖）
 DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
+DEFAULT_WS_STREAMING_FPS = 10
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -874,22 +875,45 @@ async def screen_stream(
     websocket: WebSocket,
     platform: str,
     device_id: str,
-    monitor: int = 1  # 新增：屏幕索引，默认1=主显示器
+    monitor: int = 1
 ):
-    """实时屏幕推流（10fps）。
+    """实时屏幕推流。
 
     Args:
         platform: 设备平台类型 (ios, android, windows, mac, web)
         device_id: 设备标识符
         monitor: 屏幕索引（mss索引：1=主显示器，2+=副显示器）
+
+    Query Parameters:
+        codec: 推流编码格式 (jpeg/h264/mjpeg)，默认 jpeg
     """
+
+    # 解析 codec 参数
+    query_params = websocket.query_params
+    codec = query_params.get("codec", "jpeg")
+    valid_codecs = ["jpeg", "h264", "mjpeg"]
+    if codec not in valid_codecs:
+        await websocket.close(code=1008, reason=f"Invalid codec: {codec}")
+        return
+
+    # Windows 不支持 MJPEG
+    if platform == "windows" and codec == "mjpeg":
+        logger.error(f"Windows does not support MJPEG codec, falling back to jpeg")
+        codec = "jpeg"
+
+    # iOS/Android 不支持 H.264（当前版本）
+    if platform in ("ios", "android") and codec == "h264":
+        logger.error(f"{platform} does not support H.264 codec, falling back to jpeg")
+        codec = "jpeg"
 
     # 从配置读取参数（使用默认值作为 fallback）
     max_connections = DEFAULT_WS_MAX_CONNECTIONS
     send_timeout = DEFAULT_WS_SEND_TIMEOUT
+    streaming_fps = DEFAULT_WS_STREAMING_FPS
     if worker and worker.config:
         max_connections = worker.config.websocket_max_connections_per_device
         send_timeout = worker.config.websocket_send_timeout_seconds
+        streaming_fps = worker.config.websocket_streaming_fps
 
     # 连接计数和 ScreenManager key
     # 桌面端设备：key 包含 monitor 参数，支持多屏幕
@@ -945,12 +969,32 @@ async def screen_stream(
             screen_manager = get_screen_manager(conn_key, frame_source)
         else:
             screen_manager = _screen_managers[conn_key]
+            # 获取已存在的 frame_source
+            frame_source = screen_manager._frame_source
 
-        streamer = screen_manager.start_streaming()
+        # iOS MJPEG 透传模式特殊处理
+        if platform == "ios" and codec == "mjpeg":
+            # 使用 MJPEG 透传
+            mjpeg_proxy = frame_source.start_mjpeg_proxy()
+            await mjpeg_proxy.proxy_to_websocket(websocket)
+            mjpeg_proxy.stop()
+            return
+
+        # 根据 codec 配置帧源
+        streamer = screen_manager.start_streaming(codec=codec)
 
         while streamer.is_running():
-            frame = await streamer.get_frame_async()
-            # 发送 JPEG 原始数据，带超时保护
+            # 根据 codec 获取帧
+            if codec == "h264":
+                # H.264: 通过 streamer 获取（内部调用 H264Streamer）
+                frame = await streamer.get_frame_async()
+            else:
+                # JPEG: 从 streamer 获取
+                frame = await streamer.get_frame_async()
+
+            if not frame:
+                await asyncio.sleep(1.0 / streaming_fps)
+                continue
             try:
                 await asyncio.wait_for(
                     websocket.send_bytes(frame),
@@ -960,7 +1004,7 @@ async def screen_stream(
                 logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: platform={platform}, device={device_id}")
                 await websocket.close(code=1001, reason="Send timeout")
                 break
-            await asyncio.sleep(0.1)  # 10fps
+            await asyncio.sleep(1.0 / streaming_fps)  # 基于配置的帧率
 
     except WebSocketDisconnect:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
