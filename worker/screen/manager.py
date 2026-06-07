@@ -1,10 +1,14 @@
 """ScreenManager 统一管理器。"""
 
+import io
 import logging
 import threading
 import time
 from queue import Queue, Empty
 from typing import Callable, Optional, TYPE_CHECKING
+
+import numpy
+from PIL import Image
 
 from worker.screen.frame_source import FrameSource
 
@@ -64,12 +68,18 @@ class ScreenManager:
         self._frame_source = frame_source
         self._device_id = device_id  # 用于失败通知
         self._frame_queue: Queue[bytes] = Queue(maxsize=30)
+        self._bgra_queue: Queue[bytearray] = Queue(maxsize=30)
         self._capture_thread: Optional[threading.Thread] = None
         self._running: bool = False
         self._is_recording: bool = False
         self._recording_lock: threading.Lock = threading.Lock()
         self._recorder: Optional["ScreenRecorder"] = None
         self._streamer: Optional["WebSocketStreamer"] = None
+        # 消费者计数与延迟释放
+        self._active_consumers: int = 0
+        self._consumers_lock: threading.Lock = threading.Lock()
+        self._release_timer: Optional[threading.Timer] = None
+        self._release_delay: float = 60.0
 
     def start_capture(self) -> None:
         """启动后台截图线程。"""
@@ -102,13 +112,113 @@ class ScreenManager:
             # 队列空时返回空白帧
             return self._frame_source.get_blank_frame()
 
-    def get_frame_bgra(self) -> bytearray:
-        """获取 BGRA 原始帧（供 win-recorder 使用）。
+    def get_frame_bgra(self, max_retries: int = 3) -> bytearray:
+        """获取 BGRA 原始帧（从队列获取）。
+
+        Args:
+            max_retries: 最大重试次数
 
         Returns:
             bytearray: BGRA 格式的原始像素数据
         """
+        for attempt in range(max_retries):
+            try:
+                return self._bgra_queue.get(timeout=1.0)
+            except Empty:
+                if attempt == max_retries - 1:
+                    logger.warning("BGRA queue empty after retries, falling back to direct capture")
+                    return self._frame_source.get_frame_bgra()
         return self._frame_source.get_frame_bgra()
+
+    def get_frame_jpeg(self) -> bytes:
+        """从 BGRA 队列获取帧并转换为 JPEG。
+
+        Returns:
+            bytes: JPEG 格式的图像数据
+        """
+        bgra = self.get_frame_bgra()
+        if not bgra:
+            return self._frame_source.get_blank_frame()
+
+        # 从 FrameSource 获取屏幕尺寸以还原 BGRA 数组形状
+        width, height = self._frame_source.get_screen_size()
+        bgra_array = numpy.frombuffer(bgra, dtype=numpy.uint8).reshape(height, width, 4)
+        # BGRA -> RGB
+        rgb_array = bgra_array[:, :, 2::-1]  # 取 B,G,R 通道并反转为 R,G,B
+        img = Image.fromarray(rgb_array)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=80)
+        return buffer.getvalue()
+
+    def _ensure_capture_running(self) -> None:
+        """确保截图线程正在运行（消费者模式）。
+
+        取消待执行的释放定时器，增加消费者计数。
+        如果是第一个消费者，启动截图线程。
+        """
+        with self._consumers_lock:
+            # 取消待执行的释放定时器
+            if self._release_timer is not None:
+                self._release_timer.cancel()
+                self._release_timer = None
+                logger.debug("Release timer cancelled")
+
+            self._active_consumers += 1
+            logger.debug(f"Consumer added, active_consumers={self._active_consumers}")
+
+            if self._active_consumers == 1 and not self._running:
+                self.start_capture()
+                logger.info("Capture started by first consumer")
+
+    def _release_capture(self) -> None:
+        """释放消费者引用，无消费者时延迟释放截图资源。
+
+        消费者计数 -1，如果计数归零，启动 60 秒延迟释放定时器。
+        """
+        with self._consumers_lock:
+            if self._active_consumers > 0:
+                self._active_consumers -= 1
+            logger.debug(f"Consumer released, active_consumers={self._active_consumers}")
+
+            if self._active_consumers == 0:
+                self._schedule_release()
+
+    def _schedule_release(self) -> None:
+        """启动延迟释放定时器（60 秒后无新消费者则释放截图资源）。"""
+        if self._release_timer is not None:
+            self._release_timer.cancel()
+
+        self._release_timer = threading.Timer(self._release_delay, self._do_release)
+        self._release_timer.daemon = True
+        self._release_timer.start()
+        logger.info(f"Release scheduled in {self._release_delay}s (no active consumers)")
+
+    def _do_release(self) -> None:
+        """延迟释放定时器回调：停止截图线程，释放 MSS 等资源。"""
+        with self._consumers_lock:
+            # 再次确认没有新消费者加入
+            if self._active_consumers > 0:
+                logger.debug("Release cancelled: new consumer joined")
+                return
+            self._release_timer = None
+
+        logger.info("Release timer fired, stopping capture and releasing resources")
+        self._running = False
+        if self._capture_thread and self._capture_thread != threading.current_thread():
+            self._capture_thread.join(timeout=5)
+        self._capture_thread = None
+        self._frame_source.stop()
+        # 清空队列
+        while not self._bgra_queue.empty():
+            try:
+                self._bgra_queue.get_nowait()
+            except Empty:
+                break
+        while not self._frame_queue.empty():
+            try:
+                self._frame_queue.get_nowait()
+            except Empty:
+                break
 
     def _capture_loop(self) -> None:
         """后台截图循环（队列满时丢弃旧帧）。"""
@@ -134,6 +244,20 @@ class ScreenManager:
                     except Empty:
                         pass
                 self._frame_queue.put(frame, timeout=1)
+
+                # 同时获取 BGRA 帧放入 _bgra_queue
+                try:
+                    bgra = self._frame_source.get_frame_bgra()
+                    if self._bgra_queue.full():
+                        try:
+                            self._bgra_queue.get_nowait()
+                        except Empty:
+                            pass
+                    self._bgra_queue.put(bgra, timeout=1)
+                except NotImplementedError:
+                    # FrameSource 不支持 BGRA 时跳过
+                    pass
+
             except Exception as e:
                 consecutive_errors += 1
                 # 连续错误时只打印一次摘要，避免刷屏
