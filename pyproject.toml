@@ -1,6 +1,6 @@
 [project]
 name = "test-worker"
-version = "2.0.0"
+version = "2.1.0"
 description = "多端自动化测试执行基建 - Worker"
 requires-python = ">=3.10"
 dependencies = [
