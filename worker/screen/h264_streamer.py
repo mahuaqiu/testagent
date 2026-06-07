@@ -1,7 +1,7 @@
 """H.264 流式编码器。"""
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,14 @@ class H264Streamer:
         self.bitrate = bitrate
         self._encoder = None
         self._sps_pps_sent = False
+        self._consecutive_failures: int = 0
+        self._max_failures: int = 30  # 连续 30 次失败（约3秒）触发降级
+        self._fallback_triggered: bool = False
+        self._on_fallback: Optional[Callable[[], None]] = None
+
+    def set_fallback_callback(self, callback: Callable[[], None]) -> None:
+        """设置降级回调。"""
+        self._on_fallback = callback
 
     def start(self) -> dict:
         """启动 H.264 编码器。"""
@@ -52,23 +60,44 @@ class H264Streamer:
         try:
             bgra_frame = self.frame_source.get_frame_bgra()
             if not bgra_frame:
+                self._consecutive_failures += 1
+                self._check_fallback()
                 return None
         except Exception as e:
             logger.warning(f"Failed to get BGRA frame: {e}")
+            self._consecutive_failures += 1
+            self._check_fallback()
             return None
 
         # 编码
         try:
             encoded = self._encoder.encode_frame(bytes(bgra_frame))
             if not encoded:
+                self._consecutive_failures += 1
+                self._check_fallback()
                 return None
+
+            # 编码成功，重置失败计数
+            self._consecutive_failures = 0
 
             # 返回编码数据（已包含帧类型前缀）
             return encoded
 
         except Exception as e:
             logger.error(f"Failed to encode frame: {e}")
+            self._consecutive_failures += 1
+            self._check_fallback()
             return None
+
+    def _check_fallback(self) -> None:
+        """检查是否需要触发降级。"""
+        if self._fallback_triggered:
+            return
+        if self._consecutive_failures >= self._max_failures:
+            self._fallback_triggered = True
+            logger.warning(f"H264 encoding failed {self._consecutive_failures} times, triggering fallback")
+            if self._on_fallback:
+                self._on_fallback()
 
     def stop(self):
         """停止编码器。"""
@@ -78,4 +107,6 @@ class H264Streamer:
             except Exception as e:
                 logger.warning(f"Error stopping H264 encoder: {e}")
             self._encoder = None
-            logger.info("H264 encoder stopped")
+        self._consecutive_failures = 0
+        self._fallback_triggered = False
+        logger.info("H264 encoder stopped")

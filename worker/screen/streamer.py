@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:
     from worker.screen.manager import ScreenManager
@@ -19,8 +19,9 @@ class WebSocketStreamer:
         self._running = False
         self._h264_streamer = None
 
-    def start(self) -> None:
+    def start(self, codec: str = "jpeg", on_fallback: Optional[Callable[[], None]] = None) -> None:
         """启动推流。"""
+        self.codec = codec
         self._running = True
 
         # H.264 模式需要初始化编码器
@@ -31,6 +32,7 @@ class WebSocketStreamer:
                     self.screen_manager._frame_source,
                     fps=10
                 )
+                self._h264_streamer.set_fallback_callback(on_fallback or self._default_fallback)
                 self._h264_streamer.start()
                 logger.info("H.264 encoder started for streaming")
             except Exception as e:
@@ -39,10 +41,16 @@ class WebSocketStreamer:
 
         logger.info(f"WebSocket streamer started (codec={self.codec})")
 
+    def _default_fallback(self) -> None:
+        """默认降级处理：切换到 JPEG。"""
+        logger.warning("Falling back to JPEG mode")
+        self.codec = "jpeg"
+
     def stop(self) -> None:
         """停止推流。"""
         self._running = False
         if self._h264_streamer:
+            # stop() 会自动重置 H264 相关的降级状态
             self._h264_streamer.stop()
             self._h264_streamer = None
         logger.info("WebSocket streamer stopped")
