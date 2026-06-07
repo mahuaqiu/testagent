@@ -107,7 +107,9 @@ class MinicapFrameSource(FrameSource):
 
     def stop(self) -> None:
         """停止 minicap 流。"""
+        logger.info("MinicapFrameSource stopping")
         self.minicap.stop_stream()
+        logger.info("MinicapFrameSource stopped")
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
@@ -319,10 +321,12 @@ class WindowsFrameSource(FrameSource):
 
     def stop(self) -> None:
         """释放 mss 实例。"""
+        logger.info("WindowsFrameSource stopping, releasing MSS resources")
         self._stopped = True  # 先设置停止标志，阻止新截屏请求
         if self._mss_instance:
             self._mss_instance.close()
             self._mss_instance = None
+        logger.info("WindowsFrameSource stopped, MSS resources released")
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""

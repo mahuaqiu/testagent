@@ -335,6 +335,6 @@ class ScreenManager:
 
         if not self._streamer:
             self._streamer = WebSocketStreamer(self, codec=codec)
-            self._streamer.start()
+            self._streamer.start(codec=codec)
             logger.info(f"WebSocket streaming started (codec={codec})")
         return self._streamer
