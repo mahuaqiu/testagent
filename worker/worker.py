@@ -852,23 +852,23 @@ class Worker:
         - 当前状态为 idle（无任务执行）或 clear_on_idle 为 false
         """
         # 获取 Web 平台配置
-        web_config = self.platform_configs.get("web")
+        web_config = self.config.platforms.get("web")
         if not web_config:
             return
 
         # 检查是否启用
-        if not getattr(web_config, "cache_clear_enabled", True):
+        if not web_config.get("cache_clear_enabled", True):
             logger.debug("Cache clear is disabled")
             return
 
         # 检查是否仅在空闲时清理
-        clear_on_idle = getattr(web_config, "cache_clear_clear_on_idle", True)
+        clear_on_idle = web_config.get("cache_clear_clear_on_idle", True)
         if clear_on_idle and self._status != "online":
             logger.debug("Not idle, skip cache clear check")
             return
 
         # 检查时间间隔
-        interval_hours = getattr(web_config, "cache_clear_interval_hours", 24)
+        interval_hours = web_config.get("cache_clear_interval_hours", 24)
         interval_seconds = interval_hours * 3600
 
         status = self._get_cache_clear_status()
