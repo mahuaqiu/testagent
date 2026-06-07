@@ -238,16 +238,22 @@ class WindowsFrameSource(FrameSource):
         self.monitor = monitor
         self._screen_size: Optional[tuple[int, int]] = None
         self._monitor_offset: Optional[tuple[int, int]] = None
-        self._mss_instance = None  # 复用 mss 实例
         self._current_monitor_config = None  # 当前显示器配置
         self._stopped = False  # 停止标志
 
     def _get_mss(self):
-        """获取或创建 mss 实例（延迟初始化，复用实例）。"""
-        if self._mss_instance is None:
-            import mss
-            self._mss_instance = mss.mss()
-        return self._mss_instance
+        """获取 mss 实例（每次调用都在当前线程创建）。
+
+        注意：mss 使用 threading.local() 存储 Windows 设备上下文（srcdc, memdc, bmp），
+        这些资源只能在创建它们的线程中使用。跨线程复用会导致：
+        - AttributeError: '_thread._local' object has no attribute 'bmp' (stop 时)
+        - AttributeError: '_thread.local' object has no attribute 'srcdc' (跨线程调用时)
+
+        因此每次调用 get_frame/get_frame_bgra 时都在当前线程创建新的 mss 实例。
+        由于 mss 截屏非常快（<10ms），这不会影响性能。
+        """
+        import mss
+        return mss.mss()
 
     def get_frame(self) -> bytes:
         """使用 mss 截屏，转为 JPEG。使用显示器映射逻辑。"""
@@ -316,17 +322,16 @@ class WindowsFrameSource(FrameSource):
         return self._monitor_offset
 
     def start(self) -> None:
-        """启动 mss（预初始化实例）。"""
-        self._get_mss()
+        """启动帧源（预留接口）。"""
+        pass
 
     def stop(self) -> None:
-        """释放 mss 实例。"""
-        logger.info("WindowsFrameSource stopping, releasing MSS resources")
-        self._stopped = True  # 先设置停止标志，阻止新截屏请求
-        if self._mss_instance:
-            self._mss_instance.close()
-            self._mss_instance = None
-        logger.info("WindowsFrameSource stopped, MSS resources released")
+        """停止帧源，设置停止标志。"""
+        logger.info("WindowsFrameSource stopping")
+        self._stopped = True  # 设置停止标志，阻止新截屏请求
+        # 注意：不再需要关闭 mss 实例，因为每次 get_frame 都会创建新实例
+        # 每次创建的实例会在方法返回后自动被 Python GC 释放
+        logger.info("WindowsFrameSource stopped")
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
