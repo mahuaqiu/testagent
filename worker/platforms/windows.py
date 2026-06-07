@@ -222,13 +222,13 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui.press(key)
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图（支持窗口级截图）。
+        """获取截图（支持窗口级截图，使用 ScreenManager）。
 
         如果绑定了窗口句柄，只截取该窗口区域；
-        否则截取全屏（使用 pyautogui）。
+        否则使用 ScreenManager 截图。
         """
         if self._window_handle and self._window_rect:
-            # 窗口级截图：使用 mss 截取指定区域
+            # 窗口级截图：使用 mss 截取指定区域（保留原有逻辑）
             from PIL import Image
             left, top, right, bottom = self._window_rect
             monitor = {
@@ -245,11 +245,21 @@ class WindowsPlatformManager(PlatformManager):
                 logger.debug(f"Window screenshot: handle={self._window_handle}, size={screenshot.size}")
                 return buffer.getvalue()
         else:
-            # 全屏截图（现有逻辑）
-            screenshot = pyautogui.screenshot()
-            buffer = io.BytesIO()
-            screenshot.save(buffer, format="PNG")
-            return buffer.getvalue()
+            # 全屏截图：使用 ScreenManager
+            try:
+                from worker.screen.manager import get_screen_manager
+                from worker.screen.frame_source import WindowsFrameSource
+                # 创建 FrameSource（使用当前显示器）
+                frame_source = WindowsFrameSource(fps=10, monitor=self._current_monitor)
+                screen_manager = get_screen_manager(f"windows/{self._current_monitor}", frame_source)
+                return screen_manager.get_frame_jpeg()
+            except Exception as e:
+                logger.warning(f"ScreenManager screenshot failed: {e}, falling back to pyautogui")
+                # 回退到 pyautogui
+                screenshot = pyautogui.screenshot()
+                buffer = io.BytesIO()
+                screenshot.save(buffer, format="PNG")
+                return buffer.getvalue()
 
     def get_screenshot(self, context: Any) -> bytes:
         """获取当前屏幕截图（兼容旧接口）。"""

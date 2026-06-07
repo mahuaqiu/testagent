@@ -313,7 +313,39 @@ class AndroidPlatformManager(PlatformManager):
                 raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图。"""
+        """获取截图（使用 ScreenManager）。"""
+        device_id = self._current_device
+        if not device_id:
+            # 尝试从 context 获取
+            device = context or self._device_clients.get(self._current_device)
+            if device:
+                for udid, d in self._device_clients.items():
+                    if d == device:
+                        device_id = udid
+                        break
+
+        if not device_id:
+            # 无设备上下文，回退到原有逻辑
+            return self._take_screenshot_fallback(context)
+
+        try:
+            from worker.screen.manager import get_screen_manager
+            from worker.screen.frame_source import MinicapFrameSource
+
+            # 从 minicap 实例创建 FrameSource
+            minicap = self._minicap_instances.get(device_id)
+            if minicap:
+                frame_source = MinicapFrameSource(device_id, minicap)
+                screen_manager = get_screen_manager(f"android/{device_id}", frame_source)
+                return screen_manager.get_frame_jpeg()
+            else:
+                return self._take_screenshot_fallback(context)
+        except Exception as e:
+            logger.warning(f"ScreenManager screenshot failed: {e}, falling back to uiautomator2")
+            return self._take_screenshot_fallback(context)
+
+    def _take_screenshot_fallback(self, context: Any = None) -> bytes:
+        """获取截图（回退逻辑）。"""
         device_id = self._current_device
 
         # 优先使用 minicap（绑过 FLAG_SECURE）
