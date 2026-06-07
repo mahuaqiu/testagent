@@ -291,6 +291,9 @@ class ScreenManager:
         """
         from worker.screen.recorder import ScreenRecorder
 
+        # 确保截图线程运行
+        self._ensure_capture_running()
+
         with self._recording_lock:
             if self._is_recording:
                 logger.warning("Recording already in progress")
@@ -313,6 +316,10 @@ class ScreenManager:
             self._recorder = None
             self._is_recording = False
             logger.info(f"Recording stopped: {output_path}")
+
+            # 标记消费者离开
+            self._release_capture()
+
             return output_path
 
     def start_streaming(self, codec: str = "jpeg") -> "WebSocketStreamer":
@@ -322,6 +329,9 @@ class ScreenManager:
             codec: 推流编码格式 (jpeg/h264/mjpeg)
         """
         from worker.screen.streamer import WebSocketStreamer
+
+        # 确保截图线程运行
+        self._ensure_capture_running()
 
         if not self._streamer:
             self._streamer = WebSocketStreamer(self, codec=codec)
