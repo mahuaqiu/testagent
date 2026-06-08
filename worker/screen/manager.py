@@ -333,6 +333,14 @@ class ScreenManager:
         # 确保截图线程运行
         self._ensure_capture_running()
 
+        # 检测 codec 切换：如果 codec 发生变化，需要重新创建 streamer
+        if self._streamer:
+            current_codec = getattr(self._streamer, 'codec', None)
+            if current_codec != codec:
+                logger.info(f"Codec changed from {current_codec} to {codec}, recreating streamer")
+                self._streamer.stop()
+                self._streamer = None
+
         if not self._streamer:
             self._streamer = WebSocketStreamer(self, codec=codec)
             self._streamer.start(codec=codec)
