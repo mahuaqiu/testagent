@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class H264Streamer:
-    """H.264 流式编码器（使用 win-recorder 流式编码）。"""
+    """H.264 流式编码器（使用 win-recorder H264Encoder）。"""
 
     def __init__(self, frame_source, fps: int = 10, bitrate: int = 2000000):
         self.frame_source = frame_source
@@ -28,7 +28,8 @@ class H264Streamer:
         """启动 H.264 编码器。"""
         try:
             import win_recorder
-            self._encoder = win_recorder.StreamingEncoder(
+            # 使用 H264Encoder 替代 StreamingEncoder
+            self._encoder = win_recorder.H264Encoder(
                 fps=self.fps,
                 bitrate=self.bitrate,
                 monitor=self.frame_source.monitor
