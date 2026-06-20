@@ -17,8 +17,8 @@ worker:
 
 # External Services (Required)
 external_services:
-  platform_api: "http://192.168.0.102:8000"  # Platform API URL
-  ocr_service: "http://192.168.0.102:9021"   # OCR service URL
+  platform_api: "http://192.168.0.100:8000"  # Platform API URL
+  ocr_service: "http://192.168.0.100:9021"   # OCR service URL
 
 # Platform Settings
 platforms:
