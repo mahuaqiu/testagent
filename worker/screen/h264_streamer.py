@@ -47,13 +47,27 @@ class H264Streamer:
             raise
 
     def get_frame(self) -> Optional[bytes]:
-        """获取编码帧。
+        """获取编码帧（同步版本）。
 
         Returns:
             bytes: 格式 [1字节帧类型][N字节数据]
                    0x01=SPS/PPS, 0x02=IDR, 0x03=P帧
             None: 编码器未就绪
         """
+        return self._encode_frame()
+
+    async def get_frame_async(self) -> Optional[bytes]:
+        """获取编码帧（异步版本，供 server.py 调用）。
+
+        Returns:
+            bytes: 格式 [1字节帧类型][N字节数据]
+                   0x01=SPS/PPS, 0x02=IDR, 0x03=P帧
+            None: 编码器未就绪
+        """
+        return self._encode_frame()
+
+    def _encode_frame(self) -> Optional[bytes]:
+        """内部编码逻辑，由 get_frame 和 get_frame_async 共用。"""
         if not self._encoder:
             return None
 

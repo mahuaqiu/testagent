@@ -18,11 +18,13 @@ class WebSocketStreamer:
         self.codec = codec
         self._running = False
         self._h264_streamer = None
+        self._h264_info = None  # 保存 H.264 编码器初始化信息
 
     def start(self, codec: str = "jpeg", on_fallback: Optional[Callable[[], None]] = None) -> None:
         """启动推流。"""
         self.codec = codec
         self._running = True
+        self._h264_info = None
 
         # H.264 模式需要初始化编码器
         if self.codec == "h264":
@@ -33,7 +35,7 @@ class WebSocketStreamer:
                     fps=10
                 )
                 self._h264_streamer.set_fallback_callback(on_fallback or self._default_fallback)
-                self._h264_streamer.start()
+                self._h264_info = self._h264_streamer.start()
                 logger.info("H.264 encoder started for streaming")
             except Exception as e:
                 logger.error(f"Failed to start H.264 encoder: {e}, falling back to JPEG")
@@ -67,3 +69,9 @@ class WebSocketStreamer:
     def is_running(self) -> bool:
         """检查是否正在运行。"""
         return self._running
+
+    def get_h264_info(self) -> Optional[dict]:
+        """获取 H.264 编码器信息（SPS/PPS）。"""
+        if self._h264_info:
+            return self._h264_info
+        return None

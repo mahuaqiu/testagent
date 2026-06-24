@@ -983,6 +983,21 @@ async def screen_stream(
         # 根据 codec 配置帧源
         streamer = screen_manager.start_streaming(codec=codec)
 
+        # H.264: 连接时先发送 SPS+PPS，让前端 MSE 解码器初始化。
+        # SPS 和 PPS 合并成一条消息发送（各自带起始码 00 00 00 01），
+        # 避免分两条消息时 PPS 迟到导致首个 IDR 帧解码失败。
+        if codec == "h264":
+            try:
+                h264_info = streamer.get_h264_info()
+                if h264_info:
+                    combined = bytes([0x01]) + h264_info['sps'] + h264_info['pps']
+                    await websocket.send_bytes(combined)
+                    logger.info(
+                        f"Sent SPS+PPS: {len(h264_info['sps'])}+{len(h264_info['pps'])} bytes"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to send SPS/PPS: {e}")
+
         while streamer.is_running():
             # 根据 codec 获取帧
             if codec == "h264":
