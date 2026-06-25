@@ -48,6 +48,8 @@ class ActionResult:
     stderr: Optional[str] = None     # 标准错误
     # OCR 失败时的信息
     ocr_info: Optional[list[dict[str, Any]]] = None  # OCR 识别信息列表
+    # 点击类动作时间戳
+    timestamp: Optional[float] = None  # 点击动作执行时的时间戳（Unix timestamp）
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
@@ -66,6 +68,7 @@ class ActionResult:
             stdout=data.get("stdout"),
             stderr=data.get("stderr"),
             ocr_info=data.get("ocr_info"),
+            timestamp=data.get("timestamp"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -92,6 +95,8 @@ class ActionResult:
             result["stderr"] = self.stderr
         if self.ocr_info is not None:
             result["ocr_info"] = self.ocr_info
+        if self.timestamp is not None:
+            result["timestamp"] = self.timestamp
         # context 不需要序列化到结果中
         return result
 

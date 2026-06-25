@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_timestamp() -> float:
+    """获取当前时间戳（Unix timestamp）。"""
+    return time.time()
+
+
 class OcrClickAction(BaseActionExecutor):
     """OCR 文字点击。"""
 
@@ -87,6 +92,7 @@ class OcrClickAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=output,
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
 
@@ -151,6 +157,7 @@ class OcrInputAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Input at ({x}, {y})",
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
 
@@ -459,6 +466,7 @@ class OcrDoubleClickAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Double clicked at ({x}, {y})",
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
 
@@ -568,6 +576,7 @@ class OcrClickSameRowTextAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
 

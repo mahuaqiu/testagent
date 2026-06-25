@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_timestamp() -> float:
+    """获取当前时间戳（Unix timestamp）。"""
+    return time.time()
+
+
 class ImageClickAction(BaseActionExecutor):
     """图像匹配点击。"""
 
@@ -90,6 +95,7 @@ class ImageClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=output,
+            timestamp=_get_timestamp(),
         )
 
 
@@ -319,6 +325,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) near text \"{action.value}\"",
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
 
@@ -453,6 +460,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Double clicked at ({x}, {y})",
+            timestamp=_get_timestamp(),
         )
 
 
@@ -563,6 +571,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Clicked at ({x}, {y}) in row of \"{action.anchor_text}\"",
             ocr_info=self._get_last_ocr_info(platform),
+            timestamp=_get_timestamp(),
         )
 
     def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:

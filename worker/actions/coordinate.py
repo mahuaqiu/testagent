@@ -26,6 +26,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _get_timestamp() -> float:
+    """获取当前时间戳（Unix timestamp）。"""
+    return time.time()
+
+
 class ClickAction(BaseActionExecutor):
     """坐标点击。"""
 
@@ -58,6 +63,7 @@ class ClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=output,
+            timestamp=_get_timestamp(),
         )
 
 
@@ -85,6 +91,7 @@ class RightClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Right clicked at ({action.x}, {action.y})",
+            timestamp=_get_timestamp(),
         )
 
 
@@ -115,6 +122,7 @@ class DoubleClickAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Double clicked at ({x}, {y})",
+            timestamp=_get_timestamp(),
         )
 
 
@@ -184,6 +192,7 @@ class InputAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Input at ({action.x}, {action.y})",
+            timestamp=_get_timestamp(),
         )
 
 
@@ -242,6 +251,7 @@ class PasteAction(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output=f"Pasted at ({action.x}, {action.y})",
+            timestamp=_get_timestamp(),
         )
 
 
