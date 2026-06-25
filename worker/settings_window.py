@@ -166,7 +166,7 @@ class SettingsWindow(QDialog):
         line1.setFrameShape(QFrame.HLine)
         line1.setStyleSheet("background-color: #e8e8e8;")
         line1.setFixedHeight(1)
-        grid.addWidget(line1, row, 0, 1, 2)
+        grid.addWidget(line1, row, 0, 1, 3)
         row += 1
 
         # 平台 API
@@ -188,7 +188,7 @@ class SettingsWindow(QDialog):
         line2.setFrameShape(QFrame.HLine)
         line2.setStyleSheet("background-color: #e8e8e8;")
         line2.setFixedHeight(1)
-        grid.addWidget(line2, row, 0, 1, 2)
+        grid.addWidget(line2, row, 0, 1, 3)
         row += 1
 
         # 日志级别
@@ -207,13 +207,11 @@ class SettingsWindow(QDialog):
         self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
         grid.addWidget(self.discover_ios_checkbox, row, 1)
 
-        # 新增一行显示 Harmony checkbox
-        row += 1
         self.discover_harmony_checkbox = QCheckBox("Harmony")
         self.discover_harmony_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        grid.addWidget(self.discover_harmony_checkbox, row, 0)
+        grid.addWidget(self.discover_harmony_checkbox, row, 2)
 
-        layout.addLayout(grid)
+        row += 1        layout.addLayout(grid)
 
         # 弹性空间
         layout.addStretch()

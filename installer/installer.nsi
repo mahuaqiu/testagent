@@ -44,6 +44,7 @@ Var PlatformApiInput
 Var OcrServiceInput
 Var DiscoverAndroid
 Var DiscoverIos
+Var DiscoverHarmony
 Var IsUpgrade
 
 ; Page order
@@ -356,6 +357,8 @@ Function ConfigPageCreate
   Pop $DiscoverAndroid
   ${NSD_CreateCheckbox} 100 178 60 12u "iOS"
   Pop $DiscoverIos
+  ${NSD_CreateCheckbox} 165 178 80 12u "Harmony"
+  Pop $DiscoverHarmony
 
   nsDialogs::Show
 
@@ -372,6 +375,7 @@ Function ConfigPageLeave
   ${NSD_GetText} $OcrServiceInput $OcrServiceInput
   ${NSD_GetState} $DiscoverAndroid $DiscoverAndroid
   ${NSD_GetState} $DiscoverIos $DiscoverIos
+  ${NSD_GetState} $DiscoverHarmony $DiscoverHarmony
 FunctionEnd
 
 ; Config file replacement
@@ -426,6 +430,14 @@ Function ReplaceConfigFile
     nsExec::Exec $1
     Pop $0
   skip_ios:
+
+  ; Device discovery - Harmony
+  StrCmp $DiscoverHarmony ${BST_CHECKED} 0 skip_harmony
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_devices: false', 'discover_harmony_devices: true' | Set-Content '$9'$\""
+    nsExec::Exec $1
+    Pop $0
+  skip_harmony:
 
   Goto done
 
