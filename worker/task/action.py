@@ -134,6 +134,9 @@ class Action:
     # 默认 None 表示显式禁用代理（不走系统代理）
     proxy: str | None = None
 
+    # 扩展参数（用于自定义动作，如 start_recording）
+    params: dict[str, Any] | None = None
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Action":
         """从字典创建动作。"""
@@ -200,6 +203,7 @@ class Action:
             name=data.get("name"),
             negate=data.get("negate", False),
             proxy=data.get("proxy"),
+            params=data.get("params"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -284,5 +288,7 @@ class Action:
             result["negate"] = self.negate
         if self.proxy is not None:
             result["proxy"] = self.proxy
+        if self.params is not None:
+            result["params"] = self.params
 
         return result
