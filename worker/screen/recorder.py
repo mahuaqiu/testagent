@@ -32,6 +32,7 @@ class ScreenRecorder:
         timeout_sec: int = 7200,
         audio: bool = False,
         monitor: int = 1,
+        watermark: bool = True,
     ):
         """
         Args:
@@ -41,6 +42,7 @@ class ScreenRecorder:
             timeout_sec: 超时时间（秒）
             audio: 是否录制音频
             monitor: 显示器选择
+            watermark: 是否开启时间水印（默认 True）
         """
         self.screen_manager = screen_manager
         self.output_path = output_path
@@ -48,6 +50,7 @@ class ScreenRecorder:
         self.timeout_sec = timeout_sec
         self.audio = audio
         self.monitor = monitor
+        self.watermark = watermark
         self._stop_event = threading.Event()
         self._timeout_timer: threading.Timer | None = None
         self._write_thread: threading.Thread | None = None
@@ -71,8 +74,14 @@ class ScreenRecorder:
             fps=self.fps,
             audio=self.audio,
             monitor=self.monitor,
+            watermark=self.watermark,
         )
         self._win_recorder.start()
+
+        # 获取对齐后的分辨率，同步给 FrameSource
+        aligned_width = self._win_recorder.width
+        aligned_height = self._win_recorder.height
+        self.screen_manager.set_frame_aligned_size(aligned_width, aligned_height)
 
         # 启动写入线程
         self._write_thread = threading.Thread(target=self._write_loop, daemon=True)
@@ -93,7 +102,17 @@ class ScreenRecorder:
             logger.debug("Recording write loop ended")
 
     def stop(self) -> str:
-        """停止录屏，返回文件路径。"""
+        """停止录屏，返回文件路径。幂等操作：可多次调用。"""
+        # 幂等处理：已经停止或从未开始，直接返回
+        if self._win_recorder is None:
+            logger.info("Recording already stopped or never started")
+            return self.output_path
+
+        # 标记停止事件（防止重复调用）
+        if self._stop_event.is_set():
+            logger.info("Recording stop already called")
+            return self.output_path
+
         self._stop_event.set()
 
         # 取消超时定时器

@@ -276,7 +276,7 @@ class ScreenManager:
 
     def start_recording(self, output_path: str, fps: int = 10,
                         timeout_ms: int = 7200000, audio: bool = False,
-                        monitor: int = 1) -> bool:
+                        monitor: int = 1, watermark: bool = True) -> bool:
         """启动录屏。
 
         Args:
@@ -285,6 +285,7 @@ class ScreenManager:
             timeout_ms: 超时时间（毫秒），默认 2 小时
             audio: 是否录制音频（仅 win-recorder 支持）
             monitor: 显示器选择（仅 win-recorder 支持）
+            watermark: 是否开启时间水印（默认 True）
 
         Returns:
             bool: 是否成功启动（False 表示已有录屏进行中）
@@ -300,11 +301,21 @@ class ScreenManager:
                 return False
 
             timeout_sec = timeout_ms // 1000
-            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec, audio, monitor)
+            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec, audio, monitor, watermark)
             self._recorder.start()
             self._is_recording = True
-            logger.info(f"Recording started: {output_path}")
+            logger.info(f"Recording started: {output_path}, watermark={watermark}")
             return True
+
+    def set_frame_aligned_size(self, width: int, height: int) -> None:
+        """设置帧对齐尺寸（由 ScreenRecorder 调用）。
+
+        Args:
+            width: 对齐后的宽度
+            height: 对齐后的高度
+        """
+        if self._frame_source:
+            self._frame_source.set_aligned_size(width, height)
 
     def stop_recording(self) -> str:
         """停止录屏，返回文件路径。"""

@@ -25,11 +25,15 @@ class StartRecordingAction(ActionExecutor):
         Args:
             platform: 平台管理器
             action: 动作参数
-                - value: 输出文件名（可选，默认自动生成）
+                - value: 输出路径，支持两种格式：
+                  - 目录路径（如 d:\\recorder）→ 自动生成文件名
+                  - 文件路径（如 d:\\recorder\\test.mp4）→ 直接使用
+                  - 为空时使用默认配置目录 + 自动生成文件名
                 - params.fps: 帧率（默认 10）
                 - params.timeout: 超时（毫秒，默认 7200000）
                 - params.monitor: 显示器选择（默认 1，主屏幕）
                 - params.audio: 是否录制音频（默认 false）
+                - params.watermark: 是否开启水印（默认 true）
             context: 执行上下文
         """
         from worker.config import load_config
@@ -37,21 +41,37 @@ class StartRecordingAction(ActionExecutor):
         # 获取配置
         config = load_config()
         output_dir = config.recording_output_dir
-        filename = action.value or f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4"
 
-        # 处理路径
-        if os.path.isabs(filename):
-            output_path = filename
+        # 处理路径：支持目录和文件两种格式
+        # - 如果 action.value 为空，使用默认目录 + 自动生成文件名
+        # - 如果 action.value 是目录（不以 .mp4 结尾），自动生成文件名
+        # - 如果 action.value 是文件路径（以 .mp4 结尾），直接使用
+        filename = action.value
+        if not filename:
+            # 没有指定，使用默认目录 + 自动生成文件名
+            output_path = os.path.join(output_dir, f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4")
+        elif os.path.isabs(filename):
+            if filename.lower().endswith('.mp4'):
+                # 是完整文件路径，直接使用
+                output_path = filename
+            else:
+                # 是目录路径，自动生成文件名
+                os.makedirs(filename, exist_ok=True)
+                output_path = os.path.join(filename, f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4")
         else:
+            # 相对��径，视为文件名
             output_path = os.path.join(output_dir, filename)
 
-        # 确保目录存在
-        os.makedirs(output_dir, exist_ok=True)
+        # 确保输出文件的目录存在
+        output_file_dir = os.path.dirname(output_path)
+        if output_file_dir:
+            os.makedirs(output_file_dir, exist_ok=True)
 
         fps = action.params.get("fps", 10) if action.params else 10
         timeout_ms = action.params.get("timeout", 7200000) if action.params else 7200000
         monitor = action.params.get("monitor", 1) if action.params else 1
         audio = action.params.get("audio", False) if action.params else False
+        watermark = action.params.get("watermark", True) if action.params else True
 
         # 获取设备 ID
         device_id = getattr(platform, "_current_device", None) or "windows"
@@ -61,7 +81,7 @@ class StartRecordingAction(ActionExecutor):
             frame_source = WindowsFrameSource(fps=fps, monitor=monitor)
 
             screen_manager = get_screen_manager(device_id, frame_source)
-            success = screen_manager.start_recording(output_path, fps, timeout_ms, audio, monitor)
+            success = screen_manager.start_recording(output_path, fps, timeout_ms, audio, monitor, watermark)
 
             if success:
                 return ActionResult(

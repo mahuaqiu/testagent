@@ -240,6 +240,19 @@ class WindowsFrameSource(FrameSource):
         self._monitor_offset: Optional[tuple[int, int]] = None
         self._current_monitor_config = None  # 当前显示器配置
         self._stopped = False  # 停止标志
+        self._aligned_width: Optional[int] = None  # 对齐后的宽度
+        self._aligned_height: Optional[int] = None  # 对齐后的高度
+
+    def set_aligned_size(self, width: int, height: int) -> None:
+        """设置对齐后的分辨率（由 ScreenRecorder 调用）。
+
+        Args:
+            width: 对齐后的宽度
+            height: 对齐后的高度
+        """
+        self._aligned_width = width
+        self._aligned_height = height
+        logger.info(f"Aligned size set: {width}x{height}")
 
     def _get_mss(self):
         """获取 mss 实例（每次调用都在当前线程创建）。
@@ -303,6 +316,15 @@ class WindowsFrameSource(FrameSource):
         bgra[:, :, 1] = rgb_array[:, :, 1]  # G
         bgra[:, :, 2] = rgb_array[:, :, 0]  # R
         bgra[:, :, 3] = 255  # A (完全不透明)
+
+        # 如果设置了对齐尺寸，且需要扩展
+        if self._aligned_width and self._aligned_height:
+            if width != self._aligned_width or height != self._aligned_height:
+                # 创建对齐尺寸的空白 BGRA
+                aligned_bgra = numpy.zeros((self._aligned_height, self._aligned_width, 4), dtype=numpy.uint8)
+                # 填充原图数据（保持 BGRA 顺序）
+                aligned_bgra[:height, :width] = bgra
+                return bytearray(aligned_bgra.tobytes())
 
         return bytearray(bgra.tobytes())
 
