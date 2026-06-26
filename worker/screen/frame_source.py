@@ -305,28 +305,23 @@ class WindowsFrameSource(FrameSource):
         self._current_monitor_config = target_monitor
         screenshot = sct.grab(target_monitor)
 
-        # mss 返回的是 RGB 格式，需要转换为 BGRA
-        # 使用 numpy 批量转换，避免 Python 循环
         width = screenshot.width
         height = screenshot.height
-        rgb_array = numpy.frombuffer(screenshot.rgb, dtype=numpy.uint8).reshape(height, width, 3)
-        # RGB -> BGRA: [R,G,B] -> [B,G,R,A]
-        bgra = numpy.empty((height, width, 4), dtype=numpy.uint8)
-        bgra[:, :, 0] = rgb_array[:, :, 2]  # B
-        bgra[:, :, 1] = rgb_array[:, :, 1]  # G
-        bgra[:, :, 2] = rgb_array[:, :, 0]  # R
-        bgra[:, :, 3] = 255  # A (完全不透明)
+
+        # mss 的 screenshot.raw 已经是 BGRA 格式！直接使用
+        raw_bgra = bytearray(screenshot.raw)
 
         # 如果设置了对齐尺寸，且需要扩展
         if self._aligned_width and self._aligned_height:
             if width != self._aligned_width or height != self._aligned_height:
                 # 创建对齐尺寸的空白 BGRA
                 aligned_bgra = numpy.zeros((self._aligned_height, self._aligned_width, 4), dtype=numpy.uint8)
-                # 填充原图数据（保持 BGRA 顺序）
-                aligned_bgra[:height, :width] = bgra
+                # 填充原图数据
+                orig_array = numpy.frombuffer(raw_bgra, dtype=numpy.uint8).reshape(height, width, 4)
+                aligned_bgra[:height, :width] = orig_array
                 return bytearray(aligned_bgra.tobytes())
 
-        return bytearray(bgra.tobytes())
+        return raw_bgra
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取显示器尺寸。使用显示器映射逻辑。"""
