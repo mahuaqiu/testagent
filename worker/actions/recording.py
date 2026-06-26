@@ -116,7 +116,7 @@ class StopRecordingAction(ActionExecutor):
 
     def execute(self, platform, action: Action, context=None) -> ActionResult:
         """
-        停止录屏。
+        停止录屏。幂等操作：没有录制进行时也返回成功。
 
         Args:
             platform: 平台管理器
@@ -126,31 +126,25 @@ class StopRecordingAction(ActionExecutor):
         device_id = getattr(platform, "_current_device", None) or "windows"
 
         try:
+            # 幂等处理：即使没有录制进行，也返回成功
             if device_id not in _screen_managers:
                 return ActionResult(
                     number=0,
                     action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error="No recording in progress",
+                    status=ActionStatus.SUCCESS,
+                    output="",
                 )
 
             screen_manager = _screen_managers[device_id]
             output_path = screen_manager.stop_recording()
 
-            if output_path:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output=output_path,
-                )
-            else:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error="No recording in progress",
-                )
+            # 无论是否有录制在进行，都返回成功（幂等）
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=output_path or "",
+            )
 
         except Exception as e:
             logger.error(f"stop_recording failed: {e}")
