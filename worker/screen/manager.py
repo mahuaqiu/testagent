@@ -221,21 +221,59 @@ class ScreenManager:
                 break
 
     def _capture_loop(self) -> None:
-        """后台截图循环（队列满时丢弃旧帧）。"""
+        """后台截图循环（队列满时丢弃旧帧，带帧率控制）。
+
+        优化：WindowsFrameSource 每次循环只截屏一次，同时放入两个队列。
+        """
+        import time
+
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误阈值
+        capture_fps = 10  # 截图线程帧率
+        frame_interval = 1.0 / capture_fps
+        last_frame_time = time.time()
 
-        # WindowsFrameSource 使用本地 MSS 截屏，不需要重连逻辑
-        # 直接调用 get_frame() 避免重连阻塞导致无法快速响应停止信号
-        use_direct_get_frame = type(self._frame_source).__name__ in ("WindowsFrameSource", "WebFrameSource")
+        # 是否共享单次截屏（WindowsFrameSource 支持）
+        use_shared_capture = type(self._frame_source).__name__ == "WindowsFrameSource"
 
         while self._running:
             try:
-                if use_direct_get_frame:
-                    frame = self._frame_source.get_frame()
+                # 帧率控制
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+
+                if use_shared_capture:
+                    # 共享一次截屏，同时获取 RGB 和 BGRA
+                    bgra = self._frame_source.get_frame_bgra()
+                    # BGRA 转 RGB 用于 _frame_queue（JPEG）
+                    if bgra:
+                        width, height = self._frame_source.get_screen_size()
+                        bgra_array = numpy.frombuffer(bytes(bgra), dtype=numpy.uint8).reshape(height, width, 4)
+                        rgb_array = bgra_array[:, :, 2::-1]  # BGRA -> RGB
+                        img = Image.fromarray(rgb_array)
+                        buffer = io.BytesIO()
+                        img.save(buffer, format="JPEG", quality=80)
+                        frame = buffer.getvalue()
+                    else:
+                        frame = self._frame_source.get_blank_frame()
+                        bgra = None
                 else:
-                    frame = self._frame_source.get_frame_with_reconnect()
+                    frame = self._frame_source.get_frame()
+                    bgra = None  # 非共享路径，后续单独获取
+
                 consecutive_errors = 0  # 成功后重置计数
+                last_frame_time = time.time()
+
+                if use_shared_capture and bgra:
+                    # 共享截屏：BGRA 已获取，直接放入 _bgra_queue
+                    if self._bgra_queue.full():
+                        try:
+                            self._bgra_queue.get_nowait()
+                        except Empty:
+                            pass
+                    self._bgra_queue.put(bgra, timeout=1)
 
                 if self._frame_queue.full():
                     # 队列满时丢弃最旧的帧
@@ -245,18 +283,19 @@ class ScreenManager:
                         pass
                 self._frame_queue.put(frame, timeout=1)
 
-                # 同时获取 BGRA 帧放入 _bgra_queue
-                try:
-                    bgra = self._frame_source.get_frame_bgra()
-                    if self._bgra_queue.full():
-                        try:
-                            self._bgra_queue.get_nowait()
-                        except Empty:
-                            pass
-                    self._bgra_queue.put(bgra, timeout=1)
-                except NotImplementedError:
-                    # FrameSource 不支持 BGRA 时跳过
-                    pass
+                # 非共享路径：单独获取 BGRA
+                if not use_shared_capture:
+                    try:
+                        bgra = self._frame_source.get_frame_bgra()
+                        if self._bgra_queue.full():
+                            try:
+                                self._bgra_queue.get_nowait()
+                            except Empty:
+                                pass
+                        self._bgra_queue.put(bgra, timeout=1)
+                    except NotImplementedError:
+                        # FrameSource 不支持 BGRA 时跳过
+                        pass
 
             except Exception as e:
                 consecutive_errors += 1
