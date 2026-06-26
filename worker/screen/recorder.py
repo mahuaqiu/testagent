@@ -91,11 +91,23 @@ class ScreenRecorder:
 
     def _write_loop(self) -> None:
         """编码写入循环。"""
+        import time
+
+        frame_interval = 1.0 / self.fps  # 每帧间隔时间
+        last_frame_time = time.time()
+
         try:
             while not self._stop_event.is_set():
+                # 帧率控制：保持稳定帧率
+                current_time = time.time()
+                elapsed = current_time - last_frame_time
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+
                 frame = self.screen_manager.get_frame_bgra()
                 if frame and self._win_recorder:
                     self._win_recorder.write_frame(frame)
+                    last_frame_time = time.time()
         except Exception as e:
             logger.error(f"Recording write loop error: {e}")
         finally:
