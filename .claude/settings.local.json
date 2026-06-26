@@ -295,7 +295,10 @@
       "Bash(python3 -c \"import win_recorder; print\\(dir\\(win_recorder\\)\\)\")",
       "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -20 {}')",
       "Bash(xxd /Users/ma/Documents/autotest/scripts/build_windows.ps1)",
-      "Bash(xxd)"
+      "Bash(xxd)",
+      "Bash(dir /s /b /a:-d)",
+      "Bash(findstr /v \"target\\\\\\\\\")",
+      "Bash(findstr /v \".git\\\\\\\\\")"
     ]
   }
 }
