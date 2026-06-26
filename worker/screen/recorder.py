@@ -92,14 +92,20 @@ class ScreenRecorder:
     def _write_loop(self) -> None:
         """编码写入循环。
 
-        注意：帧率控制由 _capture_loop 负责，这里只负责取帧并写入。
+        按录制帧率从队列取帧写入，确保帧率稳定。
         """
+        import time
+
+        frame_interval = 1.0 / self.fps
+
         try:
             while not self._stop_event.is_set():
-                # 从队列获取帧（队列空时会阻塞等待）
+                # 从队列获取帧
                 frame = self.screen_manager.get_frame_bgra()
                 if frame and self._win_recorder:
                     self._win_recorder.write_frame(frame)
+                # 按录制帧率控制速度
+                time.sleep(frame_interval)
         except Exception as e:
             logger.error(f"Recording write loop error: {e}")
         finally:
