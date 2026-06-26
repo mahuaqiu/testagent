@@ -224,13 +224,14 @@ class ScreenManager:
         """后台截图循环（队列满时丢弃旧帧，带帧率控制）。
 
         优化：WindowsFrameSource 每次循环只截屏一次，同时放入两个队列。
+        帧率使用录制帧率（如果正在录制），否则默认 10 FPS。
         """
         import time
 
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误阈值
-        capture_fps = 10  # 截图线程帧率
-        frame_interval = 1.0 / capture_fps
+        default_capture_fps = 15  # 默认帧率（高于录制帧率以保证流畅）
+        frame_interval = 1.0 / default_capture_fps
         last_frame_time = time.time()
 
         # 是否共享单次截屏（WindowsFrameSource 支持）
@@ -238,9 +239,22 @@ class ScreenManager:
 
         while self._running:
             try:
+                # 动态调整帧率：如果正在录制，使用录制 fps
+                if self._is_recording and self._recorder:
+                    capture_fps = self._recorder.fps
+                else:
+                    capture_fps = default_capture_fps
+
                 # 帧率控制
                 current_time = time.time()
                 elapsed = current_time - last_frame_time
+                new_interval = 1.0 / capture_fps
+                if abs(frame_interval - new_interval) > 0.001:
+                    # fps 变了，重新计算间隔并重置时间
+                    frame_interval = new_interval
+                    last_frame_time = current_time
+                    elapsed = 0
+
                 if elapsed < frame_interval:
                     time.sleep(frame_interval - elapsed)
 
