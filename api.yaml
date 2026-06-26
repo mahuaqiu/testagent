@@ -348,6 +348,8 @@ components:
             - set_resolution
             - set_volume
             - audio_device
+            - start_recording
+            - stop_recording
           description: |
             动作类型，分为以下几类：
 
@@ -622,6 +624,15 @@ components:
             - list 场景：negate=true 要求所有文字都不存在才算通过（严格否定）
             示例：断言"错误提示"不存在 {"action_type": "ocr_assert", "value": "错误提示", "negate": true}
             示例：断言多个错误文字都不存在 {"action_type": "ocr_assert", "value": ["错误提示", "警告"], "negate": true}
+        params:
+          type: object
+          description: |
+            扩展参数，用于自定义动作。当前仅 start_recording 动作使用：
+            - fps: 帧率（默认 10）
+            - timeout: 超时时间（毫秒，默认 7200000）
+            - monitor: 显示器选择（默认 1，主屏幕）
+            - audio: 是否录制音频（默认 false）
+            - watermark: 是否开启时间水印（默认 true）
         timeout:
           type: integer
           default: 30000
@@ -1189,3 +1200,30 @@ components:
   # {"action_type": "audio_device", "device": "扬声器", "state": "disabled"}
   # 示例 2: 启用 Realtek 音频设备
   # {"action_type": "audio_device", "device": "Realtek Audio", "state": "enable"}
+
+  # ---------- 录屏动作 ----------
+  # start_recording - 启动录屏（仅 Windows 平台）
+  # 使用 win-recorder 硬件编码录制屏幕，支持时间水印
+  # value: 输出路径，支持两种格式：
+  #   - 目录路径（如 "d:/temp"）→ 自动生成文件名 recording_YYYYMMDD_HHMMSS.mp4
+  #   - 文件路径（如 "d:/temp/test.mp4"）→ 直接使用
+  #   - 为空时使用默认配置目录 + 自动生成文件名
+  # params: 扩展参数（可选）
+  #   - fps: 帧率，默认 10
+  #   - timeout: 超时时间（毫秒），默认 7200000（2小时）
+  #   - monitor: 显示器选择，默认 1（主屏幕）
+  #   - audio: 是否录制音频，默认 false
+  #   - watermark: 是否开启时间水印，默认 true
+  # 示例 1: 启动带水印的录制（默认），保存到指定文件
+  # {"action_type": "start_recording", "value": "d:/temp/test_watermark.mp4", "params": {"fps": 10}}
+  # 示例 2: 启动不带水印的录制
+  # {"action_type": "start_recording", "value": "d:/temp/test_no_watermark.mp4", "params": {"fps": 10, "watermark": false}}
+  # 示例 3: 使用目录路径（自动生成文件名）
+  # {"action_type": "start_recording", "value": "d:/temp", "params": {"fps": 10}}
+  # 示例 4: 使用默认配置目录（自动生成文件名）
+  # {"action_type": "start_recording", "value": "", "params": {"fps": 10}}
+
+  # stop_recording - 停止录屏（仅 Windows 平台）
+  # 幂等操作：可多次调用，不会报错
+  # 示例: 停止当前录制
+  # {"action_type": "stop_recording"}
