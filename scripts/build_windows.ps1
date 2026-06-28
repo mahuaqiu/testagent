@@ -5,7 +5,6 @@ param(
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.3.4-cp312-cp312-win_amd64.whl",  # perfwin wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
-    [string]$WinRecorderWheel = "D:\code\win-recorder\target\wheels\win_recorder-0.1.0-cp312-cp312-win_amd64.whl",  # win-recorder wheel path
     [switch]$Clean,
     [switch]$BuildInstaller
 )
@@ -88,15 +87,28 @@ if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
     Write-Warning "System control actions (set_resolution, set_volume, audio_device) may not work!"
 }
 
-# Install win-recorder wheel (hardware recording)
-if ($WinRecorderWheel -ne "") {
-    $WinRecorderWheelFile = Get-Item $WinRecorderWheel -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($WinRecorderWheelFile) {
-        Write-Host "  Installing win-recorder wheel: $($WinRecorderWheelFile.FullName)"
-        pip install $WinRecorderWheelFile.FullName
+# Build Rust sidecar (if cargo is available)
+$CargoExe = Get-Command cargo -ErrorAction SilentlyContinue
+$SidecarDir = "$ProjectRoot\rust\windows-screen-sidecar"
+$SidecarExe = "$ProjectRoot\tools\windows-screen-sidecar.exe"
+if ($CargoExe -and (Test-Path "$SidecarDir\Cargo.toml")) {
+    Write-Host "[2.5/6] Building Rust sidecar..."
+    Set-Location $SidecarDir
+    cargo build --release 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $ReleaseExe = "$SidecarDir\target\release\windows-screen-sidecar.exe"
+        if (Test-Path $ReleaseExe) {
+            Copy-Item -Path $ReleaseExe -Destination $SidecarExe -Force
+            Write-Host "  Rust sidecar built and copied to tools/"
+        }
     } else {
-        Write-Warning "win-recorder wheel not found at pattern: $WinRecorderWheel"
-        Write-Warning "Hardware recording will not be available, will fall back to FFmpeg"
+        Write-Warning "Rust sidecar build failed, Windows screen features may not work"
+    }
+    Set-Location $ProjectRoot
+} else {
+    Write-Host "[2.5/6] Skipping Rust sidecar (cargo not found or dir not exists)"
+    if (-not (Test-Path $SidecarExe)) {
+        Write-Warning "windows-screen-sidecar.exe not found in tools/, Windows screen features may not work"
     }
 }
 

@@ -1,12 +1,11 @@
-"""录屏动作处理器。"""
+﻿"""录屏动作处理器。"""
 
 import logging
 import os
 from datetime import datetime
 
 from worker.actions.base import ActionExecutor
-from worker.screen.frame_source import WindowsFrameSource
-from worker.screen.manager import get_screen_manager, _screen_managers
+from worker.screen.windows_sidecar import get_windows_sidecar_manager
 from worker.task import Action, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -77,10 +76,7 @@ class StartRecordingAction(ActionExecutor):
         device_id = getattr(platform, "_current_device", None) or "windows"
 
         try:
-            # 创建 FrameSource（Windows 默认）
-            frame_source = WindowsFrameSource(fps=fps, monitor=monitor)
-
-            screen_manager = get_screen_manager(device_id, frame_source)
+            screen_manager = get_windows_sidecar_manager(f"{device_id}/{monitor}", monitor=monitor)
             success = screen_manager.start_recording(output_path, fps, timeout_ms, audio, monitor, watermark)
 
             if success:
@@ -127,15 +123,8 @@ class StopRecordingAction(ActionExecutor):
 
         try:
             # 幂等处理：即使没有录制进行，也返回成功
-            if device_id not in _screen_managers:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output="",
-                )
-
-            screen_manager = _screen_managers[device_id]
+            monitor = getattr(platform, "_current_monitor", 1) or 1
+            screen_manager = get_windows_sidecar_manager(f"{device_id}/{monitor}", monitor=monitor)
             output_path = screen_manager.stop_recording()
 
             # 无论是否有录制在进行，都返回成功（幂等）
@@ -154,3 +143,5 @@ class StopRecordingAction(ActionExecutor):
                 status=ActionStatus.FAILED,
                 error=str(e),
             )
+
+

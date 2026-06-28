@@ -11,7 +11,6 @@ import subprocess  # 用于 CalledProcessError 异常类型
 import time
 from typing import Any
 
-import mss
 import pyautogui
 import pyperclip
 
@@ -222,40 +221,87 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui.press(key)
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图（支持窗口级截图，使用 ScreenManager）。
+        """获取截图（支持窗口级截图，使用 sidecar）。
 
         如果绑定了窗口句柄，只截取该窗口区域；
-        否则使用 ScreenManager 截图。
+        否则使用 sidecar 全屏截图。
         """
+        # 获取 sidecar manager（统一入口）
+        device_id = getattr(self, "_current_device", None) or "windows"
+        monitor = getattr(self, "_current_monitor", 1) or 1
+        try:
+            from worker.screen.windows_sidecar import get_windows_sidecar_manager
+            manager = get_windows_sidecar_manager(f"windows/{device_id}/{monitor}", monitor=monitor)
+        except Exception as e:
+            logger.warning(f"sidecar manager failed: {e}, fallback to pyautogui")
+            screenshot = pyautogui.screenshot()
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="PNG")
+            return buffer.getvalue()
+
         if self._window_handle and self._window_rect:
-            # 窗口级截图：使用 mss 截取指定区域（保留原有逻辑）
-            from PIL import Image
-            left, top, right, bottom = self._window_rect
-            monitor = {
-                "left": left,
-                "top": top,
-                "width": right - left,
-                "height": bottom - top
-            }
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-                img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+            # 窗口级截图：使用 sidecar 获取全屏 raw 数据，再裁剪
+            try:
+                from PIL import Image
+                from worker.screen.monitor_utils import get_monitor_offset
+
+                data = manager._client.request(
+                    "snapshot",
+                    {
+                        "session_id": manager._session_id,
+                        "format": "raw",
+                        "max_age_ms": 100,
+                    },
+                )
+                bgra_b64 = data.get("bgra_b64")
+                width = int(data.get("width", 0))
+                height = int(data.get("height", 0))
+                if not bgra_b64 or width <= 0 or height <= 0:
+                    raise RuntimeError("sidecar raw snapshot is empty")
+
+                bgra_bytes = base64.b64decode(bgra_b64)
+                image = Image.frombuffer("RGBA", (width, height), bgra_bytes, "raw", "BGRA", 0, 1)
+
+                # 计算窗口相对于显示器的坐标
+                offset_x, offset_y = get_monitor_offset(monitor)
+                left, top, right, bottom = self._window_rect
+                crop_box = (
+                    left - offset_x,
+                    top - offset_y,
+                    right - offset_x,
+                    bottom - offset_y
+                )
+                # 确保裁剪区域在图像范围内
+                crop_box = tuple(max(0, min(x, width if i % 2 == 0 else height)) for i, x in enumerate(crop_box))
+                cropped = image.crop(crop_box)
+
                 buffer = io.BytesIO()
-                img.save(buffer, format="PNG")
-                logger.debug(f"Window screenshot: handle={self._window_handle}, size={screenshot.size}")
+                cropped.save(buffer, format="PNG")
+                logger.debug(f"Window screenshot: handle={self._window_handle}, size={cropped.size}")
+                return buffer.getvalue()
+            except Exception as e:
+                logger.warning(f"Window sidecar screenshot failed: {e}, fallback to pyautogui")
+                screenshot = pyautogui.screenshot()
+                buffer = io.BytesIO()
+                screenshot.save(buffer, format="PNG")
                 return buffer.getvalue()
         else:
-            # 全屏截图：使用 ScreenManager
+            # 全屏截图：使用 sidecar
             try:
-                from worker.screen.manager import get_screen_manager
-                from worker.screen.frame_source import WindowsFrameSource
-                # 创建 FrameSource（使用当前显示器）
-                frame_source = WindowsFrameSource(fps=10, monitor=self._current_monitor)
-                screen_manager = get_screen_manager(f"windows/{self._current_monitor}", frame_source)
-                return screen_manager.get_frame_jpeg()
+                data = manager._client.request(
+                    "snapshot",
+                    {
+                        "session_id": manager._session_id,
+                        "format": "jpeg",
+                        "quality": 85,
+                    },
+                )
+                image_b64 = data.get("image_b64")
+                if image_b64:
+                    return base64.b64decode(image_b64)
+                raise RuntimeError("sidecar snapshot is empty")
             except Exception as e:
-                logger.warning(f"ScreenManager screenshot failed: {e}, falling back to pyautogui")
-                # 回退到 pyautogui
+                logger.warning(f"sidecar screenshot failed: {e}, fallback to pyautogui")
                 screenshot = pyautogui.screenshot()
                 buffer = io.BytesIO()
                 screenshot.save(buffer, format="PNG")
@@ -519,3 +565,64 @@ class WindowsPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 error="win-control module not installed",
             )
+
+
+def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any = None) -> bytes:
+    """使用 Rust sidecar 获取 Windows 截图。"""
+    try:
+        import base64
+
+        from PIL import Image
+
+        from worker.screen.monitor_utils import get_monitor_offset
+        from worker.screen.windows_sidecar import get_windows_sidecar_manager
+
+        device_id = getattr(self, "_current_device", None) or "windows"
+        monitor = getattr(self, "_current_monitor", 1) or 1
+        manager = get_windows_sidecar_manager(f"windows/{device_id}/{monitor}", monitor=monitor)
+
+        if self._window_handle and self._window_rect:
+            data = manager._client.request(
+                "snapshot",
+                {
+                    "session_id": manager._session_id,
+                    "format": "raw",
+                    "max_age_ms": 100,
+                },
+            )
+            bgra_b64 = data.get("bgra_b64")
+            width = int(data.get("width", 0))
+            height = int(data.get("height", 0))
+            if not bgra_b64 or width <= 0 or height <= 0:
+                raise RuntimeError("sidecar raw snapshot is empty")
+
+            bgra_bytes = base64.b64decode(bgra_b64)
+            image = Image.frombuffer("RGBA", (width, height), bgra_bytes, "raw", "BGRA", 0, 1)
+
+            offset_x, offset_y = get_monitor_offset(monitor)
+            left, top, right, bottom = self._window_rect
+            crop_box = (
+                max(0, left - offset_x),
+                max(0, top - offset_y),
+                min(width, right - offset_x),
+                min(height, bottom - offset_y),
+            )
+            image = image.crop(crop_box)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            logger.debug("Window screenshot by sidecar: handle=%s, size=%s", self._window_handle, image.size)
+            return buffer.getvalue()
+
+        return manager.get_frame_jpeg()
+    except Exception as exc:
+        logger.warning("Sidecar screenshot failed, fallback to pyautogui: %s", exc)
+        screenshot = pyautogui.screenshot()
+        buffer = io.BytesIO()
+        screenshot.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+WindowsPlatformManager.take_screenshot = _windows_take_screenshot_sidecar

@@ -299,7 +299,26 @@
       "Bash(dir /s /b /a:-d)",
       "Bash(findstr /v \"target\\\\\\\\\")",
       "Bash(findstr /v \".git\\\\\\\\\")",
-      "Bash(dir tests\\\\test_watermark.py)"
+      "Bash(dir tests\\\\test_watermark.py)",
+      "Bash(cargo run *)",
+      "Bash(iconv -f gbk -t utf-8)",
+      "Bash(timeout 5 ./windows-screen-sidecar.exe)",
+      "Bash(./windows-screen-sidecar.exe)",
+      "Bash(cp D:/code/win-recorder/src/error.rs D:/code/autotest/rust/windows-screen-sidecar/src/win_recorder/)",
+      "Bash(cp D:/code/win-recorder/src/memory_byte_stream.rs D:/code/autotest/rust/windows-screen-sidecar/src/win_recorder/)",
+      "Bash(cp D:/code/win-recorder/src/bgra_to_nv12.rs D:/code/autotest/rust/windows-screen-sidecar/src/win_recorder/)",
+      "Bash(cp D:/code/win-recorder/src/watermark.rs D:/code/autotest/rust/windows-screen-sidecar/src/win_recorder/)",
+      "Bash(cp D:/code/win-recorder/src/d3d11.rs D:/code/autotest/rust/windows-screen-sidecar/src/win_recorder/)",
+      "Bash(sed -i 's/use crate::error/use crate::win_recorder::error/g' error.rs)",
+      "Bash(sed -i '/use pyo3/d' error.rs)",
+      "Bash(sed -i 's/use crate::error/use crate::win_recorder::error/g' d3d11.rs)",
+      "Bash(sed -i 's/use crate::error/use crate::win_recorder::error/g' watermark.rs)",
+      "Bash(sed -i 's/use crate::error/use crate::win_recorder::error/g' mf_writer.rs)",
+      "Bash(sed -i 's/use crate::bgra_to_nv12/use crate::win_recorder::bgra_to_nv12/g' h264_encoder.rs)",
+      "Bash(sed -i 's/use crate::error/use crate::win_recorder::error/g' h264_encoder.rs)",
+      "Bash(sed -i 's/use crate::memory_byte_stream/use crate::win_recorder::memory_byte_stream/g' h264_encoder.rs)",
+      "Bash(sed -i 's/use crate::d3d11/use crate::win_recorder::d3d11/g' h264_encoder.rs)",
+      "Bash(sed -i '/use pyo3::prelude/d' h264_encoder.rs)"
     ]
   }
 }

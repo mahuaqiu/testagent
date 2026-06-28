@@ -173,7 +173,7 @@ PlatformManager (抽象基类)
 | 值 | 说明 | 适用场景 |
 |----|------|----------|
 | `browser` | 使用 Playwright 操作浏览器内部内容（默认） | 正常 Web 页面操作 |
-| `system` | 使用系统级操作（mss 截屏 + pyautogui 点击） | 原生对话框、文件选择器、权限弹窗 |
+| `system` | 使用系统级操作（Rust sidecar 截屏 + pyautogui 点击） | 原生对话框、文件选择器、权限弹窗 |
 
 **使用示例**：
 ```json
@@ -199,7 +199,7 @@ PlatformManager (抽象基类)
 {"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
 ```
 
-**依赖**：`level: system` 需要 `mss` 和 `pyautogui` 库。
+**依赖**：`level: system` 需要 `pyautogui` 库和 Rust sidecar（`windows-screen-sidecar.exe`）。
 
 ### image_click_near_text 说明
 

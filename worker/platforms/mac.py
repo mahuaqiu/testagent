@@ -141,21 +141,15 @@ class MacPlatformManager(PlatformManager):
             pyautogui.press(key)
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图（使用 ScreenManager）。"""
+        """获取截图（使用 pyautogui）。"""
         try:
-            from worker.screen.manager import get_screen_manager
-            from worker.screen.frame_source import WindowsFrameSource
-            # Mac 平台也使用 WindowsFrameSource（mss 支持跨平台）
-            frame_source = WindowsFrameSource(fps=10, monitor=1)
-            screen_manager = get_screen_manager("mac/1", frame_source)
-            return screen_manager.get_frame_jpeg()
-        except Exception as e:
-            logger.warning(f"ScreenManager screenshot failed: {e}, falling back to pyautogui")
-            # 回退到 pyautogui
             screenshot = pyautogui.screenshot()
             buffer = io.BytesIO()
             screenshot.save(buffer, format="PNG")
             return buffer.getvalue()
+        except Exception as e:
+            logger.error(f"Screenshot failed: {e}")
+            return b""
 
     def get_screenshot(self, context: Any) -> bytes:
         """获取当前屏幕截图（兼容旧接口）。"""

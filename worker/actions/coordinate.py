@@ -1,4 +1,4 @@
-"""
+﻿"""
 坐标类 Action 执行器。
 
 包含所有基于坐标的动作：click, input, swipe, press, screenshot, wait。
@@ -365,6 +365,11 @@ class ScreenshotAction(BaseActionExecutor):
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
+        # 设置 monitor 参数（Windows 平台专用）
+        if hasattr(platform, "_current_monitor"):
+            platform._current_monitor = action.monitor if action.monitor is not None else 1
+
+
         screenshot = platform.take_screenshot(context)
         # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
         compressed = compress_image_to_jpeg(screenshot, quality=80)
@@ -404,3 +409,4 @@ class WaitAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=f"Waited {wait_time_sec}s",
         )
+

@@ -963,8 +963,17 @@ async def screen_stream(
                 await websocket.close(code=1008, reason=f"Android device not registered: {device_id}")
                 return
 
+        if platform == "windows":
+            from worker.screen.windows_sidecar import get_windows_sidecar_manager
+
+            screen_manager = get_windows_sidecar_manager(
+                conn_key,
+                monitor=monitor,
+                idle_fps=1,
+                active_fps=streaming_fps,
+            )
         # 根据 platform 创建对应的 FrameSource
-        if conn_key not in _screen_managers:
+        elif conn_key not in _screen_managers:
             frame_source = _create_frame_source(platform, device_id, monitor)
             screen_manager = get_screen_manager(conn_key, frame_source)
         else:
@@ -1034,9 +1043,15 @@ async def screen_stream(
         # 当连接计数降至 0 时，关闭 ScreenManager 以停止后台帧捕获线程
         if _ws_connections[conn_key] <= 0:
             del _ws_connections[conn_key]
-            # 关闭 ScreenManager（停止后台线程，避免资源泄漏）
-            from worker.screen.manager import close_screen_manager
-            close_screen_manager(conn_key)
+            if platform == "windows":
+                from worker.screen.windows_sidecar import close_windows_sidecar_manager
+
+                close_windows_sidecar_manager(conn_key)
+            else:
+                # 关闭 ScreenManager（停止后台线程，避免资源泄漏）
+                from worker.screen.manager import close_screen_manager
+
+                close_screen_manager(conn_key)
             log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
             logger.info(f"ScreenManager closed: conn_key={conn_key}, last WebSocket disconnected")
 

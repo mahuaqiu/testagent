@@ -21,3 +21,8 @@ selfIdentity.plist
 .worktrees/
 worktrees/
 /.claude
+/rust/windows-screen-sidecar/target
+*.mp4
+test.py
+test_sidecar_recording.py
+/test_output

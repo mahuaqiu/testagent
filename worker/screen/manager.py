@@ -2,6 +2,7 @@
 
 import io
 import logging
+import os
 import threading
 import time
 from queue import Queue, Empty
