@@ -123,11 +123,8 @@ impl WinRecorder {
             }
         }
 
-        // 拷贝 staging 到 GPU
-        texture_manager.copy_staging_to_gpu();
-
-        // 创建 MF Sample
-        let sample = texture_manager.create_mf_sample()?;
+        // 直接从 staging 纹理创建 MF Sample（跳过 GPU 纹理，避免冗余拷贝）
+        let sample = texture_manager.create_sample_from_staging()?;
 
         // 写入 SinkWriter
         let mut writer = sink_writer.lock();

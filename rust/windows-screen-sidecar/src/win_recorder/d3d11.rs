@@ -204,16 +204,12 @@ impl D3D11TextureManager {
         }
     }
 
-    /// 创建 Media Foundation Sample（使用内存缓冲区）
-    ///
-    /// # 返回
-    /// 返回包含帧数据的 IMFSample
+    /// 从 Staging 纹理创建 Media Foundation Sample
     ///
     /// # 说明
-    /// 用于传递给 MF SinkWriter 进行编码
-    /// 注意：此方法直接从已上传的帧数据创建缓冲区
-    /// 由于数据已经在 Staging 纹理中，我们需要重新映射以读取
-    pub fn create_mf_sample(&self) -> Result<IMFSample, RecorderError> {
+    /// 直接从 staging 纹理读取数据创建 MF Sample，跳过 GPU 纹理
+    /// 这是最高效的路径，避免了 staging→GPU→staging 的冗余拷贝
+    pub fn create_sample_from_staging(&self) -> Result<IMFSample, RecorderError> {
         unsafe {
             // 创建 Sample
             let sample = MFCreateSample()
@@ -234,14 +230,8 @@ impl D3D11TextureManager {
                 .Lock(&mut data_ptr, Some(&mut max_length), Some(&mut current_length))
                 .map_err(|e| RecorderError::MFError(format!("锁定缓冲区失败: {}", e)))?;
 
-            // 映射 GPU 纹理以读取数据（使用 MAP_READ）
-            // 注意：GPU 纹理是 DEFAULT usage，不能直接映射
-            // 我们需要使用 Staging 纹理来读取数据
+            // 直接映射 staging 纹理读取数据（使用 MAP_READ）
             let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-
-            // 先将 GPU 纹理拷贝回 Staging 纹理
-            self.context.CopyResource(&self.staging_texture, &self.gpu_texture);
-
             self.context
                 .Map(
                     &self.staging_texture,
@@ -287,6 +277,20 @@ impl D3D11TextureManager {
 
             Ok(sample)
         }
+    }
+
+    /// 创建 Media Foundation Sample（旧方法，保留兼容）
+    ///
+    /// # 说明
+    /// 此方法先拷贝到 GPU 纹理再回读，是冗余的
+    /// 建议使用 create_sample_from_staging() 代替
+    #[deprecated(note = "使用 create_sample_from_staging() 代替")]
+    pub fn create_mf_sample(&self) -> Result<IMFSample, RecorderError> {
+        // 先确保数据在 GPU 纹理中
+        self.copy_staging_to_gpu();
+        // 然后回读到 staging 并创建 sample（冗余）
+        // 为了兼容，委托给新方法（数据已在 staging 中）
+        self.create_sample_from_staging()
     }
 
     /// 检测显示器尺寸

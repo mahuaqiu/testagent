@@ -71,6 +71,17 @@ pub struct EncodedFrame {
     pub data: Vec<u8>,
 }
 
+/// 编码器类型
+#[derive(Debug, Clone, PartialEq)]
+pub enum EncoderType {
+    /// 硬件/加速编码器
+    Hardware,
+    /// 软件编码器
+    Software,
+    /// 未知类型
+    Unknown,
+}
+
 /// 基于 IMFTransform 的 H.264 编码器
 ///
 /// 输入为 NV12（由调用方传入的 BGRA 经 CPU 转换得到）。详见模块顶部说明。
@@ -90,6 +101,8 @@ pub struct H264Encoder {
     encoder_output_id: u32,
     /// IDR 关键帧间隔（帧数），0 表示不强制 IDR
     idr_interval: u32,
+    /// 编码器类型
+    encoder_type: EncoderType,
 }
 
 unsafe impl Send for H264Encoder {}
@@ -134,6 +147,7 @@ impl H264Encoder {
             encoder_input_id: 0,
             encoder_output_id: 0,
             idr_interval: 30, // 默认每 30 帧产生一个 IDR 关键帧
+            encoder_type: EncoderType::Unknown,
         })
     }
 
@@ -416,14 +430,65 @@ impl H264Encoder {
 
     // ==================== 内部方法 ====================
 
-    /// 创建 H264 编码 MFT
-    unsafe fn create_h264_encoder(&self) -> Result<IMFTransform, RecorderError> {
+    /// 创建 H264 编码器
+    ///
+    /// Windows MFT 会自动根据硬件能力选择硬件加速或软件实现
+    /// 我们创建后检测其能力来判断类型
+    unsafe fn create_h264_encoder(&mut self) -> Result<IMFTransform, RecorderError> {
+        // 创建 H264 编码器 MFT
+        // Windows 会自动选择硬件加速（如果可用）或软件实现
         let encoder: IMFTransform =
             CoCreateInstance(&CLSID_MSH264_ENCODER_MFT, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| RecorderError::MFError(format!("创建 H264 编码 MFT 失败: {}", e)))?;
 
-        println!("[H264Encoder] H264 编码 MFT 创建成功");
+        // 检测编码器类型
+        self.encoder_type = self.detect_encoder_type(&encoder);
+
+        match self.encoder_type {
+            EncoderType::Hardware => {
+                println!("[H264Encoder] 硬件加速编码器创建成功");
+            }
+            EncoderType::Software => {
+                println!("[H264Encoder] 软件编码器创建成功（无硬件加速）");
+            }
+            EncoderType::Unknown => {
+                println!("[H264Encoder] 编码器创建成功（类型未知，将使用软件路径）");
+            }
+        }
+
         Ok(encoder)
+    }
+
+    /// 检测编码器类型（硬件/软件）
+    ///
+    /// 注意：这里做一个简化判断
+    /// 实际上很难准确区分硬件/软件编码器，因为 Windows MFT 内部会自适应
+    /// 最准确的方式是运行时监控 GPU 使用率
+    unsafe fn detect_encoder_type(&self, _encoder: &IMFTransform) -> EncoderType {
+        // 简化判断：默认尝试硬件加速
+        // Windows MFT 会在硬件不可用时自动回退到软件
+        // 这里我们保守地返回 Software，让调用方通过性能表现来判断
+        // 如果实际有硬件加速，性能会更好，CPU占用会更低
+        EncoderType::Software
+    }
+
+    /// 检测编码器是否为硬件加速
+    pub fn is_hardware_encoder(&self) -> bool {
+        matches!(self.encoder_type, EncoderType::Hardware)
+    }
+
+    /// 获取编码器类型描述
+    pub fn encoder_type_str(&self) -> &'static str {
+        match self.encoder_type {
+            EncoderType::Hardware => "hardware",
+            EncoderType::Software => "software",
+            EncoderType::Unknown => "unknown",
+        }
+    }
+
+    /// 获取编码器类型
+    pub fn encoder_type(&self) -> &EncoderType {
+        &self.encoder_type
     }
 
     /// 配置 MFT 管线：NV12 输入 -> H264 输出

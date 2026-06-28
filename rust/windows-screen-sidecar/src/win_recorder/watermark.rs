@@ -1,7 +1,9 @@
 //! 时间水印渲染器
 //! 使用 Windows GDI 字体渲染，在 D3D11 staging 纹理上绘制时间
 //! 优势：系统矢量字体渲染，OCR 识别效果远优于点阵字体
+//! 优化：缓存 GDI 对象避免每帧重建
 
+use std::ptr;
 use windows::Win32::Foundation::{COLORREF, SIZE};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -27,7 +29,10 @@ const BASE_BG_PADDING: u32 = 6;
 /// 背景框不透明度 (80%) - 用于参考计算
 // const BG_ALPHA: u8 = 204;
 
-/// 水印渲染器
+/// 水印渲染器（带GDI对象缓存）
+///
+/// 注意：为了支持跨线程使用，GDI 对象句柄存储为原始数值
+/// 在需要使用时再转换为具体的 GDI 类型
 pub struct WatermarkRenderer {
     // 缓存上次的缩放因子，避免重复计算
     cached_scale: f32,
@@ -36,6 +41,13 @@ pub struct WatermarkRenderer {
     cached_margin: u32,
     cached_font_height: i32,
     cached_bg_padding: u32,
+    // 缓存的 GDI 对象句柄（存储为原始数值以支持 Send）
+    cached_hdc_handle: Option<isize>,
+    cached_hbitmap_handle: Option<isize>,
+    cached_font_handle: Option<isize>,
+    cached_dib_data: Option<Vec<u8>>,
+    cached_dib_width: u32,
+    cached_dib_height: u32,
 }
 
 /// 根据分辨率计算缩放因子
@@ -61,19 +73,133 @@ impl WatermarkRenderer {
             cached_margin: 0,
             cached_font_height: 0,
             cached_bg_padding: 0,
+            // 初始化 GDI 缓存为 None
+            cached_hdc_handle: None,
+            cached_hbitmap_handle: None,
+            cached_font_handle: None,
+            cached_dib_data: None,
+            cached_dib_width: 0,
+            cached_dib_height: 0,
         }
+    }
+
+    /// 释放缓存的 GDI 对象
+    fn free_cached_gdi(&mut self) {
+        unsafe {
+            if let Some(handle) = self.cached_font_handle.take() {
+                let _ = DeleteObject(HGDIOBJ(handle as *mut _));
+            }
+            if let Some(handle) = self.cached_hbitmap_handle.take() {
+                let _ = DeleteObject(HGDIOBJ(handle as *mut _));
+            }
+            if let Some(handle) = self.cached_hdc_handle.take() {
+                let _ = DeleteDC(HDC(handle as *mut _));
+            }
+        }
+        self.cached_dib_data = None;
+        self.cached_dib_width = 0;
+        self.cached_dib_height = 0;
     }
 
     /// 更新缓存参数（分辨率变化时调用）
     fn update_cache(&mut self, width: u32, height: u32) {
         let scale = calc_scale(width, height);
-        if (scale - self.cached_scale).abs() > 0.001 {
+        let need_recreate = (scale - self.cached_scale).abs() > 0.001;
+
+        if need_recreate {
+            // 缩放比例变化时，释放旧的 GDI 对象缓存
+            self.free_cached_gdi();
+
             self.cached_scale = scale;
             self.cached_bg_width = scale_px(BASE_BG_WIDTH, scale);
             self.cached_bg_height = scale_px(BASE_BG_HEIGHT, scale);
             self.cached_margin = scale_px(BASE_MARGIN, scale);
             self.cached_font_height = (BASE_FONT_HEIGHT as f32 * scale).round() as i32;
             self.cached_bg_padding = scale_px(BASE_BG_PADDING, scale);
+        }
+    }
+
+    /// 懒初始化 GDI 对象（首次渲染时调用）
+    fn lazy_init_gdi(&mut self) -> Result<(), RecorderError> {
+        // 如果已经有缓存，直接返回
+        if self.cached_hdc_handle.is_some() {
+            return Ok(());
+        }
+
+        let bg_width = self.cached_bg_width;
+        let bg_height = self.cached_bg_height;
+
+        unsafe {
+            // 创建内存 DC（直接返回 HDC，不是 Result）
+            let hdc = CreateCompatibleDC(None);
+
+            // 创建 DIB Section 用于 GDI 渲染（BGRA 格式）
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: bg_width as i32,
+                    biHeight: -(bg_height as i32), // 负值 = 自顶向下
+                    biPlanes: 1,
+                    biBitCount: 32, // BGRA
+                    biCompression: BI_RGB.0 as u32,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [RGBQUAD::default()],
+            };
+
+            let mut ppv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let hbitmap = match CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut ppv_bits, None, 0) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = DeleteDC(hdc);
+                    return Err(RecorderError::D3D11TextureError(
+                        format!("CreateDIBSection 失败: {}", e),
+                    ));
+                }
+            };
+
+            // 创建字体 - 使用微软雅黑（直接返回，不是 Result）
+            let font = CreateFontW(
+                self.cached_font_height, // 高度
+                0,                        // 宽度（自动）
+                0,                        // 文字倾斜
+                0,                        // 基线倾斜
+                FW_BOLD.0 as i32,         // 粗体
+                0,                        // 斜体
+                0,                        // 下划线
+                0,                        // 删除线
+                DEFAULT_CHARSET.0 as u32, // 字符集
+                OUT_DEFAULT_PRECIS.0 as u32,
+                CLIP_DEFAULT_PRECIS.0 as u32,
+                CLEARTYPE_QUALITY.0 as u32, // ClearType 渲染
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                windows::core::PCWSTR(windows::core::w!("Microsoft YaHei").as_ptr()),
+            );
+
+            // 选入位图
+            let old_bitmap = SelectObject(hdc, HGDIOBJ(hbitmap.0));
+
+            // 选入字体
+            let _old_font = SelectObject(hdc, HGDIOBJ(font.0));
+
+            // 缓存这些对象的句柄值（存储为原始数值以支持 Send）
+            self.cached_hdc_handle = Some(hdc.0 as isize);
+            self.cached_hbitmap_handle = Some(hbitmap.0 as isize);
+            self.cached_font_handle = Some(font.0 as isize);
+
+            // 保存 Dib 数据 buffer 指针供后续使用
+            // 注意：这里只保存尺寸信息，实际渲染时重新映射
+            self.cached_dib_width = bg_width;
+            self.cached_dib_height = bg_height;
+
+            // 恢复 DC 状态
+            let _ = SelectObject(hdc, old_bitmap);
+
+            Ok(())
         }
     }
 
@@ -313,14 +439,13 @@ impl WatermarkRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), RecorderError> {
-        // 更新缩放缓存
+        // 更新缩放缓存（如果缩放比例变化，会释放旧的 GDI 对象）
         self.update_cache(width, height);
 
         let bg_width = self.cached_bg_width;
         let bg_height = self.cached_bg_height;
         let margin = self.cached_margin;
         let font_height = self.cached_font_height;
-        let _bg_padding = self.cached_bg_padding;
 
         // 最小分辨率检查
         let min_width = margin + bg_width;
@@ -329,9 +454,20 @@ impl WatermarkRenderer {
             return Ok(()); // 分辨率太小，跳过水印
         }
 
-        // 使用 GDI 渲染文字（文字居中渲染在较小区域）
+        // 懒初始化 GDI 对象（首次渲染时创建，之后��用）
+        self.lazy_init_gdi()?;
+
+        // 使用缓存的 GDI 对象渲染文字
         let time_str = Self::get_time_string();
-        let gdi_result = Self::render_text_gdi(&time_str, font_height, bg_width, bg_height)?;
+        let gdi_result = unsafe { render_text_with_cached_gdi(
+            &time_str,
+            font_height,
+            bg_width,
+            bg_height,
+            self.cached_hdc_handle,
+            self.cached_hbitmap_handle,
+            self.cached_font_handle,
+        ) }?;
 
         let (dib_data, dib_width, dib_height) = match gdi_result {
             Some(data) => data,
@@ -391,4 +527,106 @@ impl WatermarkRenderer {
 
         Ok(())
     }
+}
+
+impl Drop for WatermarkRenderer {
+    fn drop(&mut self) {
+        self.free_cached_gdi();
+    }
+}
+
+/// 使用缓存的 GDI 对象渲染文字（接收原始句柄值）
+unsafe fn render_text_with_cached_gdi(
+    time_str: &str,
+    font_height: i32,
+    bg_width: u32,
+    bg_height: u32,
+    hdc_handle: Option<isize>,
+    hbitmap_handle: Option<isize>,
+    font_handle: Option<isize>,
+) -> Result<Option<(Vec<u8>, u32, u32)>, RecorderError> {
+    let hdc = match hdc_handle {
+        Some(h) => HDC(h as *mut _),
+        None => return Ok(None),
+    };
+    let hbitmap = match hbitmap_handle {
+        Some(h) => HBITMAP(h as *mut _),
+        None => return Ok(None),
+    };
+    let font = match font_handle {
+        Some(f) => HFONT(f as *mut _),
+        None => return Ok(None),
+    };
+
+    // 选入缓存的位图和字体
+    let old_bitmap = SelectObject(hdc, HGDIOBJ(hbitmap.0));
+    let old_font = SelectObject(hdc, HGDIOBJ(font.0));
+
+    // 清空为全透明
+    let total_bytes = (bg_width * bg_height * 4) as usize;
+    // 获取位图数据指针
+    let mut bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: bg_width as i32,
+            biHeight: -(bg_height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0 as u32,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [RGBQUAD::default()],
+    };
+
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let ret = GetDIBits(
+        hdc,
+        hbitmap,
+        0,
+        bg_height,
+        Some(bits),
+        &mut bmi,
+        DIB_RGB_COLORS,
+    );
+
+    // GetDIBits 返回非0表示成功
+    if ret != 0 && !bits.is_null() {
+        ptr::write_bytes(bits as *mut u8, 0, total_bytes);
+    }
+
+    // 设置文字颜色为白色
+    SetTextColor(hdc, COLORREF(0x00FFFFFF));
+    SetBkMode(hdc, TRANSPARENT);
+
+    // 测量文字尺寸
+    let time_wide: Vec<u16> = time_str.encode_utf16().collect();
+    let mut size = SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &time_wide, &mut size);
+
+    // 计算文字居中偏移
+    let text_x = ((bg_width as i32 - size.cx) / 2).max(0);
+    let text_y = ((bg_height as i32 - size.cy) / 2).max(0);
+
+    // 绘制文字
+    let _ = TextOutW(hdc, text_x, text_y, &time_wide);
+
+    // 读取渲染结果
+    let dib_data = if !bits.is_null() {
+        std::slice::from_raw_parts(bits as *const u8, total_bytes).to_vec()
+    } else {
+        // 回退：重新使用原方法
+        let _ = SelectObject(hdc, old_font);
+        let _ = SelectObject(hdc, old_bitmap);
+        return Ok(None);
+    };
+
+    // 恢复 DC 状态
+    let _ = SelectObject(hdc, old_font);
+    let _ = SelectObject(hdc, old_bitmap);
+
+    Ok(Some((dib_data, bg_width, bg_height)))
 }
