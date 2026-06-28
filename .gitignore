@@ -20,3 +20,4 @@ worker/_version.py
 selfIdentity.plist
 .worktrees/
 worktrees/
+/.claude

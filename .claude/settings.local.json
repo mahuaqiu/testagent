@@ -298,7 +298,8 @@
       "Bash(xxd)",
       "Bash(dir /s /b /a:-d)",
       "Bash(findstr /v \"target\\\\\\\\\")",
-      "Bash(findstr /v \".git\\\\\\\\\")"
+      "Bash(findstr /v \".git\\\\\\\\\")",
+      "Bash(dir tests\\\\test_watermark.py)"
     ]
   }
 }
