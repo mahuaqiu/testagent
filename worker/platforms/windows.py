@@ -278,6 +278,11 @@ class WindowsPlatformManager(PlatformManager):
                 buffer = io.BytesIO()
                 cropped.save(buffer, format="PNG")
                 logger.debug(f"Window screenshot: handle={self._window_handle}, size={cropped.size}")
+
+                # 截图后清除窗口信息，避免影响后续全屏截图
+                self._window_handle = None
+                self._window_rect = None
+
                 return buffer.getvalue()
             except Exception as e:
                 logger.warning(f"Window sidecar screenshot failed: {e}, fallback to pyautogui")
@@ -614,6 +619,11 @@ def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any 
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
             logger.debug("Window screenshot by sidecar: handle=%s, size=%s", self._window_handle, image.size)
+
+            # 截图后清除窗口信息，避免影响后续全屏截图
+            self._window_handle = None
+            self._window_rect = None
+
             return buffer.getvalue()
 
         return manager.get_frame_jpeg()
