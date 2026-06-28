@@ -41,7 +41,7 @@ def test_recording():
         return
 
     print("✅ 录制已启动，等待 3 秒...")
-    time.sleep(30)
+    time.sleep(20)
 
     # 测试2: 停止录制
     print("\n" + "=" * 50)

@@ -134,7 +134,12 @@ class Action:
     # 默认 None 表示显式禁用代理（不走系统代理）
     proxy: str | None = None
 
-    # 扩展参数（用于自定义动作，如 start_recording）
+    # 录屏参数（start_recording 专用）
+    fps: int | None = None                    # 帧率（默认 10）
+    audio: bool = False                       # 是否录制音频
+    watermark: bool = True                    # 是否开启时间水印
+
+    # 扩展参数（用于自定义动作，如 pinch）
     params: dict[str, Any] | None = None
 
     @classmethod
@@ -203,6 +208,9 @@ class Action:
             name=data.get("name"),
             negate=data.get("negate", False),
             proxy=data.get("proxy"),
+            fps=data.get("fps"),
+            audio=data.get("audio", False),
+            watermark=data.get("watermark", True),
             params=data.get("params"),
         )
 
@@ -288,6 +296,12 @@ class Action:
             result["negate"] = self.negate
         if self.proxy is not None:
             result["proxy"] = self.proxy
+        if self.fps is not None:
+            result["fps"] = self.fps
+        if self.audio:
+            result["audio"] = self.audio
+        if not self.watermark:
+            result["watermark"] = self.watermark
         if self.params is not None:
             result["params"] = self.params
 

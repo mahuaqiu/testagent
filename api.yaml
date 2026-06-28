@@ -627,12 +627,24 @@ components:
         params:
           type: object
           description: |
-            扩展参数，用于自定义动作。当前仅 start_recording 动作使用：
-            - fps: 帧率（默认 10）
-            - timeout: 超时时间（毫秒，默认 7200000）
-            - monitor: 显示器选择（默认 1，主屏幕）
-            - audio: 是否录制音频（默认 false）
-            - watermark: 是否开启时间水印（默认 true）
+            扩展参数，用于自定义动作。当前仅 pinch 手势动作使用：
+            - scale: 缩放比例（默认 0.5）
+            - duration: 持续时间（毫秒，默认 500）
+        fps:
+          type: integer
+          default: 10
+          description: |
+            帧率，仅 start_recording 动作使用（默认 10）
+        audio:
+          type: boolean
+          default: false
+          description: |
+            是否录制音频，仅 start_recording 动作使用（默认 false）
+        watermark:
+          type: boolean
+          default: true
+          description: |
+            是否开启时间水印，仅 start_recording 动作使用（默认 true）
         timeout:
           type: integer
           default: 30000
@@ -1208,20 +1220,21 @@ components:
   #   - 目录路径（如 "d:/temp"）→ 自动生成文件名 recording_YYYYMMDD_HHMMSS.mp4
   #   - 文件路径（如 "d:/temp/test.mp4"）→ 直接使用
   #   - 为空时使用默认配置目录 + 自动生成文件名
-  # params: 扩展参数（可选）
-  #   - fps: 帧率，默认 10
-  #   - timeout: 超时时间（毫秒），默认 7200000（2小时）
-  #   - monitor: 显示器选择，默认 1（主屏幕）
-  #   - audio: 是否录制音频，默认 false
-  #   - watermark: 是否开启时间水印，默认 true
-  # 示例 1: 启动带水印的录制（默认），保存到指定文件
-  # {"action_type": "start_recording", "value": "d:/temp/test_watermark.mp4", "params": {"fps": 10}}
-  # 示例 2: 启动不带水印的录制
-  # {"action_type": "start_recording", "value": "d:/temp/test_no_watermark.mp4", "params": {"fps": 10, "watermark": false}}
-  # 示例 3: 使用目录路径（自动生成文件名）
-  # {"action_type": "start_recording", "value": "d:/temp", "params": {"fps": 10}}
-  # 示例 4: 使用默认配置目录（自动生成文件名）
-  # {"action_type": "start_recording", "value": "", "params": {"fps": 10}}
+  # fps: 帧率（可选，默认 10）
+  # audio: 是否录制音频（可选，默认 false）
+  # watermark: 是否开启时间水印（可选，默认 true）
+  # timeout: 超时时间（毫秒，可选，默认 7200000，即 2 小时）
+  # monitor: 显示器选择（可选，默认 1，主屏幕）
+  # 示例 1: 启动录制，保存到指定文件
+  # {"action_type": "start_recording", "value": "d:/temp/test.mp4"}
+  # 示例 2: 启动录制，指定帧��和音频
+  # {"action_type": "start_recording", "value": "d:/temp/test.mp4", "fps": 15, "audio": true}
+  # 示例 3: 启动不带水印的录制
+  # {"action_type": "start_recording", "value": "d:/temp/test.mp4", "watermark": false}
+  # 示例 4: 使用目录路径（自动生成文件名）
+  # {"action_type": "start_recording", "value": "d:/temp"}
+  # 示例 5: 使用默认配置目录（自动生成文件名）
+  # {"action_type": "start_recording"}
 
   # stop_recording - 停止录屏（仅 Windows 平台）
   # 幂等操作：可多次调用，不会报错

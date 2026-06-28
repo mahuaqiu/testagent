@@ -29,11 +29,11 @@ class StartRecordingAction(ActionExecutor):
                   - 目录路径（如 d:\\recorder）→ 自动生成文件名
                   - 文件路径（如 d:\\recorder\\test.mp4）→ 直接使用
                   - 为空时使用默认配置目录 + 自动生成文件名
-                - params.fps: 帧率（默认 10）
-                - params.timeout: 超时（毫秒，默认 7200000）
-                - params.monitor: 显示器选择（默认 1，主屏幕）
-                - params.audio: 是否录制音频（默认 false）
-                - params.watermark: 是否开启水印（默认 true）
+                - fps: 帧率（默认 10）
+                - timeout: 超时（毫秒，默认 7200000）
+                - monitor: 显示器选择（默认 1，主屏幕）
+                - audio: 是否录制音频（默认 false）
+                - watermark: 是否开启水印（默认 true）
             context: 执行上下文
         """
         from worker.config import load_config
@@ -67,11 +67,11 @@ class StartRecordingAction(ActionExecutor):
         if output_file_dir:
             os.makedirs(output_file_dir, exist_ok=True)
 
-        fps = action.params.get("fps", 10) if action.params else 10
-        timeout_ms = action.params.get("timeout", 7200000) if action.params else 7200000
-        monitor = action.params.get("monitor", 1) if action.params else 1
-        audio = action.params.get("audio", False) if action.params else False
-        watermark = action.params.get("watermark", True) if action.params else True
+        fps = action.fps or 10
+        timeout_ms = action.timeout if action.timeout != 30000 else 7200000
+        monitor = action.monitor
+        audio = action.audio
+        watermark = action.watermark
 
         # 获取设备 ID
         device_id = getattr(platform, "_current_device", None) or "windows"
