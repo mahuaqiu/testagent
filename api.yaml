@@ -645,6 +645,11 @@ components:
           default: true
           description: |
             是否开启时间水印，仅 start_recording 动作使用（默认 true）
+        recording_timeout:
+          type: integer
+          default: 7200000
+          description: |
+            录屏超时时间（毫秒），仅 start_recording 动作使用（默认 7200000，即 2 小时）
         timeout:
           type: integer
           default: 30000
@@ -1223,11 +1228,11 @@ components:
   # fps: 帧率（可选，默认 10）
   # audio: 是否录制音频（可选，默认 false）
   # watermark: 是否开启时间水印（可选，默认 true）
-  # timeout: 超时时间（毫秒，可选，默认 7200000，即 2 小时）
+  # recording_timeout: 录屏超时时间（毫秒，可选，默认 7200000，即 2 小时）
   # monitor: 显示器选择（可选，默认 1，主屏幕）
   # 示例 1: 启动录制，保存到指定文件
   # {"action_type": "start_recording", "value": "d:/temp/test.mp4"}
-  # 示例 2: 启动录制，指定帧��和音频
+  # 示例 2: 启动录制，指定帧率和音频
   # {"action_type": "start_recording", "value": "d:/temp/test.mp4", "fps": 15, "audio": true}
   # 示例 3: 启动不带水印的录制
   # {"action_type": "start_recording", "value": "d:/temp/test.mp4", "watermark": false}

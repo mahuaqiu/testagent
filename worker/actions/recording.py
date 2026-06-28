@@ -67,8 +67,8 @@ class StartRecordingAction(ActionExecutor):
         if output_file_dir:
             os.makedirs(output_file_dir, exist_ok=True)
 
-        fps = action.fps or 10
-        timeout_ms = action.timeout if action.timeout != 30000 else 7200000
+        fps = action.fps if action.fps is not None else 10
+        timeout_ms = action.recording_timeout if action.recording_timeout is not None else 7200000
         monitor = action.monitor
         audio = action.audio
         watermark = action.watermark

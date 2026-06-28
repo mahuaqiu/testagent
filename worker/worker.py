@@ -923,10 +923,12 @@ class Worker:
             f"device_id={task.device_id}"
         )
 
+        # 统一获取 request_id，避免在异常分支中重复调用
+        request_id = get_request_id()
+
         # 获取平台管理器
         manager = self.platform_managers.get(platform)
         if not manager:
-            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
                 request_id=request_id,
@@ -956,7 +958,6 @@ class Worker:
             except Exception as e:
                 exc_type, exc_value, exc_tb = sys.exc_info()
                 line_no = exc_tb.tb_lineno if exc_tb else "unknown"
-                request_id = get_request_id()
                 return TaskResult(
                     task_id=task.task_id,
                     request_id=request_id,
@@ -968,7 +969,6 @@ class Worker:
         # 获取执行锁
         acquired = self.scheduler.acquire(platform, task.device_id, blocking=False)
         if not acquired:
-            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
                 request_id=request_id,
@@ -991,7 +991,6 @@ class Worker:
                     if platform in ("ios", "android") and task.device_id:
                         status, message = manager.ensure_device_service(task.device_id)
                         if status != "online":
-                            request_id = get_request_id()
                             return TaskResult(
                                 task_id=task.task_id,
                                 request_id=request_id,
@@ -1007,7 +1006,6 @@ class Worker:
                 except Exception as e:
                     exc_type, exc_value, exc_tb = sys.exc_info()
                     line_no = exc_tb.tb_lineno if exc_tb else "unknown"
-                    request_id = get_request_id()
                     return TaskResult(
                         task_id=task.task_id,
                         request_id=request_id,
@@ -1024,8 +1022,6 @@ class Worker:
         except Exception as e:
             exc_type, exc_value, exc_tb = sys.exc_info()
             line_no = exc_tb.tb_lineno if exc_tb else "unknown"
-            # 异常时也要获取 request_id，确保返回结果包含 request_id
-            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
                 request_id=request_id,

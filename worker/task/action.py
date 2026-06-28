@@ -138,6 +138,7 @@ class Action:
     fps: int | None = None                    # 帧率（默认 10）
     audio: bool = False                       # 是否录制音频
     watermark: bool = True                    # 是否开启时间水印
+    recording_timeout: int | None = None      # 录屏超时时间（毫秒，默认 7200000）
 
     # 扩展参数（用于自定义动作，如 pinch）
     params: dict[str, Any] | None = None
@@ -211,6 +212,7 @@ class Action:
             fps=data.get("fps"),
             audio=data.get("audio", False),
             watermark=data.get("watermark", True),
+            recording_timeout=data.get("recording_timeout"),
             params=data.get("params"),
         )
 
@@ -300,8 +302,10 @@ class Action:
             result["fps"] = self.fps
         if self.audio:
             result["audio"] = self.audio
-        if not self.watermark:
+        if not self.watermark:  # 默认 True，只有 False 时才输出
             result["watermark"] = self.watermark
+        if self.recording_timeout is not None:
+            result["recording_timeout"] = self.recording_timeout
         if self.params is not None:
             result["params"] = self.params
 
