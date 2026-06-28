@@ -2,6 +2,7 @@
 
 import logging
 
+import pywintypes
 import win32gui
 
 logger = logging.getLogger(__name__)
@@ -21,53 +22,67 @@ def find_window_handle(
     Returns:
         int: 窗口句柄，找不到返回 None
 
-    匹配逻辑：
-        - 只传 title: 遍历窗口，标题包含匹配
-        - 只传 class: FindWindow 精确匹配
-        - 都传: 先按 class 查找，再验证 title 包含匹配
+    匹配逻辑（统一使用 EnumWindows 遍历，确保可见性）：
+        - 只传 title: 遍历窗口，第一个可见且标题包含匹配的
+        - 只传 class: 遍历窗口，第一个可见且类名精确匹配的
+        - 都传: 遍历窗口，第一个可见且类名精确匹配 + 标题包含匹配的
         - 都不传: 返回 None（全屏模式）
     """
     if not title and not class_name:
         return None
 
-    # 同时传 title + class: 先按 class 查找，再验证 title
-    if class_name and title:
-        hwnd = win32gui.FindWindow(class_name, None)
-        if hwnd and win32gui.IsWindowVisible(hwnd):
-            window_title = win32gui.GetWindowText(hwnd)
-            if title in window_title:
-                logger.debug(f"Window found by class+title: hwnd={hwnd}, title='{window_title}'")
-                return hwnd
-        logger.warning(f"Window not found: class='{class_name}', title='{title}'")
-        return None
+    # 统一使用 EnumWindows 遍历查找，避免 FindWindow 只返回一个窗口的问题
+    result: list[int | None] = [None]
 
-    # 只传 class: 精确匹配
-    if class_name:
-        hwnd = win32gui.FindWindow(class_name, None)
-        if hwnd and win32gui.IsWindowVisible(hwnd):
-            logger.debug(f"Window found by class: hwnd={hwnd}, class='{class_name}'")
-            return hwnd
-        logger.warning(f"Window not found by class: '{class_name}'")
-        return None
+    def enum_callback(hwnd, _):
+        try:
+            # 只查找可见窗口
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
 
-    # 只传 title: 包含匹配
-    if title:
-        result: list[int | None] = [None]  # 使用列表作为可变容器
-        def enum_callback(hwnd, _):
-            if win32gui.IsWindowVisible(hwnd):
+            # class 精确匹配（如果指定了 class_name）
+            if class_name:
+                cls = win32gui.GetClassName(hwnd)
+                if cls != class_name:
+                    return True  # 类名不匹配，继续枚举
+
+            # title 包含匹配（如果指定了 title）
+            if title:
                 window_title = win32gui.GetWindowText(hwnd)
-                if title in window_title:
-                    result[0] = hwnd
-            return True
-        win32gui.EnumWindows(enum_callback, None)
-        found_hwnd = result[0]
-        if found_hwnd:
-            logger.debug(f"Window found by title: hwnd={found_hwnd}, title contains '{title}'")
-        else:
-            logger.warning(f"Window not found by title: '{title}'")
-        return found_hwnd
+                if title not in window_title:
+                    return True  # 标题不匹配，继续枚举
 
-    return None
+            # 所有条件都匹配，记录结果并停止枚举
+            result[0] = hwnd
+            return False
+        except pywintypes.error:
+            # 某些系统窗口访问属性会抛异常，跳过即可
+            return True
+        except Exception:
+            # 回调函数中任何异常都不应中断枚举
+            return True
+
+    try:
+        win32gui.EnumWindows(enum_callback, None)
+    except Exception as e:
+        logger.error(f"EnumWindows failed: {e}")
+        return None
+
+    found_hwnd = result[0]
+    if found_hwnd:
+        try:
+            window_title = win32gui.GetWindowText(found_hwnd)
+            window_class = win32gui.GetClassName(found_hwnd)
+            logger.debug(
+                f"Window found: hwnd={found_hwnd}, "
+                f"class='{window_class}', title='{window_title}'"
+            )
+        except Exception:
+            logger.debug(f"Window found: hwnd={found_hwnd}")
+    else:
+        logger.warning(f"Window not found: class='{class_name}', title='{title}'")
+
+    return found_hwnd
 
 
 def get_window_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -93,7 +108,10 @@ def get_window_title(hwnd: int) -> str:
     Returns:
         str: 窗口标题
     """
-    return win32gui.GetWindowText(hwnd)
+    try:
+        return win32gui.GetWindowText(hwnd) or ""
+    except Exception:
+        return ""
 
 
 def get_window_class(hwnd: int) -> str:
@@ -106,4 +124,7 @@ def get_window_class(hwnd: int) -> str:
     Returns:
         str: 窗口类名
     """
-    return win32gui.GetClassName(hwnd)
+    try:
+        return win32gui.GetClassName(hwnd) or ""
+    except Exception:
+        return ""

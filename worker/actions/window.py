@@ -168,7 +168,7 @@ class ActivateWindowAction(BaseActionExecutor):
         """通过窗口类名查找窗口句柄。
 
         支持精确匹配和包含匹配（传入部分类名也能找到）。
-        可选支持按进程 exe 名称过滤。
+        只查找可见窗口。可选支持按进程 exe 名称过滤。
 
         Args:
             class_name: 窗口类名（如 Chrome_WidgetWin_1）
@@ -179,6 +179,7 @@ class ActivateWindowAction(BaseActionExecutor):
         """
         import win32gui
         import win32process
+        import pywintypes
 
         exact_match_hwnd = 0
         partial_match_hwnd = 0
@@ -186,6 +187,10 @@ class ActivateWindowAction(BaseActionExecutor):
         def enum_windows_callback(hwnd, _):
             nonlocal exact_match_hwnd, partial_match_hwnd
             try:
+                # 只查找可见窗口
+                if not win32gui.IsWindowVisible(hwnd):
+                    return True
+
                 cls = win32gui.GetClassName(hwnd)
 
                 # 如果指定了 exe_name，检查进程名
@@ -201,12 +206,18 @@ class ActivateWindowAction(BaseActionExecutor):
                 # 包含匹配作为备选
                 if class_name in cls and partial_match_hwnd == 0:
                     partial_match_hwnd = hwnd
+            except pywintypes.error:
+                # 某些系统窗口访问属性会抛异常，跳过即可
+                pass
             except Exception:
                 # 回调函数中任何异常都不应中断枚举
                 pass
             return True
 
-        win32gui.EnumWindows(enum_windows_callback, None)
+        try:
+            win32gui.EnumWindows(enum_windows_callback, None)
+        except Exception as e:
+            logger.error(f"EnumWindows failed in _find_window_by_class: {e}")
 
         # 精确匹配优先
         if exact_match_hwnd:
