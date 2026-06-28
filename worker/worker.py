@@ -689,10 +689,13 @@ class Worker:
         Returns:
             TaskResult | None: 验证失败返回错误结果，通过返回 None
         """
+        request_id = get_request_id()
+
         # 1. 平台支持验证
         if task.platform not in self.supported_platforms:
             return TaskResult(
                 task_id=task.task_id,
+                request_id=request_id,
                 status=TaskStatus.FAILED,
                 platform=task.platform,
                 error=f"Platform not supported: {task.platform}",
@@ -703,6 +706,7 @@ class Worker:
             if not task.device_id:
                 return TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,
                     status=TaskStatus.FAILED,
                     platform=task.platform,
                     error=f"device_id is required for {task.platform} platform",
@@ -717,6 +721,7 @@ class Worker:
             if task.device_id not in device_ids:
                 return TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,
                     status=TaskStatus.FAILED,
                     platform=task.platform,
                     error=f"Device not found: {task.device_id}",
@@ -729,6 +734,7 @@ class Worker:
             if action_type not in supported_actions:
                 return TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,
                     status=TaskStatus.FAILED,
                     platform=task.platform,
                     error=f"Action not supported: {action_type} on {task.platform}",
@@ -920,8 +926,10 @@ class Worker:
         # 获取平台管理器
         manager = self.platform_managers.get(platform)
         if not manager:
+            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
+                request_id=request_id,
                 status=TaskStatus.FAILED,
                 platform=platform,
                 error=f"Platform manager not available: {platform}",
@@ -948,8 +956,10 @@ class Worker:
             except Exception as e:
                 exc_type, exc_value, exc_tb = sys.exc_info()
                 line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+                request_id = get_request_id()
                 return TaskResult(
                     task_id=task.task_id,
+                    request_id=request_id,
                     status=TaskStatus.FAILED,
                     platform=platform,
                     error=f"Line {line_no}: Failed to start platform: {e}",
@@ -958,8 +968,10 @@ class Worker:
         # 获取执行锁
         acquired = self.scheduler.acquire(platform, task.device_id, blocking=False)
         if not acquired:
+            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
+                request_id=request_id,
                 status=TaskStatus.FAILED,
                 platform=platform,
                 error="Device is busy, please retry later",
@@ -979,8 +991,10 @@ class Worker:
                     if platform in ("ios", "android") and task.device_id:
                         status, message = manager.ensure_device_service(task.device_id)
                         if status != "online":
+                            request_id = get_request_id()
                             return TaskResult(
                                 task_id=task.task_id,
+                                request_id=request_id,
                                 status=TaskStatus.FAILED,
                                 platform=platform,
                                 error=f"Device service not available: {message}",
@@ -993,8 +1007,10 @@ class Worker:
                 except Exception as e:
                     exc_type, exc_value, exc_tb = sys.exc_info()
                     line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+                    request_id = get_request_id()
                     return TaskResult(
                         task_id=task.task_id,
+                        request_id=request_id,
                         status=TaskStatus.FAILED,
                         platform=platform,
                         error=f"Line {line_no}: Failed to create context: {e}",
@@ -1008,8 +1024,11 @@ class Worker:
         except Exception as e:
             exc_type, exc_value, exc_tb = sys.exc_info()
             line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+            # 异常时也要获取 request_id，确保返回结果包含 request_id
+            request_id = get_request_id()
             return TaskResult(
                 task_id=task.task_id,
+                request_id=request_id,
                 status=TaskStatus.FAILED,
                 platform=platform,
                 error=f"Line {line_no}: {e}",
@@ -1073,7 +1092,8 @@ class Worker:
 
             result = manager.execute_action(context, action)
             result.number = i
-            result.request_id = request_id  # 填充 request_id
+            # 使用带序号的 request_id 区分父子关系：action_0, action_1, ...
+            result.request_id = f"{request_id}_action_{i}" if request_id else None
             actions_results.append(result)
 
             # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
