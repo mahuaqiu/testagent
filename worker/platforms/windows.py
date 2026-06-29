@@ -77,6 +77,10 @@ class WindowsPlatformManager(PlatformManager):
         """创建桌面上下文，解析窗口绑定参数。"""
         logger.info("Windows context created")
 
+        # 每次创建上下文时重置窗口绑定
+        self._window_handle = None
+        self._window_rect = None
+
         # 解析窗口绑定参数
         if options:
             window_info = options.get("window")
@@ -278,10 +282,6 @@ class WindowsPlatformManager(PlatformManager):
                 buffer = io.BytesIO()
                 cropped.save(buffer, format="PNG")
                 logger.debug(f"Window screenshot: handle={self._window_handle}, size={cropped.size}")
-
-                # 截图后清除窗口信息，避免影响后续全屏截图
-                self._window_handle = None
-                self._window_rect = None
 
                 return buffer.getvalue()
             except Exception as e:
@@ -619,10 +619,6 @@ def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any 
             buffer = io.BytesIO()
             image.save(buffer, format="PNG")
             logger.debug("Window screenshot by sidecar: handle=%s, size=%s", self._window_handle, image.size)
-
-            # 截图后清除窗口信息，避免影响后续全屏截图
-            self._window_handle = None
-            self._window_rect = None
 
             return buffer.getvalue()
 
