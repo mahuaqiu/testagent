@@ -141,8 +141,19 @@ class WindowsSidecarClient:
             if line:
                 logger.info("[windows-sidecar] %s", line)
 
+    # 重试无意义的确定性错误关键词：这些错误反映当前业务状态，重试不会改变结果
+    _NON_RETRYABLE_KEYWORDS = (
+        "not running",
+        "already running",
+        "not found",
+        "invalid request",
+    )
+
     def request(self, cmd: str, params: Optional[dict[str, Any]] = None, max_retries: int = 2) -> dict[str, Any]:
-        """发送请求到 sidecar，支持失败重试"""
+        """发送请求到 sidecar，支持失败重试
+
+        对于确定性错误（如 recording not running、session not found），不会重试，直接抛出。
+        """
         last_error = None
         for attempt in range(max_retries + 1):
             try:
@@ -169,7 +180,8 @@ class WindowsSidecarClient:
 
                 response = json.loads(response_line)
                 if not response.get("ok"):
-                    raise RuntimeError(response.get("error") or f"sidecar 命令失败: {cmd}")
+                    error_msg = response.get("error") or f"sidecar 命令失败: {cmd}"
+                    raise RuntimeError(error_msg)
 
                 data = response.get("data")
                 if isinstance(data, dict):
@@ -177,6 +189,10 @@ class WindowsSidecarClient:
                 return {}
             except Exception as e:
                 last_error = e
+                # 确定性错误：重试无意义，直接抛出
+                if self._is_non_retryable_error(e):
+                    logger.warning("sidecar 确定性错误，不重试: %s", e)
+                    raise
                 logger.warning("sidecar 请求失败 (attempt %d/%d): %s", attempt + 1, max_retries + 1, e)
                 # 重试前清理可能已损坏的进程
                 with self._lock:
@@ -188,6 +204,12 @@ class WindowsSidecarClient:
                     time.sleep(0.5)
 
         raise RuntimeError(f"sidecar 请求失败，已重试 {max_retries + 1} 次: {last_error}")
+
+    @classmethod
+    def _is_non_retryable_error(cls, exc: Exception) -> bool:
+        """判断是否为确定性错误（重试无意义）"""
+        msg = str(exc).lower()
+        return any(kw in msg for kw in cls._NON_RETRYABLE_KEYWORDS)
 
     def _ensure_alive(self) -> None:
         if self._proc and self._proc.poll() is not None:
