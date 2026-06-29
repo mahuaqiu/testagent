@@ -211,7 +211,8 @@ class SettingsWindow(QDialog):
         self.discover_harmony_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
         grid.addWidget(self.discover_harmony_checkbox, row, 2)
 
-        row += 1        layout.addLayout(grid)
+        row += 1
+        layout.addLayout(grid)
 
         # 弹性空间
         layout.addStretch()
