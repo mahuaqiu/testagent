@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
 
 from common.packaging import get_base_dir
+from common.utils import popen_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ def _execute_hdc_command(
     logger.debug(f"执行 HDC 命令: {' '.join(cmdline)}")
 
     try:
-        process = subprocess.Popen(
+        process = popen_cmd(
             cmdline,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

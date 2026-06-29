@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from common.packaging import get_base_dir
+from common.utils import popen_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class WindowsSidecarClient:
         try:
             command = self._resolve_command()
             logger.info("启动 Windows sidecar: %s", " ".join(command))
-            proc = subprocess.Popen(
+            proc = popen_cmd(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,

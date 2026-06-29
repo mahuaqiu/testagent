@@ -12,6 +12,7 @@ from typing import Callable, Optional
 
 import pystray
 from PIL import Image
+from common.utils import popen_cmd
 
 from common.packaging import is_packaged, get_base_dir
 
@@ -128,7 +129,7 @@ class TrayManager:
 
         if os.path.exists(exe_path):
             try:
-                subprocess.Popen([exe_path], shell=True)
+                popen_cmd([exe_path], shell=True)
                 logger.info(f"Launched window-class-finder: {exe_path}")
             except Exception as e:
                 logger.error(f"Failed to launch window-class-finder: {e}")
