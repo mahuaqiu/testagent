@@ -10,6 +10,7 @@ import subprocess
 import time
 import functools
 import io
+import locale
 import logging
 from typing import Callable, Optional, Union, List, Any
 
@@ -23,6 +24,35 @@ if platform.system().lower() == "windows":
     SUBPROCESS_HIDE_WINDOW = subprocess.CREATE_NO_WINDOW
 else:
     SUBPROCESS_HIDE_WINDOW = 0
+
+
+def _decode_output(raw: bytes) -> str:
+    """自动检测编码解码子进程输出。
+
+    先尝试 UTF-8，失败后使用系统默认编码（Windows 上通常是 GBK）。
+    如果都失败，使用 replace 模式避免乱码导致异常。
+
+    Args:
+        raw: 子进程原始字节输出
+
+    Returns:
+        str: 解码后的字符串
+    """
+    if not raw:
+        return ""
+    # 先尝试 UTF-8
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        pass
+    # 回退到系统默认编码（Windows 上是 GBK/cp936）
+    try:
+        default_encoding = locale.getpreferredencoding(False)
+        return raw.decode(default_encoding)
+    except (UnicodeDecodeError, ValueError):
+        pass
+    # 最终兜底：用 UTF-8 + replace 模式
+    return raw.decode("utf-8", errors="replace")
 
 
 def run_cmd(
@@ -40,17 +70,20 @@ def run_cmd(
     在 Windows 上自动添加 CREATE_NO_WINDOW 标志，隐藏子进程的控制台窗口，
     避免打包后的 GUI 程序出现黑色 CMD 弹窗。
 
+    自动检测输出编码：先尝试 UTF-8，失败后使用系统默认编码（如 GBK），
+    解决 Windows 命令（如 taskkill）输出中文乱码的问题。
+
     Args:
         cmd: 命令（字符串或列表）
         shell: 是否使用 shell 执行
         capture_output: 是否捕获输出
-        text: 是否以文本模式返回输出
+        text: 是否以文本模式返回输出（已由本函数自动处理编码，保留参数兼容）
         timeout: 超时时间（秒）
         check: 是否检查返回码（非零时抛异常）
         **kwargs: 其他 subprocess.run 参数
 
     Returns:
-        subprocess.CompletedProcess: 执行结果
+        subprocess.CompletedProcess: 执行结果（stdout/stderr 为解码后的字符串）
 
     Usage:
         result = run_cmd(["adb", "devices"])
@@ -60,15 +93,23 @@ def run_cmd(
     if platform.system().lower() == "windows":
         kwargs.setdefault("creationflags", SUBPROCESS_HIDE_WINDOW)
 
-    return subprocess.run(
+    # 以字节模式捕获输出，自行解码以支持自动编码检测
+    result = subprocess.run(
         cmd,
         shell=shell,
-        capture_output=capture_output,
-        text=text,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
         timeout=timeout,
         check=check,
         **kwargs,
     )
+
+    # 自动检测编码解码输出
+    if capture_output:
+        result.stdout = _decode_output(result.stdout) if result.stdout else ""
+        result.stderr = _decode_output(result.stderr) if result.stderr else ""
+
+    return result
 
 
 def popen_cmd(

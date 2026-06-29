@@ -44,7 +44,7 @@ class CmdExecAction(BaseActionExecutor):
         timeout_ms = action.timeout or 30000
         timeout_sec = timeout_ms / 1000
 
-        logger.info(f"Executing command: {cmd[:100]}...")
+        logger.info(f"Executing command: {cmd}")
 
         try:
             result = run_cmd(
@@ -57,7 +57,7 @@ class CmdExecAction(BaseActionExecutor):
 
             logger.info(f"Command completed: exit_code={result.returncode}")
 
-            # 日志增强：输出 stdout/stderr 后 500 字符
+            # 日志增强：输出 stdout/stderr 最多 500 字符
             if result.stdout:
                 stdout_preview = result.stdout[-500:] if len(result.stdout) > 500 else result.stdout
                 logger.info(f"Script output: {stdout_preview}")
@@ -66,9 +66,15 @@ class CmdExecAction(BaseActionExecutor):
                 stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
                 if result.returncode != 0:
                     logger.error(f"Script error: {stderr_preview}")
+                else:
+                    logger.info(f"Script stderr: {stderr_preview}")
 
-            # 输出信息截断（避免过长）
-            output_preview = cmd[:50] if len(cmd) > 50 else cmd
+            # 成功时 output 返回 stdout，失败时返回 stderr（最多 500 字符）
+            if result.returncode == 0:
+                output_text = result.stdout or ""
+            else:
+                output_text = result.stderr or ""
+            output_preview = output_text[-500:] if len(output_text) > 500 else output_text
 
             return ActionResult(
                 number=0,
@@ -77,7 +83,7 @@ class CmdExecAction(BaseActionExecutor):
                 exit_code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
-                output=f"Command executed: {output_preview}",
+                output=output_preview,
                 error=result.stderr if result.returncode != 0 else None,
             )
 
