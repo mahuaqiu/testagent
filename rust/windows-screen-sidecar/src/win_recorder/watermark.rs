@@ -45,6 +45,8 @@ pub struct WatermarkRenderer {
     cached_hdc_handle: Option<isize>,
     cached_hbitmap_handle: Option<isize>,
     cached_font_handle: Option<isize>,
+    // 缓存的 DIB Section 数据指针（来自 CreateDIBSection 的 ppvBits，存储为 usize 以支持 Send）
+    cached_dib_bits: Option<usize>,
     cached_dib_data: Option<Vec<u8>>,
     cached_dib_width: u32,
     cached_dib_height: u32,
@@ -77,6 +79,7 @@ impl WatermarkRenderer {
             cached_hdc_handle: None,
             cached_hbitmap_handle: None,
             cached_font_handle: None,
+            cached_dib_bits: None,
             cached_dib_data: None,
             cached_dib_width: 0,
             cached_dib_height: 0,
@@ -191,8 +194,11 @@ impl WatermarkRenderer {
             self.cached_hbitmap_handle = Some(hbitmap.0 as isize);
             self.cached_font_handle = Some(font.0 as isize);
 
-            // 保存 Dib 数据 buffer 指针供后续使用
-            // 注意：这里只保存尺寸信息，实际渲染时重新映射
+            // 保存 DIB Section 的数据指针（来自 CreateDIBSection 的 ppvBits）
+            // 这个指针可以直接读写，无需通过 GetDIBits
+            self.cached_dib_bits = Some(ppv_bits as usize);
+
+            // 保存 Dib 数据 buffer 尺寸信息
             self.cached_dib_width = bg_width;
             self.cached_dib_height = bg_height;
 
@@ -467,6 +473,7 @@ impl WatermarkRenderer {
             self.cached_hdc_handle,
             self.cached_hbitmap_handle,
             self.cached_font_handle,
+            self.cached_dib_bits,
         ) }?;
 
         let (dib_data, dib_width, dib_height) = match gdi_result {
@@ -536,14 +543,16 @@ impl Drop for WatermarkRenderer {
 }
 
 /// 使用缓存的 GDI 对象渲染文字（接收原始句柄值）
+/// dib_bits 是 CreateDIBSection 返回的 ppvBits 指针（存储为 usize），可直接读写
 unsafe fn render_text_with_cached_gdi(
     time_str: &str,
-    font_height: i32,
+    _font_height: i32,
     bg_width: u32,
     bg_height: u32,
     hdc_handle: Option<isize>,
     hbitmap_handle: Option<isize>,
     font_handle: Option<isize>,
+    dib_bits: Option<usize>,
 ) -> Result<Option<(Vec<u8>, u32, u32)>, RecorderError> {
     let hdc = match hdc_handle {
         Some(h) => HDC(h as *mut _),
@@ -557,46 +566,18 @@ unsafe fn render_text_with_cached_gdi(
         Some(f) => HFONT(f as *mut _),
         None => return Ok(None),
     };
+    let bits = match dib_bits {
+        Some(p) => p as *mut std::ffi::c_void,
+        None => return Ok(None),
+    };
 
     // 选入缓存的位图和字体
     let old_bitmap = SelectObject(hdc, HGDIOBJ(hbitmap.0));
     let old_font = SelectObject(hdc, HGDIOBJ(font.0));
 
-    // 清空为全透明
+    // 清空为全透明（直接使用 CreateDIBSection 返回的指针，无需 GetDIBits）
     let total_bytes = (bg_width * bg_height * 4) as usize;
-    // 获取位图数据指针
-    let mut bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: bg_width as i32,
-            biHeight: -(bg_height as i32),
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [RGBQUAD::default()],
-    };
-
-    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-    let ret = GetDIBits(
-        hdc,
-        hbitmap,
-        0,
-        bg_height,
-        Some(bits),
-        &mut bmi,
-        DIB_RGB_COLORS,
-    );
-
-    // GetDIBits 返回非0表示成功
-    if ret != 0 && !bits.is_null() {
-        ptr::write_bytes(bits as *mut u8, 0, total_bytes);
-    }
+    ptr::write_bytes(bits as *mut u8, 0, total_bytes);
 
     // 设置文字颜色为白色
     SetTextColor(hdc, COLORREF(0x00FFFFFF));
@@ -614,19 +595,12 @@ unsafe fn render_text_with_cached_gdi(
     // 绘制文字
     let _ = TextOutW(hdc, text_x, text_y, &time_wide);
 
-    // 读取渲染结果
-    let dib_data = if !bits.is_null() {
-        std::slice::from_raw_parts(bits as *const u8, total_bytes).to_vec()
-    } else {
-        // 回退：重新使用原方法
-        let _ = SelectObject(hdc, old_font);
-        let _ = SelectObject(hdc, old_bitmap);
-        return Ok(None);
-    };
+    // 读取渲染结果（直接使用 CreateDIBSection 返回的指针）
+    let dib_data = std::slice::from_raw_parts(bits as *const u8, total_bytes).to_vec();
 
     // 恢复 DC 状态
-    let _ = SelectObject(hdc, old_font);
-    let _ = SelectObject(hdc, old_bitmap);
+    let _ = SelectObject(hdc, HGDIOBJ(old_font.0));
+    let _ = SelectObject(hdc, HGDIOBJ(old_bitmap.0));
 
     Ok(Some((dib_data, bg_width, bg_height)))
 }

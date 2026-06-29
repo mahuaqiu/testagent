@@ -132,11 +132,15 @@ impl SessionHandle {
         let aligned_width = recorder.width();
         let aligned_height = recorder.height();
 
-        // 保存到状态
+        // 保存到状态（先设置 recorder，这样捕获线程启动时才会正常运行）
         let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
         state.recording_output_path = Some(output_path.clone());
         state.recorder = Some(recorder);
         state.active_fps = state.active_fps.max(fps);
+
+        // 确保捕获线程正在运行（在 recorder 设置之后再启动）
+        drop(state); // 释放锁
+        self.ensure_capture_thread_running()?;
 
         Ok(json!({
             "output_path": output_path,
@@ -179,7 +183,7 @@ impl SessionHandle {
         }
 
         // 创建并启动编码器
-        let mut encoder = EncodingContext::new(fps, bitrate, monitor, profile)
+        let encoder = EncodingContext::new(fps, bitrate, monitor, profile)
             .map_err(|e| e.to_string())?;
 
         // 获取 SPS/PPS
@@ -193,11 +197,15 @@ impl SessionHandle {
             "pps_b64": STANDARD.encode(&pps),
         });
 
-        // 保存到状态
+        // 保存到状态（先设置 encoder，这样捕获线程启动时才会正常运行）
         let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
         state.encoder = Some(encoder);
         state.encoder_info = Some(info.clone());
         state.active_fps = state.active_fps.max(fps);
+
+        // 确保捕获线程正在运行（在 encoder 设置之后再启动）
+        drop(state); // 释放锁
+        self.ensure_capture_thread_running()?;
 
         Ok(info)
     }
@@ -229,6 +237,34 @@ impl SessionHandle {
         Ok(json!({"stopped": true}))
     }
 
+    /// 确保捕获线程正在运行（如果已退出则重新启动）
+    fn ensure_capture_thread_running(&self) -> Result<(), String> {
+        let needs_spawn = {
+            let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+            state.capture_thread.is_none()
+        };
+
+        if needs_spawn {
+            // 重置停止标志
+            self.inner
+                .lock()
+                .map_err(|_| "session mutex poisoned".to_string())?
+                .capture_stop
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+
+            let thread_inner = self.inner.clone();
+            let thread_capture_stop = self.inner.lock()
+                .map_err(|_| "session mutex poisoned".to_string())?
+                .capture_stop.clone();
+            let handle = thread::spawn(move || capture_loop(thread_inner, thread_capture_stop));
+
+            let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+            state.capture_thread = Some(handle);
+        }
+
+        Ok(())
+    }
+
     pub fn close(&self) -> Result<Value, String> {
         let _ = self.stop_streaming();
         let _ = self.stop_recording();
@@ -251,6 +287,7 @@ impl SessionHandle {
 }
 
 /// 捕获循环 - 纯 Rust 实现
+/// 当没有活动的 recorder 和 encoder 时，循环退出以节省资源
 fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomic::AtomicBool>) {
     let mut last_tick = Instant::now();
     loop {
@@ -275,6 +312,19 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             };
             (guard.recorder.is_some(), guard.encoder.is_some())
         };
+
+        // 关键优化：当既没有 recorder 也没有 encoder 时，退出循环
+        // 节省 CPU 资源，让 sidecar 在空闲时几乎不占用 CPU
+        // 需要时会通过 start_recording/start_streaming/snapshot 重新启动
+        if !has_recorder && !has_encoder {
+            // 标记线程已停止，等待被重新启动
+            let mut guard = match state.lock() {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            guard.capture_thread = None;
+            break;
+        }
 
         // 控制帧率
         let interval = Duration::from_secs_f64(1.0 / target_fps as f64);

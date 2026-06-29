@@ -14,9 +14,6 @@ pub use error::RecorderError;
 pub use recorder::WinRecorder;
 pub use h264_encoder::H264Encoder;
 
-use parking_lot::Mutex;
-use std::sync::Arc;
-
 /// 全局 Media Foundation 初始化
 pub fn init_media_foundation() -> Result<(), RecorderError> {
     unsafe {
