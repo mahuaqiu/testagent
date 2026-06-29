@@ -198,18 +198,26 @@ class SettingsWindow(QDialog):
         grid.addWidget(self.log_level_combo, row, 1)
         row += 1
 
-        # 设备发现开关（同一行）
+        # 设备发现开关（同一行，紧凑排列）
+        discover_label = self._create_label("设备发现")
+        discover_row = QHBoxLayout()
+        discover_row.setSpacing(20)
+        discover_row.addWidget(discover_label)
+
         self.discover_android_checkbox = QCheckBox("Android")
         self.discover_android_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        grid.addWidget(self.discover_android_checkbox, row, 0)
+        discover_row.addWidget(self.discover_android_checkbox)
 
         self.discover_ios_checkbox = QCheckBox("iOS")
         self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        grid.addWidget(self.discover_ios_checkbox, row, 1)
+        discover_row.addWidget(self.discover_ios_checkbox)
 
         self.discover_harmony_checkbox = QCheckBox("Harmony")
         self.discover_harmony_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        grid.addWidget(self.discover_harmony_checkbox, row, 2)
+        discover_row.addWidget(self.discover_harmony_checkbox)
+
+        discover_row.addStretch()
+        grid.addLayout(discover_row, row, 0, 1, 3)
 
         row += 1
         layout.addLayout(grid)
