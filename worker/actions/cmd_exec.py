@@ -6,6 +6,7 @@
 
 import subprocess  # 用于 TimeoutExpired 异常类型
 import logging
+import threading
 from typing import Optional, TYPE_CHECKING
 
 from common.utils import run_cmd
@@ -39,6 +40,48 @@ class CmdExecAction(BaseActionExecutor):
         # 替换 @tools/ 占位符为完整路径
         tools_dir = get_tools_dir()
         cmd = cmd.replace('@tools/', tools_dir + '/')
+
+        # 后台异步执行模式：不等待结果直接返回
+        if action.background:
+            return self._execute_background(cmd, action)
+
+        # 同步执行模式：等待命令完成
+        return self._execute_sync(cmd, action)
+
+    def _execute_background(self, cmd: str, action: Action) -> ActionResult:
+        """后台异步执行命令，不等待结果直接返回成功。"""
+
+        def _run():
+            timeout_sec = (action.timeout or 30000) / 1000
+            try:
+                result = run_cmd(cmd, shell=True, timeout=timeout_sec)
+                status = "success" if result.returncode == 0 else "failed"
+                logger.info(f"[background] Command finished: exit_code={result.returncode}, status={status}")
+                if result.stdout:
+                    stdout_preview = result.stdout[-500:] if len(result.stdout) > 500 else result.stdout
+                    logger.info(f"[background] Script output: {stdout_preview}")
+                if result.stderr and result.returncode != 0:
+                    stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
+                    logger.error(f"[background] Script error: {stderr_preview}")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"[background] Command timeout after {action.timeout or 30000}ms")
+            except Exception as e:
+                logger.error(f"[background] Command execution failed: {e}")
+
+        thread = threading.Thread(target=_run, daemon=True, name="cmd_exec_background")
+        thread.start()
+
+        logger.info(f"Executing command in background: {cmd}")
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output="command started in background",
+        )
+
+    def _execute_sync(self, cmd: str, action: Action) -> ActionResult:
+        """同步执行命令，等待结果返回。"""
 
         # 超时时间，默认 30 秒
         timeout_ms = action.timeout or 30000

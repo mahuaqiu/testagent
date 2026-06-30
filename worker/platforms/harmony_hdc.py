@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
 
 from common.packaging import get_base_dir
-from common.utils import popen_cmd
+from common.utils import popen_cmd, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +129,11 @@ def _find_hdc_path() -> Optional[str]:
     # Windows 使用 where 命令，Linux/Mac 使用 which 命令
     try:
         if os.name == "nt":
-            result = subprocess.run(
+            result = run_cmd(
                 ["where", "hdc"], capture_output=True, text=True, timeout=5
             )
         else:
-            result = subprocess.run(
+            result = run_cmd(
                 ["which", "hdc"], capture_output=True, text=True, timeout=5
             )
 

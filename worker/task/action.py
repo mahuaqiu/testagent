@@ -140,6 +140,9 @@ class Action:
     watermark: bool = True                    # 是否开启时间水印
     recording_timeout: int | None = None      # 录屏超时时间（毫秒，默认 7200000）
 
+    # 命令执行参数（cmd_exec 专用）
+    background: bool = False                  # 是否后台异步执行（不等待结果直接返回）
+
     # 扩展参数（用于自定义动作，如 pinch）
     params: dict[str, Any] | None = None
 
@@ -213,6 +216,7 @@ class Action:
             audio=data.get("audio", False),
             watermark=data.get("watermark", True),
             recording_timeout=data.get("recording_timeout"),
+            background=data.get("background", False),
             params=data.get("params"),
         )
 
@@ -306,6 +310,8 @@ class Action:
             result["watermark"] = self.watermark
         if self.recording_timeout is not None:
             result["recording_timeout"] = self.recording_timeout
+        if self.background:
+            result["background"] = self.background
         if self.params is not None:
             result["params"] = self.params
 
