@@ -319,7 +319,10 @@
       "Bash(sed -i 's/use crate::memory_byte_stream/use crate::win_recorder::memory_byte_stream/g' h264_encoder.rs)",
       "Bash(sed -i 's/use crate::d3d11/use crate::win_recorder::d3d11/g' h264_encoder.rs)",
       "Bash(sed -i '/use pyo3::prelude/d' h264_encoder.rs)",
-      "PowerShell(Copy-Item *)"
+      "PowerShell(Copy-Item *)",
+      "Read(//d/code/autotest/rust/windows-screen-sidecar/**)",
+      "PowerShell(\\(Get-Item D:\\\\code\\\\autotest\\\\rust\\\\windows-screen-sidecar\\\\target\\\\release\\\\windows-screen-sidecar.exe\\).LastWriteTime)",
+      "Bash(chcp *)"
     ]
   }
 }
