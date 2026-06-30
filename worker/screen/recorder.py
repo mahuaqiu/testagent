@@ -1,4 +1,4 @@
-"""ScreenRecorder 录屏器（基于 win-recorder 硬件编码）。"""
+"""ScreenRecorder 录屏器（基于 windows-screen-sidecar 硬件编码）。"""
 
 import logging
 import sys
@@ -10,19 +10,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入 win_recorder
-_win_recorder_available = False
+# 尝试导入 windows_screen_sidecar
+_windows_sidecar_available = False
 try:
     import win_recorder
 
-    _win_recorder_available = True
-    logger.info("win_recorder module available")
+    _windows_sidecar_available = True
+    logger.info("win_recorder module available (from windows-screen-sidecar)")
 except ImportError:
-    logger.error("win_recorder not available, recording will fail. Please install win-recorder wheel.")
+    logger.warning("win_recorder not available, recording will use fallback. Install win-recorder wheel or ensure windows-screen-sidecar is running.")
 
 
 class ScreenRecorder:
-    """录屏器（基于 win-recorder 硬件编码）。"""
+    """录屏器（基于 windows-screen-sidecar 硬件编码）。"""
 
     def __init__(
         self,
@@ -56,19 +56,19 @@ class ScreenRecorder:
         self._write_thread: threading.Thread | None = None
         self._win_recorder: Optional["win_recorder.WinRecorder"] = None
 
-        if not _win_recorder_available:
-            raise RuntimeError("win_recorder not available, cannot start recording")
+        if not _windows_sidecar_available:
+            raise RuntimeError("windows-screen-sidecar not available, cannot start recording")
 
     def start(self) -> None:
         """启动录屏。"""
-        if not _win_recorder_available:
-            raise RuntimeError("win_recorder not available")
+        if not _windows_sidecar_available:
+            raise RuntimeError("windows-screen-sidecar not available")
 
         # 启动超时定时器
         self._timeout_timer = threading.Timer(self.timeout_sec, self.stop)
         self._timeout_timer.start()
 
-        # 初始化 win-recorder
+        # 初始化 windows-screen-sidecar
         self._win_recorder = win_recorder.WinRecorder(
             output_path=self.output_path,
             fps=self.fps,
@@ -130,7 +130,7 @@ class ScreenRecorder:
             self._timeout_timer.cancel()
             self._timeout_timer = None
 
-        # 停止 win-recorder
+        # 停止 windows-screen-sidecar
         if self._win_recorder:
             try:
                 self._win_recorder.stop()

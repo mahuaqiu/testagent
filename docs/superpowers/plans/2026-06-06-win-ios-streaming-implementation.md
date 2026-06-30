@@ -5,12 +5,12 @@
 **Goal:** 为 Worker 添加 H.264 和 MJPEG 推流支持，前端自动检测帧类型并渲染
 
 **Architecture:** 分三阶段实现：
-1. win-recorder 新增流式 H.264 编码接口
+1. windows-screen-sidecar 新增流式 H.264 编码接口
 2. autotest Worker 推流改造（codec 参数、Windows H.264、iOS MJPEG 透传）
 3. zq-platform 前端改造（帧类型检测、H.264/MJPEG 渲染）
 
 **Tech Stack:**
-- win-recorder: Rust + PyO3 + Media Foundation
+- windows-screen-sidecar: Rust + Media Foundation（整合在 sidecar 中）
 - autotest: Python + FastAPI + mss + WebSocket
 - zq-platform: TypeScript + Vue 3 + MediaSource Extensions + WASM
 
@@ -18,10 +18,10 @@
 
 ## 文件结构映射
 
-### 阶段 1: win-recorder (Rust)
+### 阶段 1: windows-screen-sidecar (Rust)
 
 ```
-/Users/ma/Documents/win-recorder/
+cd rust/windows-screen-sidecar
 ├── src/
 │   ├── lib.rs              # [修改] 新增 StreamingRecorder 导出
 │   ├── recorder.rs         # [修改] 新增 StreamingEncoder 类
@@ -68,14 +68,15 @@
 
 ---
 
-## 阶段 1: win-recorder 流式编码
+## 阶段 1: windows-screen-sidecar 流式编码
 
 ### Task 1: 创建 StreamingEncoder Rust 核心实现
 
+**注意：** win-recorder 已整合到 `rust/windows-screen-sidecar/` 项目中，不再是独立仓库。
+
 **Files:**
-- Create: `/Users/ma/Documents/win-recorder/src/streaming_encoder.rs`
-- Modify: `/Users/ma/Documents/win-recorder/src/lib.rs`
-- Test: `/Users/ma/Documents/win-recorder/tests/test_streaming.py`
+- Create: `rust/windows-screen-sidecar/src/streaming_encoder.rs`
+- Modify: `rust/windows-screen-sidecar/src/lib.rs`
 
 - [ ] **Step 1: 创建流式编码器模块**
 
@@ -169,7 +170,7 @@ pub fn register_module(py: Python, m: &PyModule) -> PyResult<()> {
 - [ ] **Step 3: 运行测试验证编译**
 
 ```bash
-cd /Users/ma/Documents/win-recorder
+cd rust/windows-screen-sidecar
 cargo build
 ```
 
@@ -214,7 +215,7 @@ Run: `python -m pytest tests/test_streaming.py -v`
 
 ```bash
 git add src/streaming_encoder.rs src/lib.rs tests/test_streaming.py
-git commit -m "feat(win-recorder): add StreamingEncoder for H.264 streaming"
+git commit -m "feat(windows-screen-sidecar): add StreamingEncoder for H.264 streaming"
 ```
 
 ---
@@ -222,8 +223,8 @@ git commit -m "feat(win-recorder): add StreamingEncoder for H.264 streaming"
 ### Task 2: 实现内存输出 IMFByteStream
 
 **Files:**
-- Modify: `/Users/ma/Documents/win-recorder/src/streaming_encoder.rs`
-- Modify: `/Users/ma/Documents/win-recorder/src/mf_writer.rs`
+- Modify: `cd rust/windows-screen-sidecarsrc/streaming_encoder.rs`
+- Modify: `cd rust/windows-screen-sidecarsrc/mf_writer.rs`
 
 - [ ] **Step 1: 新增内存缓冲区管理**
 
@@ -269,7 +270,7 @@ unsafe impl IMFByteStream for MemoryByteStream {
 - [ ] **Step 3: 提交**
 
 ```bash
-git commit -m "feat(win-recorder): add memory output support for streaming"
+git commit -m "feat(windows-screen-sidecar): add memory output support for streaming"
 ```
 
 ---
@@ -1075,7 +1076,7 @@ git commit -m "feat(web): add MJPEG renderer for iOS streaming"
 ## 实施检查点
 
 ### 阶段 1 检查点
-- [ ] win-recorder StreamingEncoder 编译通过
+- [ ] windows-screen-sidecar StreamingEncoder 编译通过
 - [ ] Python 测试用例全部通过
 
 ### 阶段 2 检查点
@@ -1098,7 +1099,7 @@ git commit -m "feat(web): add MJPEG renderer for iOS streaming"
 
 | 阶段 | Task 数 | 核心工作 |
 |------|---------|----------|
-| 1. win-recorder | 2 | 流式 H.264 编码器 |
+| 1. windows-screen-sidecar | 2 | 流式 H.264 编码器 |
 | 2. autotest | 4 | Worker 推流改造 |
 | 3. zq-platform | 3 | 前端渲染改造 |
 

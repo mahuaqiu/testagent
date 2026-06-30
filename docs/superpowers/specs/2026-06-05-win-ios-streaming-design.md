@@ -16,8 +16,8 @@
 │                        Worker (autotest)                         │
 ├────────────────────────┬─────────────────────────────────────────┤
 │  Windows               │  iOS                                     │
-│  - win-recorder 新增   │  - WDA 9100 HTTP MJPEG                   │
-│    流式 H.264 编码     │  - HTTP→WS 代理透传                      │
+│  - windows-screen-     │  - WDA 9100 HTTP MJPEG                   │
+│    sidecar 流式 H.264  │  - HTTP→WS 代理透传                      │
 │  - NAL 单元输出        │  - 直接透传二进制                        │
 ├────────────────────────┴─────────────────────────────────────────┤
 │  帧类型协商: ?codec=h264|mjpeg|jpeg                               │
@@ -57,7 +57,7 @@
 
 ## 模块设计
 
-### 1. win-recorder 流式编码接口
+### 1. windows-screen-sidecar 流式编码接口
 
 #### 新增 Python API
 
@@ -134,7 +134,7 @@ async def screen_stream(
 
 | 平台 | codec=h264 | codec=mjpeg | codec=jpeg |
 |------|------------|-------------|------------|
-| Windows | win-recorder 流编码 | 不支持 | mss+JPEG (当前) |
+| Windows | windows-screen-sidecar 流编码 | 不支持 | mss+JPEG (当前) |
 | iOS | 不支持 | HTTP→WS 代理透传 | 解析 MJPEG (当前) |
 
 #### Windows H.264 推流
@@ -276,7 +276,7 @@ class MJPEGRenderer {
 
 | 平台 | codec=h264 | codec=mjpeg | codec=jpeg |
 |------|------------|-------------|------------|
-| Windows | win-recorder 流编码 | 不支持 | mss+JPEG |
+| Windows | windows-screen-sidecar 流编码 | 不支持 | mss+JPEG |
 | iOS | 不支持 | HTTP→WS 代理透传 | 解析 MJPEG |
 | Android | 未来支持 | minicap MJPEG | minicap JPEG |
 | Mac | 不支持 | 不支持 | mss+JPEG |
@@ -339,7 +339,7 @@ function detectFrameType(data: ArrayBuffer): FrameType {
 
 ## 实施计划
 
-### 阶段 1: win-recorder 流式编码
+### 阶段 1: windows-screen-sidecar 流式编码
 1. Rust 侧新增 `StreamingEncoder` 类
 2. 实现内存输出 `IMFByteStream`
 3. PyO3 绑定 `StreamingRecorder`

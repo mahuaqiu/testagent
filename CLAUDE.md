@@ -199,7 +199,7 @@ PlatformManager (抽象基类)
 {"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
 ```
 
-**依赖**：`level: system` 需要 `pyautogui` 库和 Rust sidecar（`windows-screen-sidecar.exe`）。
+**依赖**：`level: system` 需要 `pyautogui` 库和 Rust sidecar（`windows-screen-sidecar.exe`，整合了硬编录制功能）。
 
 ### image_click_near_text 说明
 

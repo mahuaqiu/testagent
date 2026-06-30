@@ -1220,7 +1220,7 @@ components:
 
   # ---------- 录屏动作 ----------
   # start_recording - 启动录屏（仅 Windows 平台）
-  # 使用 win-recorder 硬件编码录制屏幕，支持时间水印
+  # 使用 windows-screen-sidecar 硬件编码录制屏幕，支持时间水印
   # value: 输出路径，支持两种格式：
   #   - 目录路径（如 "d:/temp"）→ 自动生成文件名 recording_YYYYMMDD_HHMMSS.mp4
   #   - 文件路径（如 "d:/temp/test.mp4"）→ 直接使用

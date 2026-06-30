@@ -28,7 +28,7 @@ class FrameSource(ABC):
 
     @abstractmethod
     def get_frame_bgra(self) -> bytearray:
-        """获取 BGRA 原始帧（用于 win-recorder 硬件编码）。
+        """获取 BGRA 原始帧（用于 windows-screen-sidecar 硬件编码）。
 
         Returns:
             bytearray: BGRA 格式的原始像素数据
@@ -288,7 +288,7 @@ class WindowsFrameSource(FrameSource):
         return buffer.getvalue()
 
     def get_frame_bgra(self) -> bytearray:
-        """获取 BGRA 原始帧（用于 win-recorder 硬件编码）。
+        """获取 BGRA 原始帧（用于 windows-screen-sidecar 硬件编码）。
 
         Returns:
             bytearray: BGRA 格式的原始像素数据，长度为 width * height * 4

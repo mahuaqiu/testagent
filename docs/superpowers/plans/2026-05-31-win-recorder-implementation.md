@@ -1,4 +1,7 @@
-# win-recorder Rust 库实现计划
+# win-recorder Rust 库实现计划（已过时）
+
+> ⚠️ **状态：此文档已过时** - win-recorder 已整合到 `windows-screen-sidecar.exe` 中，不再是独立仓库。
+> 请参考新的实现文档：`docs/superpowers/plans/2026-06-06-win-ios-streaming-implementation.md`
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

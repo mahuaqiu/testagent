@@ -35,8 +35,7 @@ dependencies = [
     "pystray>=0.19.0",
     "PyQt5>=5.15.0",
 
-    # Windows 录屏 (win-recorder 硬件编码，可选)
-    # 注意：此包仅在 Windows 上可用，需要在打包时单��安装 wheel
+    # Windows 录屏 (整合在 windows-screen-sidecar.exe 中，不再需要独立 wheel)
 ]
 
 [project.optional-dependencies]

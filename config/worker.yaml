@@ -278,7 +278,7 @@ recording:
   output_dir: data/recordings    # Output directory
   default_fps: 10                # Default frame rate
   max_timeout_ms: 7200000        # Max timeout (ms), 2 hours
-  audio_enabled: false           # Enable audio recording (win-recorder only, default false)
+  audio_enabled: false           # Enable audio recording (windows-screen-sidecar only, default false)
 
 # WebSocket Streaming Settings
 websocket_streaming:

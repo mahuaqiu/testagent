@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class H264Streamer:
-    """H.264 流式编码器（使用 win-recorder H264Encoder）。"""
+    """H.264 流式编码器（使用 windows-screen-sidecar H264Encoder）。"""
 
     def __init__(self, frame_source, fps: int = 10, bitrate: int = 2000000):
         self.frame_source = frame_source
@@ -39,8 +39,8 @@ class H264Streamer:
             self._sps_pps_sent = False
             return info
         except ImportError:
-            # win-recorder 未安装
-            logger.error("win-recorder not installed, H.264 streaming not available")
+            # windows-screen-sidecar 未安装
+            logger.warning("windows-screen-sidecar not available, H.264 streaming not available")
             raise
         except Exception as e:
             logger.error(f"Failed to start H264 encoder: {e}")

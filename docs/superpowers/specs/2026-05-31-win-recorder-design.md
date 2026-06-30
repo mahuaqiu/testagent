@@ -1,4 +1,7 @@
-# win-recorder 设计文档
+# win-recorder 设计文档（已过时）
+
+> ⚠️ **状态：此文档已过时** - win-recorder 已整合到 `windows-screen-sidecar.exe` 中，不再是独立仓库。
+> 请参考新的设计文档：`docs/superpowers/specs/2026-06-05-win-ios-streaming-design.md`
 
 ## 元数据
 
@@ -6,8 +9,8 @@
 |------|-----|
 | **创建日期** | 2026-05-31 |
 | **作者** | Claude |
-| **状态** | Draft |
-| **目标版本** | win-recorder v0.1.0 |
+| **状态** | 已过时 |
+| **目标版本** | win-recorder v0.1.0（已整合到 windows-screen-sidecar） |
 
 ---
 

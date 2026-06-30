@@ -68,8 +68,8 @@ class ScreenManager:
     def __init__(self, frame_source: FrameSource, device_id: str = ""):
         self._frame_source = frame_source
         self._device_id = device_id  # 用于失败通知
-        self._frame_queue: Queue[bytes] = Queue(maxsize=30)
-        self._bgra_queue: Queue[bytearray] = Queue(maxsize=30)
+        self._frame_queue: Queue[bytes] = Queue(maxsize=10)
+        self._bgra_queue: Queue[bytearray] = Queue(maxsize=2)  # 录制只需要 1 帧当前 + 1 帧缓冲
         self._capture_thread: Optional[threading.Thread] = None
         self._running: bool = False
         self._is_recording: bool = False
@@ -337,8 +337,8 @@ class ScreenManager:
             output_path: 输出文件路径
             fps: 帧率
             timeout_ms: 超时时间（毫秒），默认 2 小时
-            audio: 是否录制音频（仅 win-recorder 支持）
-            monitor: 显示器选择（仅 win-recorder 支持）
+            audio: 是否录制音频（仅 windows-screen-sidecar 支持）
+            monitor: 显示器选择（仅 windows-screen-sidecar 支持）
             watermark: 是否开启时间水印（默认 True）
 
         Returns:
