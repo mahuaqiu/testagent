@@ -1088,8 +1088,7 @@ class Worker:
 
             result = manager.execute_action(context, action)
             result.number = i
-            # 使用带序号的 request_id 区分父子关系：action_0, action_1, ...
-            result.request_id = f"{request_id}_action_{i}" if request_id else None
+            result.request_id = request_id  # 填充 request_id
             actions_results.append(result)
 
             # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
