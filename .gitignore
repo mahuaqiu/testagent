@@ -27,3 +27,4 @@ test.py
 test_sidecar_recording.py
 /test_output
 tools/windows-screen-sidecar.exe
+/tests
