@@ -74,13 +74,21 @@ Python: while True: frame = readline() → 发送 → while True: ...
 [TYPE_PREFIX][BASE64_DATA]\n
 ```
 
+**示例**：
+```
+1QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU=\n
+2QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU=\n
+@FPS=20\n
+```
+
 ### 3.2 消息类型
 
 | 前缀 | 类型 | 说明 |
 |-----|------|------|
 | `@` | 控制命令 | 如 `@FPS=20`，Python 解析后配置 |
-| `1` | SPS/PPS | H.264 序列参数集（关键） |
-| `2` | IDR 帧 | 关键��（I 帧） |
+| `0` | SPS | H.264 序列参数集（单独发送） |
+| `1` | PPS | H.264 图像参数集（单独发送） |
+| `2` | IDR 帧 | 关键帧（I 帧） |
 | `3` | P 帧 | 预测帧 |
 | `J` | JPEG 帧 | JPEG 格式帧 |
 | `H` | 心跳 | Rust 发送的心跳，保持连接活跃 |
@@ -116,26 +124,29 @@ target_fps = max(push_fps, recording_fps, idle_fps)
 ┌─────────────────────────────────────────────────────────────┐
 │                    Rust capture_loop                        │
 │                      按 max(推流, 录制) fps 采集             │
+│                     （复用现有 stream_queue）               │
 └─────────────────────────┬───────────────────────────────────┘
                           │
-           ┌──────────────┼──────────────┐
-           ▼              ▼              ▼
-    ┌────────────┐  ┌────────────┐  ┌──────────┐
-    │ 推流队列   │  │  录制队列  │  │  丢弃    │
-    │ (容量=1)   │  │  (容量=1)  │  │          │
-    │            │  │            │  │          │
-    │ 新帧覆盖   │  │ 新帧覆盖   │  │  多余帧  │
-    │ 旧帧丢弃   │  │ 旧帧丢弃   │  │  跳过    │
-    └────────────┘  └────────────┘  └──────────┘
-         ↓              ↓
-    WebSocket      MP4 文件
-    (10fps)        (20fps)
+                    ┌─────┴─────┐
+                    ▼           ▼
+            ┌───────────┐  ┌───────────┐
+            │  push     │  │  rec      │
+            │ 消费流    │  │ 消费流    │
+            │ (推模式)  │  │ (录制文件)│
+            └───────────┘  └───────────┘
 ```
 
-**优点**：
-- 只有一个采集线程，资源占用小
-- 推流 10fps + 录制 20fps 可以同时进行
-- 实现简单
+**实现说明**：
+- **复用现有 `stream_queue`**：原 `stream_queue` (容量16) 改为仅用于录制消费
+- **新增推送消费者**：Python 推模式直接从 Rust stdout 读取，不再使用 `stream_queue`
+- **录制保持兼容**：录制功能仍使用原有 `stream_next` RPC 方式从 `stream_queue` 消费
+
+**帧分发逻辑**：
+```
+每采集一帧:
+  1. push 到 stream_queue（供录制消费）
+  2. 同时推送到 stdout（供推流消费）
+```
 
 ## 5. Rust 端实现
 
@@ -164,12 +175,12 @@ fn push_frames_loop(&mut self, session_id: &str, target_fps: u32) {
     loop {
         let frame = self.capture_and_encode();
         if let Some(frame) = frame {
-            // 编码帧
-            let frame_type = determine_frame_type(&frame); // SPS/IDR/P
+            // 编码帧，区分类型
+            let frame_type = determine_frame_type(&frame); // 0=SPS, 1=PPS, 2=IDR, 3=P
             let encoded = base64::encode(&frame);
 
-            // 输出到 stdout（带前缀）
-            println!("{}|{}", frame_type as char, encoded);
+            // 输出到 stdout（带前缀，无分隔符）
+            println!("{}{}", frame_type as char, encoded);
         }
 
         // 控制帧率
@@ -224,11 +235,16 @@ class PushFrameReader:
         self._running = False
         self._fps = 20
         self._frame_queue: asyncio.Queue = None
+        self._proc = client.get_process()  # 获取底层 subprocess 引用
 
     def set_fps(self, fps: int):
         """动态配置帧率"""
         self._fps = fps
         self._client.write_command(f"@FPS={fps}")
+
+    def is_running(self) -> bool:
+        """检查推流是否仍在运行"""
+        return self._running and self._client.is_alive()
 
     def start_push(self, fps: int = 20):
         """启动推流模式"""
@@ -243,7 +259,7 @@ class PushFrameReader:
     def stop_push(self):
         """停止推流模式"""
         self._running = False
-        self._client.write_command(b"@PUSH_STOP\n")
+        self._client.write_command("@PUSH_STOP\n")
 
     def _start_listener_thread(self):
         """后台线程监听 Rust 推送"""
@@ -267,28 +283,33 @@ class PushFrameReader:
             return
 
         prefix = line[0:1]
+        content = line[1:].strip()
 
         if prefix == b'@':
             # 控制命令
-            self._handle_command(line[1:].strip())
+            self._handle_command(content)
+        elif prefix == b'0':
+            # SPS - 序列参数集
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('sps', data))
         elif prefix == b'1':
-            # SPS/PPS
-            data = base64.b64decode(line[1:].strip())
-            self._frame_queue.put_nowait(('sps_pps', data))
+            # PPS - 图像参数集
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('pps', data))
         elif prefix == b'2':
             # IDR 帧
-            data = base64.b64decode(line[1:].strip())
+            data = base64.b64decode(content)
             self._frame_queue.put_nowait(('idr', data))
         elif prefix == b'3':
             # P 帧
-            data = base64.b64decode(line[1:].strip())
+            data = base64.b64decode(content)
             self._frame_queue.put_nowait(('p', data))
         elif prefix == b'H':
             # 心跳，忽略
             pass
         elif prefix == b'E':
             # 错误日志
-            logger.error(f"[Rust] {line[1:].strip()}")
+            logger.error(f"[Rust] {content.decode('utf-8', errors='ignore')}")
 
     async def get_frame(self) -> Optional[bytes]:
         """获取一帧（异步）"""
@@ -354,6 +375,42 @@ async def screen_stream(websocket: WebSocket, ...):
 | `stream_push_stop` | 停止推流模式 |
 | `stream_set_fps` | 动态调整帧率 |
 
+### 7.3 WindowsSidecarClient 扩展
+
+需要新增以下方法：
+
+```python
+class WindowsSidecarClient:
+    def get_process(self) -> subprocess.Popen:
+        """暴露底层 subprocess 引用，供 PushFrameReader 使用"""
+        return self._proc
+
+    def is_alive(self) -> bool:
+        """检查 sidecar 进程是否存活"""
+        return self._proc is not None and self._proc.poll() is None
+
+    def write_command(self, cmd: str) -> None:
+        """发送控制命令到 stdin（不等待响应）"""
+        with self._lock:
+            if not self._proc or not self._proc.stdin:
+                raise RuntimeError("sidecar 进程未启动")
+            self._proc.stdin.write(cmd + "\n")
+            self._proc.stdin.flush()
+```
+
+### 7.4 退出流程
+
+推模式下的退出流程：
+
+```
+1. WebSocket 断开
+2. Python: 设置 _running = False，停止监听循环
+3. Python: 发送 @PUSH_STOP\n 到 Rust stdin
+4. Rust: 收到 @PUSH_STOP，退出推送循环
+5. Rust: 继续录制（如果有）或降为 idle fps
+6. Python: 清理资源，关闭 session
+```
+
 ## 8. 实现步骤
 
 ### 8.1 Rust 端
@@ -399,7 +456,17 @@ async def screen_stream(websocket: WebSocket, ...):
 
 ## 10. 风险与注意事项
 
-1. **stdout 缓冲问题**：需要确保 stdout 无缓冲输出
+1. **stdout 缓冲问题**：需要确保 stdout 无缓冲输出（Rust 端使用 `println!` 或设置 `BufWriter`）
 2. **异常处理**：Rust 推送端退出时，Python 端需要正确感知并清理
 3. **内存泄漏**：长时间运行后，队列需要正确释放
-4. **多客户端并发**：当前设计是单推流客户端，需要评估多客户端场景
+4. **多客户端并发**：
+   - 本次优化**仅支持单推流客户端**
+   - 多客户端场景需要后续扩展（如拒绝第二客户端或队列广播）
+5. **并发模型**：
+   - Rust 端：推送循环在独立线程中运行，不阻塞主线程的命令处理
+   - Python 端：监听线程通过 `asyncio.Queue` 转发到主事件循环
+   - 线程安全：stdout 写入需要加锁（`Mutex` 保护）
+
+### 10.1 JPEG 推流
+
+本次优化**仅针对 H.264 推流**。JPEG 推流保持原有拉模式，或在后续迭代中改造。
