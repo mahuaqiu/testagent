@@ -130,11 +130,12 @@ stderr → 帧推送数据（新增推模式专用）
 ```rust
 use std::io::Write;
 
-// 帧推送使用 stderr
+// 帧推送使用 stderr（而不是 stdout，用于保持 JSON-RPC 兼容性）
 fn push_frame(frame_type: u8, data: &[u8]) {
     let encoded = base64::encode(data);
     let mut stderr = std::io::stderr();
-    writeln!(stderr, "{}{}", frame_type as char, encoded).unwrap();
+    // 使用 eprintln! 输出到 stderr（带换行）
+    eprintln!("{}{}", frame_type as char, encoded);
 }
 ```
 
@@ -180,14 +181,14 @@ target_fps = max(push_fps, recording_fps, idle_fps)
 
 **实现说明**：
 - **复用现有 `stream_queue`**：原 `stream_queue` (容量16) 改为仅用于录制消费
-- **新增推送消费者**：Python 推模式直接从 Rust stdout 读取，不再使用 `stream_queue`
+- **新增推送消费者**：Python 推模式直接从 Rust **stderr** 读取，不再使用 `stream_queue`
 - **录制保持兼容**：录制功能仍使用原有 `stream_next` RPC 方式从 `stream_queue` 消费
 
 **帧分发逻辑**：
 ```
 每采集一帧:
   1. push 到 stream_queue（供录制消费）
-  2. 同时推送到 stdout（供推流消费）
+  2. 同时推送到 stderr（供推流消费）
 ```
 
 ## 5. Rust 端实现
@@ -221,7 +222,7 @@ fn push_frames_loop(&mut self, session_id: &str, target_fps: u32) {
             let frame_type = determine_frame_type(&frame); // 0=SPS, 1=PPS, 2=IDR, 3=P
             let encoded = base64::encode(&frame);
 
-            // 输出到 stdout（带前缀，无分隔符）
+            // 输出到 stderr（带前缀，无分隔符）
             println!("{}{}", frame_type as char, encoded);
         }
 
@@ -497,7 +498,7 @@ class WindowsSidecarClient:
 ### 8.2 Python 端
 
 1. **新增 PushFrameReader 类**
-   - 后台线程监听 stdout
+   - 后台线程监听 stderr
    - 异步队列转发帧
 
 2. **修改 server.py**
@@ -522,7 +523,7 @@ class WindowsSidecarClient:
 
 ## 10. 风险与注意事项
 
-1. **stdout 缓冲问题**：需要确保 stdout 无缓冲输出（Rust 端使用 `println!` 或设置 `BufWriter`）
+1. **stderr 缓冲问题**：需要确保 stderr 无缓冲输出（Rust 端使用 `eprintln!` 或设置 `BufWriter`）
 2. **异常处理**：Rust 推送端退出时，Python 端需要正确感知并清理
 3. **内存泄漏**：长时间运行后，队列需要正确释放
 4. **多客户端并发**：
@@ -531,7 +532,7 @@ class WindowsSidecarClient:
 5. **并发模型**：
    - Rust 端：推送循环在独立线程中运行，不阻塞主线程的命令处理
    - Python 端：监听线程通过 `asyncio.Queue` 转发到主事件循环
-   - 线程安全：stdout 写入需要加锁（`Mutex` 保护）
+   - 线程安全：stderr 写入需要加锁（`Mutex` 保护）
 
 ### 10.1 JPEG 推流
 
