@@ -1008,6 +1008,9 @@ async def screen_stream(
                 logger.warning(f"Failed to send SPS/PPS: {e}")
 
         while streamer.is_running():
+            # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
+            await asyncio.sleep(1.0 / streaming_fps)
+
             # 根据 codec 获取帧
             if codec == "h264":
                 # H.264: 通过 streamer 获取（内部调用 H264Streamer）
@@ -1017,7 +1020,6 @@ async def screen_stream(
                 frame = await streamer.get_frame_async()
 
             if not frame:
-                await asyncio.sleep(1.0 / streaming_fps)
                 continue
             try:
                 await asyncio.wait_for(
@@ -1028,7 +1030,6 @@ async def screen_stream(
                 logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: platform={platform}, device={device_id}")
                 await websocket.close(code=1001, reason="Send timeout")
                 break
-            await asyncio.sleep(1.0 / streaming_fps)  # 基于配置的帧率
 
     except WebSocketDisconnect:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id

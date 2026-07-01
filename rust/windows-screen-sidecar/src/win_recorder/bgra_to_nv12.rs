@@ -58,13 +58,13 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let bgra_idx10 = ((y * 2 + 1) * width + (x * 2)) * 4;
             let bgra_idx11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
 
-            // 平均 R, G, B
-            let r = ((bgra_data[bgra_idx00] as u32 + bgra_data[bgra_idx01] as u32 
-                   + bgra_data[bgra_idx10] as u32 + bgra_data[bgra_idx11] as u32) / 4) as i32;
-            let g = ((bgra_data[bgra_idx00 + 1] as u32 + bgra_data[bgra_idx01 + 1] as u32 
-                   + bgra_data[bgra_idx10 + 1] as u32 + bgra_data[bgra_idx11 + 1] as u32) / 4) as i32;
-            let b = ((bgra_data[bgra_idx00 + 2] as u32 + bgra_data[bgra_idx01 + 2] as u32 
+            // 平均 R, G, B（注意：BGRA 格式中 bgra[0]=B, bgra[1]=G, bgra[2]=R）
+            let r = ((bgra_data[bgra_idx00 + 2] as u32 + bgra_data[bgra_idx01 + 2] as u32
                    + bgra_data[bgra_idx10 + 2] as u32 + bgra_data[bgra_idx11 + 2] as u32) / 4) as i32;
+            let g = ((bgra_data[bgra_idx00 + 1] as u32 + bgra_data[bgra_idx01 + 1] as u32
+                   + bgra_data[bgra_idx10 + 1] as u32 + bgra_data[bgra_idx11 + 1] as u32) / 4) as i32;
+            let b = ((bgra_data[bgra_idx00] as u32 + bgra_data[bgra_idx01] as u32
+                   + bgra_data[bgra_idx10] as u32 + bgra_data[bgra_idx11] as u32) / 4) as i32;
 
             // BT.601 色度公式（full range）
             // U = -0.147*R - 0.289*G + 0.436*B
@@ -133,12 +133,12 @@ pub fn bgra_to_iyuv(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let b10 = ((y * 2 + 1) * width + (x * 2)) * 4;
             let b11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
 
-            let r = ((bgra_data[b00] as u32 + bgra_data[b01] as u32 
-                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
-            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32 
-                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
-            let b_val = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32 
+            let r = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32
                    + bgra_data[b10 + 2] as u32 + bgra_data[b11 + 2] as u32) / 4) as i32;
+            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32
+                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
+            let b_val = ((bgra_data[b00] as u32 + bgra_data[b01] as u32
+                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
 
             // BT.601 色度公式
             let u_val = (((-r * 147 - g * 289 + b_val * 436) >> 10) + 128) as u8;
@@ -157,12 +157,12 @@ pub fn bgra_to_iyuv(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let b10 = ((y * 2 + 1) * width + (x * 2)) * 4;
             let b11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
 
-            let r = ((bgra_data[b00] as u32 + bgra_data[b01] as u32 
-                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
-            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32 
-                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
-            let b_val = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32 
+            let r = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32
                    + bgra_data[b10 + 2] as u32 + bgra_data[b11 + 2] as u32) / 4) as i32;
+            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32
+                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
+            let b_val = ((bgra_data[b00] as u32 + bgra_data[b01] as u32
+                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
 
             // BT.601 色度公式
             let v_val = (((r * 615 - g * 515 - b_val * 100) >> 10) + 128) as u8;

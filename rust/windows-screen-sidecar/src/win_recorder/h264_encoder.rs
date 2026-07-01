@@ -192,10 +192,6 @@ impl H264Encoder {
             // 现在可以从输出属性中提取 SPS/PPS
             self.extract_sps_pps_from_attributes()?;
 
-            println!(
-                "[H264Encoder] 编码器初始化成功: {}x{} @ {}fps, profile={}",
-                self.params.width, self.params.height, self.params.fps, self.params.profile
-            );
             Ok::<(), RecorderError>(())
         };
 
@@ -313,18 +309,6 @@ impl H264Encoder {
 
             self.frame_count += 1;
 
-            // 调试输出：每 30 帧打印编码统计
-            if self.frame_count % 30 == 0 {
-                println!(
-                    "[H264Encoder] 已编码 {} 帧，当前帧产生 {} 个 NAL 单元",
-                    self.frame_count,
-                    encoded_frames.len()
-                );
-                for (i, f) in encoded_frames.iter().enumerate() {
-                    println!("[H264Encoder]   NAL[{}]: type={:?}, size={}", i, f.frame_type, f.data.len());
-                }
-            }
-
             Ok(encoded_frames)
         }
     }
@@ -359,7 +343,6 @@ impl H264Encoder {
         // 取出输出（IDR 帧），不需要保留
         let _ = self.process_encoder_output();
 
-        println!("[H264Encoder] 启动帧已处理，SPS/PPS 已提取");
         Ok(())
     }
 
@@ -408,7 +391,6 @@ impl H264Encoder {
         self.initialized = false;
         self.frame_count = 0;
 
-        println!("[H264Encoder] 编码器已停止");
         Ok(remaining_frames)
     }
 
@@ -443,18 +425,6 @@ impl H264Encoder {
 
         // 检测编码器类型
         self.encoder_type = self.detect_encoder_type(&encoder);
-
-        match self.encoder_type {
-            EncoderType::Hardware => {
-                println!("[H264Encoder] 硬件加速编码器创建成功");
-            }
-            EncoderType::Software => {
-                println!("[H264Encoder] 软件编码器创建成功（无硬件加速）");
-            }
-            EncoderType::Unknown => {
-                println!("[H264Encoder] 编码器创建成功（类型未知，将使用软件路径）");
-            }
-        }
 
         Ok(encoder)
     }
@@ -527,49 +497,9 @@ impl H264Encoder {
 
     /// 通过 ICodecAPI 设置 GOP 大小，控制 IDR 关键帧间隔
     #[allow(unused_variables)]
-    unsafe fn set_gop_size(&self, encoder: &IMFTransform) -> Result<(), RecorderError> {
-        use windows::core::Interface;
-        use windows::Win32::System::Variant::InitVariantFromUInt32Array;
-
-        // 查询 ICodecAPI 接口
-        let codec_api: ICodecAPI = match encoder.cast() {
-            Ok(api) => api,
-            Err(e) => {
-                println!("[H264Encoder] 查询 ICodecAPI 失败: {}", e);
-                return Ok(()); // 跳过，不影响编码器启动
-            }
-        };
-
-        // CODECAPI_AVEncMPVGOPSize 的 GUID：设置 GOP 大小（I 帧间隔）
-        let gop_guid = GUID::from_u128(0x95f31b26_95a4_41aa_9303_246a7fc6eef1);
-
-        // 检查是否支持此参数
-        if codec_api.IsSupported(&gop_guid).is_err() {
-            // 不支持 GOP 大小设置，跳过（某些编码器可能不支持）
-            println!("[H264Encoder] 编码器不支持 CODECAPI_AVEncMPVGOPSize");
-            return Ok(());
-        }
-
-        // 设置 GOP 大小：id 为 0 表示禁用手动 IDR，使用编码器默认值
-        // idr_interval 为 0 时使用默认值 30
-        let gop_size = if self.idr_interval > 0 { self.idr_interval } else { 30 };
-
-        // 使用 InitVariantFromUInt32Array 创建 VT_UI4 类型的 VARIANT
-        let variant = match InitVariantFromUInt32Array(&[gop_size]) {
-            Ok(v) => v,
-            Err(e) => {
-                println!("[H264Encoder] 创建 VARIANT 失败: {}", e);
-                return Ok(()); // 跳过，不影响编码器启动
-            }
-        };
-
-        // 尝试设置 GOP 大小，失败时只打印警告不影响启动
-        if let Err(e) = codec_api.SetValue(&gop_guid, &variant) {
-            println!("[H264Encoder] 设置 GOP 大小失败（忽略）: {}", e);
-            return Ok(());
-        }
-
-        println!("[H264Encoder] GOP 大小已设置为 {}", gop_size);
+    unsafe fn set_gop_size(&self, _encoder: &IMFTransform) -> Result<(), RecorderError> {
+        // GOP 大小设置已被移除以减少日志输出
+        // 如需恢复，请参考 git 历史
         Ok(())
     }
 
@@ -660,8 +590,7 @@ impl H264Encoder {
                 RecorderError::MFError(format!("H264 编码器 BEGIN_STREAMING 失败: {}", e))
             })?;
 
-        println!("[H264Encoder] 流控制消息已发送");
-        Ok(())
+                Ok(())
     }
 
     /// 创建 H264 输出媒体类型
@@ -1003,44 +932,18 @@ impl H264Encoder {
             if get_result.is_ok() && actual_length > 0 {
                 header_data.truncate(actual_length as usize);
 
-                // 调试输出：打印原始数据
-                if header_data.len() >= 4 {
-                    println!(
-                        "[H264Encoder] MPEG_SEQUENCE_HEADER 原始数据: {:?}",
-                        &header_data[..header_data.len().min(20)]
-                    );
-                }
-
                 if header_data.len() > 4 {
                     self.parse_mpeg_sequence_header(&header_data);
                 }
             }
         }
 
-        // 如果属性中没有提取到 SPS/PPS，打印调试信息
-        if self.sps.is_empty() {
-            println!("[H264Encoder] 属性中未找到 SPS");
-        }
-        if self.pps.is_empty() {
-            println!("[H264Encoder] 属性中未找到 PPS");
-        }
-
         Ok(())
     }
 
     /// 解析 MPEG Sequence Header 格式的 SPS/PPS 数据
-    ///
-    /// MF_MT_MPEG_SEQUENCE_HEADER 可能包含两种格式：
-    /// 1. 长度前缀格式: [2字节 SPS 长度][N字节 SPS 数据][2字节 PPS 长度][M字节 PPS 数据]
-    /// 2. ANNEX-B 格式: [起始码 0x00000001][SPS NAL][起始码][PPS NAL]
-    ///
-    /// 注意：Microsoft H.264 编码器通常返回 ANNEX-B 格式。
     fn parse_mpeg_sequence_header(&mut self, data: &[u8]) {
         if data.len() < 4 {
-            println!(
-                "[H264Encoder] MPEG_SEQUENCE_HEADER 数据太短: {} 字节",
-                data.len()
-            );
             return;
         }
 
@@ -1049,10 +952,8 @@ impl H264Encoder {
             || (data.len() >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1);
 
         if is_annex_b {
-            println!("[H264Encoder] 检测到 ANNEX-B 格式");
             self.parse_annex_b_header(data);
         } else {
-            println!("[H264Encoder] 检测到长度前缀格式");
             self.parse_length_prefixed_header(data);
         }
     }
@@ -1080,7 +981,7 @@ impl H264Encoder {
 
             // 获取 NAL type
             let nal_type = data[offset] & 0x1F;
-            println!("[H264Encoder] ANNEX-B NAL type: {}", nal_type);
+            eprintln!("[H264Encoder] ANNEX-B NAL type: {}", nal_type);
 
             // 找到 NAL 单元的结束位置（下一个起始码或数据末尾）
             let mut end = offset + 1;
@@ -1102,7 +1003,7 @@ impl H264Encoder {
                         let mut sps = vec![0x00, 0x00, 0x00, 0x01];
                         sps.extend_from_slice(nal_data);
                         self.sps = sps;
-                        println!("[H264Encoder] 从 ANNEX-B 提取 SPS: {} 字节", nal_data.len());
+                        eprintln!("[H264Encoder] 从 ANNEX-B 提取 SPS: {} 字节", nal_data.len());
                     }
                 }
                 8 => { // PPS
@@ -1110,7 +1011,7 @@ impl H264Encoder {
                         let mut pps = vec![0x00, 0x00, 0x00, 0x01];
                         pps.extend_from_slice(nal_data);
                         self.pps = pps;
-                        println!("[H264Encoder] 从 ANNEX-B 提取 PPS: {} 字节", nal_data.len());
+                        eprintln!("[H264Encoder] 从 ANNEX-B 提取 PPS: {} 字节", nal_data.len());
                     }
                 }
                 _ => {}
@@ -1121,11 +1022,11 @@ impl H264Encoder {
 
         // 调试输出
         if !self.sps.is_empty() {
-            println!("[H264Encoder] 最终 SPS: {:?}",
+            eprintln!("[H264Encoder] 最终 SPS: {:?}",
                 &self.sps[..self.sps.len().min(10)]);
         }
         if !self.pps.is_empty() {
-            println!("[H264Encoder] 最终 PPS: {:?}",
+            eprintln!("[H264Encoder] 最终 PPS: {:?}",
                 &self.pps[..self.pps.len().min(10)]);
         }
     }
@@ -1137,20 +1038,20 @@ impl H264Encoder {
         // 读取 SPS 长度
         if offset + 2 <= data.len() {
             let sps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
-            println!("[H264Encoder] 解析到 SPS 长度: {}", sps_len);
+            eprintln!("[H264Encoder] 解析到 SPS 长度: {}", sps_len);
             offset += 2;
 
             if sps_len > 0 && offset + sps_len <= data.len() {
                 let sps_nal = &data[offset..offset + sps_len];
                 if !sps_nal.is_empty() {
                     let nal_type = sps_nal[0] & 0x1F;
-                    println!("[H264Encoder] SPS NAL type: {}", nal_type);
+                    eprintln!("[H264Encoder] SPS NAL type: {}", nal_type);
 
                     if nal_type == 7 && self.sps.is_empty() {
                         let mut sps = vec![0x00, 0x00, 0x00, 0x01];
                         sps.extend_from_slice(sps_nal);
                         self.sps = sps;
-                        println!("[H264Encoder] 从长度前缀格式提取 SPS: {} 字节", sps_len);
+                        eprintln!("[H264Encoder] 从长度前缀格式提取 SPS: {} 字节", sps_len);
                     }
                 }
                 offset += sps_len;
@@ -1160,20 +1061,20 @@ impl H264Encoder {
         // 读取 PPS
         if offset + 2 <= data.len() {
             let pps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
-            println!("[H264Encoder] 解析到 PPS 长度: {}", pps_len);
+            eprintln!("[H264Encoder] 解析到 PPS 长度: {}", pps_len);
             offset += 2;
 
             if pps_len > 0 && offset + pps_len <= data.len() {
                 let pps_nal = &data[offset..offset + pps_len];
                 if !pps_nal.is_empty() {
                     let nal_type = pps_nal[0] & 0x1F;
-                    println!("[H264Encoder] PPS NAL type: {}", nal_type);
+                    eprintln!("[H264Encoder] PPS NAL type: {}", nal_type);
 
                     if nal_type == 8 && self.pps.is_empty() {
                         let mut pps = vec![0x00, 0x00, 0x00, 0x01];
                         pps.extend_from_slice(pps_nal);
                         self.pps = pps;
-                        println!("[H264Encoder] 从长度前缀格式提取 PPS: {} 字节", pps_len);
+                        eprintln!("[H264Encoder] 从长度前缀格式提取 PPS: {} 字节", pps_len);
                     }
                 }
             }
@@ -1215,7 +1116,7 @@ impl H264Encoder {
         use crate::win_recorder::d3d11::D3D11TextureManager;
 
         let (width, height) = D3D11TextureManager::detect_monitor(monitor)?;
-        println!(
+        eprintln!(
             "[H264Encoder] Detected monitor {}: {}x{}",
             monitor, width, height
         );

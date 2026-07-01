@@ -171,6 +171,7 @@ class WindowsSidecarClient:
                         {"id": request_id, "cmd": cmd, "params": params or {}},
                         ensure_ascii=False,
                     )
+                    logger.debug(f"sidecar request: cmd={cmd}, id={request_id}")
                     self._proc.stdin.write(payload + "\n")
                     self._proc.stdin.flush()
 
@@ -178,7 +179,8 @@ class WindowsSidecarClient:
                     if not response_line:
                         raise RuntimeError("sidecar 进程已退出")
 
-                response = json.loads(response_line)
+                    logger.debug(f"sidecar response: {response_line[:200] if response_line else 'empty'}")
+                    response = json.loads(response_line)
                 if not response.get("ok"):
                     error_msg = response.get("error") or f"sidecar 命令失败: {cmd}"
                     raise RuntimeError(error_msg)
