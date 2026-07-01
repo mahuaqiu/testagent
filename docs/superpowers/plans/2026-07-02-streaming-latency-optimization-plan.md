@@ -29,6 +29,37 @@
 
 ---
 
+## 关键设计说明（必读）
+
+### ⚠️ stderr 冲突问题
+
+**问题**：`WindowsSidecarClient._drain_stderr` 已经在消费 stderr 用于日志输出（见 `windows_sidecar.py:136-142`），与 `PushFrameReader` 从 stderr 读取帧数据冲突！
+
+**解决方案**：
+1. 在推模式启动时，**禁用 `_drain_stderr` 线程**
+2. 帧数据改走 **独立通道**：不使用 stderr，改用其他方式（如管道或修改日志级别）
+3. **推荐方案**：禁用日志输出，使用单独的日志文件
+
+### 架构修正
+
+```
+原设计（有问题）：
+  stderr → [_drain_stderr 日志线程] + [PushFrameReader 帧读取]
+          → 冲突！帧数据会被日志线程截获
+
+修正后：
+  stdout  → JSON-RPC 响应（保持不变）
+  stderr  → 暂时禁用日志（推模式期间），仅用于帧推送
+  日志    ��� 输出到文件（推模式期间）
+```
+
+### 实现顺序
+
+1. **先修改 Rust**：在 session 级别添加 `push_enabled` 标志
+2. **再修改 Python**：禁用 stderr 日志线程，使用 stderr 读取帧
+
+---
+
 ## 实现计划
 
 ### 阶段 1: Rust 端实现
