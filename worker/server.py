@@ -1073,7 +1073,7 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
     from worker.screen.frame_source import (
         MinicapFrameSource,
         MJPEGFrameSource,
-        WindowsFrameSource,
+        MacFrameSource,
     )
 
     if platform == "ios":
@@ -1099,9 +1099,13 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         minicap.install()
         return MinicapFrameSource(device_id, minicap)
 
-    elif platform in ("windows", "mac"):
-        # Windows/Mac: 使用系统截屏（mss 支持跨平台），传递 monitor 参数
-        return WindowsFrameSource(fps=10, monitor=monitor)
+    elif platform == "mac":
+        # Mac: 使用 pyautogui 截屏
+        return MacFrameSource(fps=10, monitor=monitor)
+
+    elif platform == "windows":
+        # Windows: 不使用此函数创建 FrameSource，应该使用 get_windows_sidecar_manager
+        raise ValueError("Windows platform should use get_windows_sidecar_manager instead")
 
     elif platform == "web":
         # Web: 暂不支持 WebSocket 推流（需要 Playwright page 实例）

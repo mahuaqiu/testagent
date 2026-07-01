@@ -12,7 +12,7 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd
@@ -298,23 +298,36 @@ class WindowsSidecarStreamer:
         self._bitrate = bitrate
         self._running = False
         self._h264_info: dict[str, Any] | None = None
+        self._on_fallback: Optional[Callable[[], None]] = None
 
-    def start(self, codec: str = "jpeg", on_fallback: Optional[Any] = None) -> None:
+    def start(self, codec: str = "jpeg", on_fallback: Optional[Callable[[], None]] = None) -> None:
+        self._on_fallback = on_fallback
         self.codec = codec
         self._running = True
         if codec == "h264":
-            data = self._client.request(
-                "stream_start",
-                {
-                    "session_id": self._session_id,
-                    "fps": self._fps,
-                    "bitrate": self._bitrate,
-                    "profile": 66,
-                },
-            )
-            self._h264_info = data
+            try:
+                data = self._client.request(
+                    "stream_start",
+                    {
+                        "session_id": self._session_id,
+                        "fps": self._fps,
+                        "bitrate": self._bitrate,
+                        "profile": 66,
+                    },
+                )
+                self._h264_info = data
+            except Exception as e:
+                logger.error(f"Failed to start H.264 stream: {e}, falling back to JPEG")
+                self._trigger_fallback()
         else:
             self._h264_info = None
+
+    def _trigger_fallback(self) -> None:
+        """触发降级回调并切换到 JPEG。"""
+        logger.warning("Falling back to JPEG mode")
+        self.codec = "jpeg"
+        if self._on_fallback:
+            self._on_fallback()
 
     def stop(self) -> None:
         if self.codec == "h264" and self._running:

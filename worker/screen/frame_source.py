@@ -225,118 +225,60 @@ class MJPEGFrameSource(FrameSource):
         return proxy
 
 
-class WindowsFrameSource(FrameSource):
-    """Windows: mss 截屏。
+class MacFrameSource(FrameSource):
+    """Mac: 使用 pyautogui 截屏。
 
-    使用显示器映射逻辑：
-    - monitor=1: 主屏幕（left=0 的显示器）
-    - monitor=2: 副屏幕（另一个显示器）
+    注意：后续实现 sidecar 后，这里应该降级到 sidecar。
     """
 
     def __init__(self, fps: int = 10, monitor: int = 1):
+        import pyautogui
+
         self.fps = fps
         self.monitor = monitor
+        self._pyautogui = pyautogui
         self._screen_size: Optional[tuple[int, int]] = None
-        self._monitor_offset: Optional[tuple[int, int]] = None
-        self._current_monitor_config = None  # 当前显示器配置
-        self._stopped = False  # 停止标志
-        self._aligned_width: Optional[int] = None  # 对齐后的宽度
-        self._aligned_height: Optional[int] = None  # 对齐后的高度
-
-    def set_aligned_size(self, width: int, height: int) -> None:
-        """设置对齐后的分辨率（由 ScreenRecorder 调用）。
-
-        Args:
-            width: 对齐后的宽度
-            height: 对齐后的高度
-        """
-        self._aligned_width = width
-        self._aligned_height = height
-        logger.info(f"Aligned size set: {width}x{height}")
-
-    def _get_mss(self):
-        """获取 mss 实例（每次调用都在当前线程创建）。
-
-        注意：mss 使用 threading.local() 存储 Windows 设备上下文（srcdc, memdc, bmp），
-        这些资源只能在创建它们的线程中使用。跨线程复用会导致：
-        - AttributeError: '_thread._local' object has no attribute 'bmp' (stop 时)
-        - AttributeError: '_thread.local' object has no attribute 'srcdc' (跨线程调用时)
-
-        因此每次调用 get_frame/get_frame_bgra 时都在当前线程创建新的 mss 实例。
-        由于 mss 截屏非常快（<10ms），这不会影响性能。
-        """
-        import mss
-        return mss.mss()
+        self._stopped = False
 
     def get_frame(self) -> bytes:
-        """使用 mss 截屏，转为 JPEG。使用显示器映射逻辑。"""
-        # 已停止时返回空白帧
+        """使用 pyautogui 截屏，转为 JPEG。"""
         if self._stopped:
             return self.get_blank_frame()
 
-        from worker.screen.monitor_utils import get_mapped_monitor_index
-
-        sct = self._get_mss()
-        target_index, target_monitor = get_mapped_monitor_index(self.monitor)
-        # 缓存偏移量供坐标转换使用
-        self._monitor_offset = (target_monitor['left'], target_monitor['top'])
-        self._current_monitor_config = target_monitor
-        screenshot = sct.grab(target_monitor)
-        img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+        screenshot = self._pyautogui.screenshot()
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=80)
+        screenshot.save(buffer, format="JPEG", quality=80)
         return buffer.getvalue()
 
     def get_frame_bgra(self) -> bytearray:
-        """获取 BGRA 原始帧（用于 windows-screen-sidecar 硬件编码）。
+        """获取 BGRA 原始帧。
 
-        Returns:
-            bytearray: BGRA 格式的原始像素数据，长度为 width * height * 4
+        pyautogui 返回 RGB，需要转换为 BGRA。
         """
-        # 已停止时返回空数据
         if self._stopped:
             return bytearray()
 
-        from worker.screen.monitor_utils import get_mapped_monitor_index
+        screenshot = self._pyautogui.screenshot()
+        # 转换为 numpy 数组
+        img_array = numpy.array(screenshot)
+        # RGB to BGRA: 交换 R 和 B 通道
+        if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+            # 添加 Alpha 通道
+            rgba = numpy.dstack([img_array, numpy.full(img_array.shape[:2], 255, dtype=numpy.uint8)])
+            # RGB to BGR
+            bgra = rgba.copy()
+            bgra[:, :, 0] = rgba[:, :, 2]  # B = R
+            bgra[:, :, 2] = rgba[:, :, 0]  # R = B
+            return bytearray(bgra.tobytes())
 
-        sct = self._get_mss()
-        target_index, target_monitor = get_mapped_monitor_index(self.monitor)
-        self._monitor_offset = (target_monitor['left'], target_monitor['top'])
-        self._current_monitor_config = target_monitor
-        screenshot = sct.grab(target_monitor)
-
-        width = screenshot.width
-        height = screenshot.height
-
-        # mss 的 screenshot.raw 已经是 BGRA 格式！直接使用
-        raw_bgra = bytearray(screenshot.raw)
-
-        # 如果设置了对齐尺寸，且需要扩展
-        if self._aligned_width and self._aligned_height:
-            if width != self._aligned_width or height != self._aligned_height:
-                # 创建对齐尺寸的空白 BGRA
-                aligned_bgra = numpy.zeros((self._aligned_height, self._aligned_width, 4), dtype=numpy.uint8)
-                # 填充原图数据
-                orig_array = numpy.frombuffer(raw_bgra, dtype=numpy.uint8).reshape(height, width, 4)
-                aligned_bgra[:height, :width] = orig_array
-                return bytearray(aligned_bgra.tobytes())
-
-        return raw_bgra
+        return bytearray()
 
     def get_screen_size(self) -> tuple[int, int]:
-        """获取显示器尺寸。使用显示器映射逻辑。"""
-        from worker.screen.monitor_utils import get_mapped_monitor_index
-
-        _, monitor_config = get_mapped_monitor_index(self.monitor)
-        return (monitor_config["width"], monitor_config["height"])
-
-    def get_monitor_offset(self) -> tuple[int, int]:
-        """获取当前显示器相对于虚拟屏幕的偏移量（用于坐标转换）。"""
-        if self._monitor_offset:
-            return self._monitor_offset
-        from worker.screen.monitor_utils import get_monitor_offset
-        self._monitor_offset = get_monitor_offset(self.monitor)
-        return self._monitor_offset
+        """获取显示器尺寸。"""
+        if self._screen_size:
+            return self._screen_size
+        self._screen_size = self._pyautogui.size()
+        return self._screen_size
 
     def start(self) -> None:
         """启动帧源（预留接口）。"""
@@ -344,25 +286,15 @@ class WindowsFrameSource(FrameSource):
 
     def stop(self) -> None:
         """停止帧源，设置停止标志。"""
-        logger.info("WindowsFrameSource stopping")
-        self._stopped = True  # 设置停止标志，阻止新截屏请求
-        # 注意：不再需要关闭 mss 实例，因为每次 get_frame 都会创建新实例
-        # 每次创建的实例会在方法返回后自动被 Python GC 释放
-        logger.info("WindowsFrameSource stopped")
+        logger.info("MacFrameSource stopping")
+        self._stopped = True
+        logger.info("MacFrameSource stopped")
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
         width, height = self.get_screen_size()
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)
-
-    def get_frame_encoded(self, codec: str = "jpeg") -> bytes:
-        """获取编码帧（支持 H.264）。"""
-        if codec == "h264":
-            # 由 streamer 统一管理编码器，这里返回 None 触发 JPEG 回退
-            return self.get_frame()
-        else:
-            return self.get_frame()
 
 
 class WebFrameSource(FrameSource):

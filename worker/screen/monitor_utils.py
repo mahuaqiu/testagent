@@ -6,7 +6,7 @@
 - monitor=1: 主屏幕（left=0 的显示器）
 - monitor=2: 副屏幕（另一个显示器）
 
-优先使用 Rust sidecar 获取显示器配置，fallback 到 mss。
+使用 Rust sidecar 获取显示器配置。
 """
 
 import logging
@@ -18,19 +18,25 @@ logger = logging.getLogger(__name__)
 _monitors_cache: List[Dict] | None = None
 
 
-def _get_monitors_from_sidecar() -> List[Dict]:
-    """从 sidecar 获取显示器配置"""
+def get_monitors() -> List[Dict]:
+    """获取所有显示器配置列表。
+
+    使用 Rust sidecar 获取显示器配置。
+
+    Returns:
+        list: 显示器配置列表
+    """
     global _monitors_cache
     if _monitors_cache is not None:
         return _monitors_cache
 
     try:
         from worker.screen.windows_sidecar import get_shared_windows_sidecar_client
+
         client = get_shared_windows_sidecar_client()
         client.acquire()
         try:
             monitors = client.get_monitors()
-            # 转换为与 mss 相同���格式
             result = []
             for m in monitors:
                 result.append({
@@ -40,46 +46,16 @@ def _get_monitors_from_sidecar() -> List[Dict]:
                     "height": m["height"],
                 })
             _monitors_cache = result
+            logger.info(f"Got {len(result)} monitors from sidecar")
             return result
         finally:
             client.release()
     except Exception as e:
         logger.warning(f"Failed to get monitors from sidecar: {e}")
-        return _get_monitors_from_mss()
-
-
-def _get_monitors_from_mss() -> List[Dict]:
-    """从 mss 获取显示器配置（fallback）"""
-    import mss
-    with mss.mss() as sct:
-        result = []
-        for i in range(1, len(sct.monitors)):
-            m = sct.monitors[i]
-            result.append({
-                "left": m.left,
-                "top": m.top,
-                "width": m.width,
-                "height": m.height,
-            })
-        return result
-
-
-def get_mss_monitors() -> list:
-    """获取所有显示器配置列表。
-
-    优先使用 sidecar，fallback 到 mss。
-
-    Returns:
-        list: 显示器配置列表
-    """
-    global _monitors_cache
-    _monitors_cache = None  # 清除缓存强制刷新
-
-    try:
-        return _get_monitors_from_sidecar()
-    except Exception as e:
-        logger.warning(f"Sidecar monitors failed: {e}, fallback to mss")
-        return _get_monitors_from_mss()
+        # 返回默认显示器配置
+        default_monitors = [{"left": 0, "top": 0, "width": 1920, "height": 1080}]
+        _monitors_cache = default_monitors
+        return default_monitors
 
 
 def get_mapped_monitor_index(monitor: int) -> Tuple[int, Dict]:
@@ -89,7 +65,7 @@ def get_mapped_monitor_index(monitor: int) -> Tuple[int, Dict]:
     - monitor=1: 主屏幕（left=0 的显示器）
     - monitor=2: 副屏幕（另一个显示器）
     """
-    monitors = get_mss_monitors()
+    monitors = get_monitors()
 
     if len(monitors) <= 1:
         if monitors:

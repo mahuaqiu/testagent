@@ -40,7 +40,7 @@ except ImportError:
 try:
     import mss  # type: ignore[import-not-found]
 except ImportError:
-    mss = None
+    pass
 
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus

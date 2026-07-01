@@ -224,7 +224,8 @@ class ScreenManager:
     def _capture_loop(self) -> None:
         """后台截图循环（队列满时丢弃旧帧，带帧率控制）。
 
-        优化：WindowsFrameSource 每次循环只截屏一次，同时放入两个队列。
+        优化：MacFrameSource 每次循环只截屏一次，同时放入两个队列。
+        Windows 使用 WindowsSidecarScreenManager，不走此路径。
         帧率使用录制帧率（如果正在录制），否则默认 10 FPS。
         """
         import time
@@ -235,8 +236,8 @@ class ScreenManager:
         frame_interval = 1.0 / default_capture_fps
         last_frame_time = time.time()
 
-        # 是否共享单次截屏（WindowsFrameSource 支持）
-        use_shared_capture = type(self._frame_source).__name__ == "WindowsFrameSource"
+        # 是否共享单次截屏（MacFrameSource 支持）
+        use_shared_capture = type(self._frame_source).__name__ == "MacFrameSource"
 
         while self._running:
             try:
