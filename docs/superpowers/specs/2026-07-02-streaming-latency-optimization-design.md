@@ -66,9 +66,23 @@ Python: while True: frame = readline() → 发送 → while True: ...
 
 ## 3. 消息协议设计
 
-### 3.1 帧格式
+### 3.1 通道分离（关键设计）
 
-采用 **单字符前缀 + Base64 编码** 格式，最小化开销：
+**stdout 用于 JSON-RPC，stderr 用于帧推送**，避免冲突：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Rust Sidecar                             │
+├─────────────────────────────────────────────────────────────┤
+│  stdin  ← JSON-RPC 请求（Python→Rust）                      │
+│  stdout → JSON-RPC 响应（Rust→Python）                      │
+│  stderr → 帧推送数据（Rust→Python，推模式专用）              │
+└────────────��────────────────────────────────────────────────┘
+```
+
+### 3.2 帧格式
+
+帧数据通过 **stderr** 推送（与 stdout JSON-RPC 分离）：
 
 ```
 [TYPE_PREFIX][BASE64_DATA]\n
@@ -80,6 +94,8 @@ Python: while True: frame = readline() → 发送 → while True: ...
 2QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU=\n
 @FPS=20\n
 ```
+
+### 3.3 stderr 推送模式
 
 ### 3.2 消息类型
 
@@ -94,7 +110,33 @@ Python: while True: frame = readline() → 发送 → while True: ...
 | `H` | 心跳 | Rust 发送的心跳，保持连接活跃 |
 | `E` | 错误 | 推送过程中的错误信息 |
 
-### 3.3 控制命令格式
+### 3.3 stderr 推送模式
+
+**关键设计**：帧数据通过 **stderr** 推送，保持 stdout 用于 JSON-RPC：
+
+```
+stdin  → JSON-RPC 请求（原有）
+stdout → JSON-RPC 响应（原有）
+stderr → 帧推送数据（新增推模式专用）
+```
+
+**优势**：
+- 不影响现有 `snapshot`、`recording_start` 等 JSON-RPC 调用
+- stdout 保持同步响应模式，兼容性最佳
+- stderr 可配置为行缓冲或无缓冲
+
+**Rust 端实现**：
+
+```rust
+use std::io::Write;
+
+// 帧推送使用 stderr
+fn push_frame(frame_type: u8, data: &[u8]) {
+    let encoded = base64::encode(data);
+    let mut stderr = std::io::stderr();
+    writeln!(stderr, "{}{}", frame_type as char, encoded).unwrap();
+}
+```
 
 ```
 @FPS=20\n          - 设置帧率（推流和录制共用，按最高帧率运行）
@@ -259,14 +301,16 @@ class PushFrameReader:
     def stop_push(self):
         """停止推流模式"""
         self._running = False
-        self._client.write_command("@PUSH_STOP\n")
+        # write_command 会自动添加 \n，所以这里不传
+        self._client.write_command("@PUSH_STOP")
 
     def _start_listener_thread(self):
-        """后台线程监听 Rust 推送"""
+        """后台线程监听 Rust 推送（通过 stderr）"""
         def listener():
             while self._running:
                 try:
-                    line = self._proc.stdout.readline()
+                    # 从 stderr 读取推送数据（不是 stdout）
+                    line = self._proc.stderr.readline()
                     if not line:
                         break
                     self._handle_line(line)
@@ -310,17 +354,25 @@ class PushFrameReader:
         elif prefix == b'E':
             # 错误日志
             logger.error(f"[Rust] {content.decode('utf-8', errors='ignore')}")
+        # elif prefix == b'J':
+        #     # JPEG 帧 - 本次优化范围之外，预留
+        #     pass
 
-    async def get_frame(self) -> Optional[bytes]:
-        """获取一帧（异步）"""
+    async def get_frame(self) -> tuple[str, Optional[bytes]]:
+        """获取一帧（异步）
+
+        Returns:
+            tuple: (frame_type, data) - 帧类型和二进制数据
+                   frame_type: 'sps' | 'pps' | 'idr' | 'p'
+        """
         try:
             frame_type, data = await asyncio.wait_for(
                 self._frame_queue.get(),
                 timeout=0.5
             )
-            return data
+            return (frame_type, data)
         except asyncio.TimeoutError:
-            return None
+            return ('', None)
 ```
 
 ### 6.2 修改 screen_stream
@@ -338,16 +390,30 @@ async def screen_stream(websocket: WebSocket, ...):
         reader = PushFrameReader(client)
         reader.start_push(fps=streaming_fps)
 
-        # 先发送 SPS+PPS
-        sps_pps = await reader.get_frame()  # 应该获取 sps_pps 类型
-        if sps_pps:
-            await websocket.send_bytes(sps_pps)
+        # 先发送 SPS+PPS（它们会先到达，需要等待两者都收到）
+        sps_data = None
+        pps_data = None
+
+        # 等待 SPS 和 PPS 都收到
+        while sps_data is None or pps_data is None:
+            frame_type, frame_data = await reader.get_frame()
+            if frame_data is None:
+                break
+            if frame_type == 'sps':
+                sps_data = frame_data
+            elif frame_type == 'pps':
+                pps_data = frame_data
+
+        # 合并发送 SPS+PPS（格式：[1字节前缀][SPS][1字节前缀][PPS]）
+        if sps_data and pps_data:
+            combined = bytes([0x01]) + sps_data + bytes([0x01]) + pps_data
+            await websocket.send_bytes(combined)
 
         # 主循环：从推模式读取器获取帧并发送
         while reader.is_running():
-            frame = await reader.get_frame()
-            if frame:
-                await websocket.send_bytes(frame)
+            frame_type, frame_data = await reader.get_frame()
+            if frame_data and frame_type in ('idr', 'p'):
+                await websocket.send_bytes(frame_data)
     else:
         # JPEG：继续使用原有模式（或也改造成推模式）
         while streamer.is_running():
