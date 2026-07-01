@@ -196,18 +196,23 @@ target_fps = max(push_fps, recording_fps, idle_fps)
 ### 5.1 新增命令
 
 ```rust
-// 新增命令处理
+// 新增命令处理（通过 stdin 接收）
 "stream_push_start" => {
     // 启动推流模式，进入推送循环
-    // 参数：fps, session_id
+    // 参数通过 @FPS=XX 控制命令设置
+    // 内部解析 @PUSH_START 并启动推送线程
 }
 "stream_push_stop" => {
     // 停止推流模式
-}
-"stream_set_fps" => {
-    // 动态调整帧率
+    // 内部解析 @PUSH_STOP 并停止推送线程
 }
 ```
+
+**命令路由说明**：
+- JSON-RPC 命令（`stream_push_start` 等）：用于需要响应的场景
+- stdin 原始命令（`@FPS=XX`、`@PUSH_START` 等）：用于推模式动态配置
+- 启动推流：`request("stream_push_start", {"fps": 20})` → Rust 内部发送 `@PUSH_START` 到命令队列
+- 停止推流：`write_command("@PUSH_STOP")` → 直接发送 stdin 命令
 
 ### 5.2 推送循环实现
 
