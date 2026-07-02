@@ -223,6 +223,8 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
             let session_id = parse_string(&params, "session_id", "windows/1");
             let fps = parse_u32(&params, "fps", 20);
 
+            eprintln!("[windows-sidecar] stream_push_start: session_id={}, fps={}", session_id, fps);
+
             let mut guard = match state.lock() {
                 Ok(guard) => guard,
                 Err(_) => return Response::err(request.id, "state mutex poisoned"),
@@ -230,6 +232,9 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
             if let Some(session_handle) = guard.sessions.get_mut(&session_id) {
                 let _ = session_handle.set_push_enabled(true);
                 let _ = session_handle.set_push_fps(fps);
+                eprintln!("[windows-sidecar] push_enabled set to true for session {}", session_id);
+            } else {
+                eprintln!("[windows-sidecar] session not found: {}", session_id);
             }
 
             Response::ok(request.id, serde_json::json!({"status": "push_started"}))

@@ -249,9 +249,11 @@ class WindowsSidecarClient:
             else:
                 # 禁用：设置停止事件并等待线程退出
                 self._stderr_stop_event.set()
-                # 等待线程退出（最多等待 100ms）
+                # 强制终止并重建 stderr 线程（避免阻塞）
                 if self._stderr_thread and self._stderr_thread.is_alive():
                     self._stderr_thread.join(timeout=0.1)
+                # 重新创建 stderr 线程（暂时不启动，等 stop 时启动）
+                self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
             logger.debug("stderr drain enabled=%s", enabled)
 
     def get_monitors(self) -> list[dict]:
@@ -620,8 +622,12 @@ class PushFrameReader:
 
         # 通知 Rust 启动推送（传递 session_id）
         logger.info("PushFrameReader.start_push: 发送 stream_push_start 请求, session_id=%s", self._session_id)
-        self._client.request("stream_push_start", {"session_id": self._session_id, "fps": fps})
-        logger.info("PushFrameReader.start_push: stream_push_start 请求已发送")
+        try:
+            result = self._client.request("stream_push_start", {"session_id": self._session_id, "fps": fps})
+            logger.info("PushFrameReader.start_push: stream_push_start 响应: %s", result)
+        except Exception as e:
+            logger.error("PushFrameReader.start_push: stream_push_start 请求失败: %s", e)
+            raise
 
         # 启动后台监听线程
         self._start_listener_thread()

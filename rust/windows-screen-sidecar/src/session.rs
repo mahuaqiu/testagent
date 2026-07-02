@@ -415,6 +415,7 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
                         // 如果启用推模式，推送到 stderr
                         if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
                             let frame_type = determine_frame_type(&encoded_frame);
+                            eprintln!("[windows-sidecar] pushing frame: type={}, size={}", frame_type, encoded_frame.len());
                             push_frame_to_stderr(frame_type, &encoded_frame);
                         }
                     }
