@@ -996,24 +996,34 @@ async def screen_stream(
         if platform == "windows" and codec == "h264":
             from worker.screen.windows_sidecar import PushFrameReader
 
+            logger.info("screen_stream: 开始 Windows H.264 推流, conn_key=%s", conn_key)
+
             # 获取 client 引用
             client = screen_manager._client
             reader = PushFrameReader(client, session_id=conn_key)
+            logger.info("screen_stream: PushFrameReader 已创建, 开始启动推流")
             reader.start_push(fps=streaming_fps)
+            logger.info("screen_stream: push 已启动，等待 SPS+PPS")
 
             # 先发送 SPS+PPS（它们会先到达，需要等待两者都收到）
             sps_data = None
             pps_data = None
+            wait_count = 0
 
             # 等待 SPS 和 PPS 都收到
             while sps_data is None or pps_data is None:
+                wait_count += 1
                 frame_type, frame_data = await reader.get_frame()
+                logger.info("screen_stream: get_frame() 返回: type=%s, data=%s, wait_count=%d", frame_type, "None" if frame_data is None else f"{len(frame_data)} bytes", wait_count)
                 if frame_data is None:
+                    logger.warning("screen_stream: 未收到帧数据，退出等待循环")
                     break
                 if frame_type == 'sps':
                     sps_data = frame_data
+                    logger.info("screen_stream: 收到 SPS, size=%d", len(sps_data))
                 elif frame_type == 'pps':
                     pps_data = frame_data
+                    logger.info("screen_stream: 收到 PPS, size=%d", len(pps_data))
 
             # 合并发送 SPS+PPS（格式：[1字节前缀][SPS][1字节前缀][PPS]）
             if sps_data and pps_data:

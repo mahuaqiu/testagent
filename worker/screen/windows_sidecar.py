@@ -608,19 +608,24 @@ class PushFrameReader:
         return self._running and self._client.is_alive()
 
     def start_push(self, fps: int = 20):
-        """启动推流模���"""
+        """启动推流模式"""
+        logger.info("PushFrameReader.start_push: session_id=%s, fps=%d", self._session_id, fps)
         self._fps = fps
         self._frame_queue = asyncio.Queue(maxsize=2)
         self._running = True
 
         # 禁用 stderr 日志线程，避免竞争 stderr
+        logger.info("PushFrameReader.start_push: 禁用 stderr 日志线程")
         self._client.set_stderr_drain(False)
 
         # 通知 Rust 启动推送（传递 session_id）
+        logger.info("PushFrameReader.start_push: 发送 stream_push_start 请求, session_id=%s", self._session_id)
         self._client.request("stream_push_start", {"session_id": self._session_id, "fps": fps})
+        logger.info("PushFrameReader.start_push: stream_push_start 请求已发送")
 
         # 启动后台监听线程
         self._start_listener_thread()
+        logger.info("PushFrameReader.start_push: 监听线程已启动")
 
     def stop_push(self):
         """停止推流模式"""

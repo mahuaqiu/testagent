@@ -322,7 +322,8 @@
       "PowerShell(Copy-Item *)",
       "Read(//d/code/autotest/rust/windows-screen-sidecar/**)",
       "PowerShell(\\(Get-Item D:\\\\code\\\\autotest\\\\rust\\\\windows-screen-sidecar\\\\target\\\\release\\\\windows-screen-sidecar.exe\\).LastWriteTime)",
-      "Bash(chcp *)"
+      "Bash(chcp *)",
+      "Bash(copy *)"
     ]
   }
 }
