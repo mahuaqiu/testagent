@@ -26,7 +26,6 @@ class FrameSource(ABC):
         """获取单帧（JPEG 格式）。"""
         pass
 
-    @abstractmethod
     def get_frame_bgra(self) -> bytearray:
         """获取 BGRA 原始帧（用于 windows-screen-sidecar 硬件编码）。
 
@@ -34,7 +33,10 @@ class FrameSource(ABC):
             bytearray: BGRA 格式的原始像素数据
 
         Note:
-            默认实现抛出 NotImplementedError，子类根据能力选择实现
+            默认实现抛出 NotImplementedError，子类根据能力选择实现。
+            不使用 @abstractmethod，因为并非所有子类都支持 BGRA 输出
+            （如 MJPEGFrameSource、MinicapFrameSource），
+            调用方通过 try/except NotImplementedError 处理不支持的情况。
         """
         raise NotImplementedError(f"{self.__class__.__name__} does not support BGRA frame")
 

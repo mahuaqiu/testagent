@@ -127,7 +127,7 @@ class ScreenManager:
                 return self._bgra_queue.get(timeout=1.0)
             except Empty:
                 if attempt == max_retries - 1:
-                    logger.warning("BGRA queue empty after retries, falling back to direct capture")
+                    logger.error("BGRA queue empty after retries, falling back to direct capture")
                     return self._frame_source.get_frame_bgra()
         return self._frame_source.get_frame_bgra()
 
@@ -311,7 +311,7 @@ class ScreenManager:
                         self._bgra_queue.put(bgra, timeout=1)
                     except NotImplementedError:
                         # FrameSource 不支持 BGRA 时跳过
-                        pass
+                        logger.error(f"BGRA frame not supported by {type(self._frame_source).__name__}, falling back to direct capture")
 
             except Exception as e:
                 consecutive_errors += 1

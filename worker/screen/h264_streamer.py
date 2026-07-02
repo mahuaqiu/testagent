@@ -110,7 +110,7 @@ class H264Streamer:
             return
         if self._consecutive_failures >= self._max_failures:
             self._fallback_triggered = True
-            logger.warning(f"H264 encoding failed {self._consecutive_failures} times, triggering fallback")
+            logger.error(f"H264 encoding failed {self._consecutive_failures} times, triggering fallback")
             if self._on_fallback:
                 self._on_fallback()
 

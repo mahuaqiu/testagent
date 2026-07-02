@@ -131,7 +131,7 @@ class AndroidPlatformManager(PlatformManager):
                 self._minicap_instances[udid] = minicap
                 logger.info(f"Minicap installed for device: {udid}")
             except MinicapError as e:
-                logger.warning(f"Minicap installation failed: {e}, will use fallback")
+                logger.error(f"Minicap installation failed: {e}, will use fallback")
 
             return ("online", "OK")
         except Exception as e:

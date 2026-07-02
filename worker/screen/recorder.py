@@ -18,7 +18,7 @@ try:
     _windows_sidecar_available = True
     logger.info("win_recorder module available (from windows-screen-sidecar)")
 except ImportError:
-    logger.warning("win_recorder not available, recording will use fallback. Install win-recorder wheel or ensure windows-screen-sidecar is running.")
+    logger.error("win_recorder not available, recording will use fallback. Install win-recorder wheel or ensure windows-screen-sidecar is running.")
 
 
 class ScreenRecorder:

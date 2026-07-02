@@ -1515,7 +1515,7 @@ def _web_take_system_screenshot_sidecar(self, monitor: int = None) -> bytes:
         manager = get_windows_sidecar_manager(session_id, monitor=effective_monitor)
         return manager.get_frame_jpeg()
     except Exception as exc:
-        logger.warning("Sidecar system screenshot failed, fallback to pyautogui: %s", exc)
+        logger.error("Sidecar system screenshot failed, fallback to pyautogui: %s", exc)
         screenshot = pyautogui.screenshot()
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")

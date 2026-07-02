@@ -94,7 +94,7 @@ class WindowsPlatformManager(PlatformManager):
                     self._window_rect = get_window_rect(self._window_handle)
                     logger.info(f"Window bound: handle={self._window_handle}, rect={self._window_rect}")
                 else:
-                    logger.warning("Window not found, fallback to fullscreen screenshot")
+                    logger.error("Window not found, fallback to fullscreen screenshot")
 
         return None
 
@@ -237,7 +237,7 @@ class WindowsPlatformManager(PlatformManager):
             from worker.screen.windows_sidecar import get_windows_sidecar_manager
             manager = get_windows_sidecar_manager(f"windows/{device_id}/{monitor}", monitor=monitor)
         except Exception as e:
-            logger.warning(f"sidecar manager failed: {e}, fallback to pyautogui")
+            logger.error(f"sidecar manager failed: {e}, fallback to pyautogui")
             screenshot = pyautogui.screenshot()
             buffer = io.BytesIO()
             screenshot.save(buffer, format="PNG")
@@ -285,7 +285,7 @@ class WindowsPlatformManager(PlatformManager):
 
                 return buffer.getvalue()
             except Exception as e:
-                logger.warning(f"Window sidecar screenshot failed: {e}, fallback to pyautogui")
+                logger.error(f"Window sidecar screenshot failed: {e}, fallback to pyautogui")
                 screenshot = pyautogui.screenshot()
                 buffer = io.BytesIO()
                 screenshot.save(buffer, format="PNG")
@@ -306,7 +306,7 @@ class WindowsPlatformManager(PlatformManager):
                     return base64.b64decode(image_b64)
                 raise RuntimeError("sidecar snapshot is empty")
             except Exception as e:
-                logger.warning(f"sidecar screenshot failed: {e}, fallback to pyautogui")
+                logger.error(f"sidecar screenshot failed: {e}, fallback to pyautogui")
                 screenshot = pyautogui.screenshot()
                 buffer = io.BytesIO()
                 screenshot.save(buffer, format="PNG")
@@ -624,7 +624,7 @@ def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any 
 
         return manager.get_frame_jpeg()
     except Exception as exc:
-        logger.warning("Sidecar screenshot failed, fallback to pyautogui: %s", exc)
+        logger.error("Sidecar screenshot failed, fallback to pyautogui: %s", exc)
         screenshot = pyautogui.screenshot()
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
