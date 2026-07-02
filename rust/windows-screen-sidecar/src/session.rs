@@ -27,6 +27,9 @@ pub struct SessionState {
     pub running: bool,
     pub capture_stop: Arc<std::sync::atomic::AtomicBool>,
     pub capture_thread: Option<JoinHandle<()>>,
+    // 推流模式标志
+    pub push_enabled: std::sync::atomic::AtomicBool,
+    pub push_fps: std::sync::atomic::AtomicU32,
 }
 
 impl SessionHandle {
@@ -50,6 +53,8 @@ impl SessionHandle {
             running: true,
             capture_stop: capture_stop.clone(),
             capture_thread: None,
+            push_enabled: std::sync::atomic::AtomicBool::new(false),
+            push_fps: std::sync::atomic::AtomicU32::new(20),
         }));
 
         let thread_inner = inner.clone();
@@ -383,7 +388,13 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
                         if guard.stream_queue.len() >= 16 {
                             guard.stream_queue.pop_front();
                         }
-                        guard.stream_queue.push_back(encoded_frame);
+                        guard.stream_queue.push_back(encoded_frame.clone());
+
+                        // 如果启用推模式，推送到 stderr
+                        if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                            let frame_type = determine_frame_type(&encoded_frame);
+                            push_frame_to_stderr(frame_type, &encoded_frame);
+                        }
                     }
                     Ok(None) => {} // 没有输出帧（流水线延迟）
                     Err(err) => {
@@ -392,5 +403,28 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
                 }
             }
         }
+    }
+}
+
+/// 通过 stderr 推送帧数据
+/// frame_type: 0=SPS, 1=PPS, 2=IDR, 3=P
+fn push_frame_to_stderr(frame_type: u8, data: &[u8]) {
+    let encoded = STANDARD.encode(data);
+    // 使用 eprintln! 输出到 stderr（自动换行）
+    eprintln!("{}{}", frame_type as char, encoded);
+}
+
+/// 判断 H.264 帧类型
+/// 0 = SPS, 1 = PPS, 2 = IDR, 3 = P
+fn determine_frame_type(nal: &[u8]) -> u8 {
+    if nal.is_empty() {
+        return 3;
+    }
+    let nal_type = nal[0] & 0x1F;
+    match nal_type {
+        7 => 0,  // SPS
+        8 => 1,  // PPS
+        5 => 2,  // IDR
+        _ => 3,  // P frame
     }
 }
