@@ -219,6 +219,34 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Err(err) => Response::err(request.id, err),
             }
         }
+        "stream_push_start" => {
+            let session_id = parse_string(&params, "session_id", "windows/1");
+            let fps = parse_u32(&params, "fps", 20);
+
+            let mut guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Response::err(request.id, "state mutex poisoned"),
+            };
+            if let Some(session) = guard.sessions.get_mut(&session_id) {
+                session.push_enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+                session.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
+            }
+
+            Response::ok(request.id, serde_json::json!({"status": "push_started"}))
+        }
+        "stream_push_stop" => {
+            let session_id = parse_string(&params, "session_id", "windows/1");
+
+            let mut guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Response::err(request.id, "state mutex poisoned"),
+            };
+            if let Some(session) = guard.sessions.get_mut(&session_id) {
+                session.push_enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+
+            Response::ok(request.id, serde_json::json!({"status": "push_stopped"}))
+        }
         "session_close" => {
             let session_id = parse_string(&params, "session_id", "windows/1");
             let session = {
