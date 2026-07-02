@@ -992,22 +992,49 @@ async def screen_stream(
         # 根据 codec 配置帧源
         streamer = screen_manager.start_streaming(codec=codec)
 
-        # H.264: 连接时先发送 SPS+PPS，让前端 MSE 解码器初始化。
-        # SPS 和 PPS 合并成一条消息发送（各自带起始码 00 00 00 01），
-        # 避免分两条消息时 PPS 迟到导致首个 IDR 帧解码失败。
-        if codec == "h264":
-            try:
-                h264_info = streamer.get_h264_info()
-                if h264_info:
-                    combined = bytes([0x01]) + h264_info['sps'] + h264_info['pps']
-                    await websocket.send_bytes(combined)
-                    logger.info(
-                        f"Sent SPS+PPS: {len(h264_info['sps'])}+{len(h264_info['pps'])} bytes"
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to send SPS/PPS: {e}")
+        # Windows H.264 推流使用推模式
+        if platform == "windows" and codec == "h264":
+            from worker.screen.windows_sidecar import PushFrameReader
 
-        while streamer.is_running():
+            # 获取 client 引用
+            client = screen_manager._client
+            reader = PushFrameReader(client)
+            reader.start_push(fps=streaming_fps)
+
+            # 先发送 SPS+PPS（它们会先到达，需要等待两者都收到）
+            sps_data = None
+            pps_data = None
+
+            # 等待 SPS 和 PPS 都收到
+            while sps_data is None or pps_data is None:
+                frame_type, frame_data = await reader.get_frame()
+                if frame_data is None:
+                    break
+                if frame_type == 'sps':
+                    sps_data = frame_data
+                elif frame_type == 'pps':
+                    pps_data = frame_data
+
+            # 合并发送 SPS+PPS（格式：[1字节前缀][SPS][1字节前缀][PPS]）
+            if sps_data and pps_data:
+                combined = bytes([0x01]) + sps_data + bytes([0x01]) + pps_data
+                await websocket.send_bytes(combined)
+
+            # 主循环：从推模式读取器获取帧并发送
+            try:
+                while reader.is_running():
+                    frame_type, frame_data = await reader.get_frame()
+                    if frame_data and frame_type in ('idr', 'p'):
+                        await asyncio.wait_for(
+                            websocket.send_bytes(frame_data),
+                            timeout=send_timeout
+                        )
+            finally:
+                # 停止推流模式
+                reader.stop_push()
+        else:
+            # 非 Windows H.264：使用原有拉模式
+            while streamer.is_running():
             # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
             await asyncio.sleep(1.0 / streaming_fps)
 
