@@ -52,6 +52,7 @@ class WindowsSidecarClient:
         self._request_id = 1
         self._ref_count = 0
         self._stderr_thread: threading.Thread | None = None
+        self._stderr_drain_enabled = True  # 控制 stderr 日志线程是否运行
         self._closed = False
         self._restart_count = 0
         self._max_restarts = 3
@@ -138,6 +139,9 @@ class WindowsSidecarClient:
         if not self._proc or not self._proc.stderr:
             return
         for line in self._proc.stderr:
+            if not self._stderr_drain_enabled:
+                # 推流模式已启动，停止消费 stderr
+                break
             line = line.rstrip("\n")
             if line:
                 logger.info("[windows-sidecar] %s", line)
@@ -235,6 +239,12 @@ class WindowsSidecarClient:
                 raise RuntimeError("sidecar 进程未启动")
             self._proc.stdin.write(cmd + "\n")
             self._proc.stdin.flush()
+
+    def set_stderr_drain(self, enabled: bool) -> None:
+        """控制 stderr 日志线程是否运行（推流模式需要禁用）"""
+        with self._lock:
+            self._stderr_drain_enabled = enabled
+            logger.debug("stderr drain enabled=%s", enabled)
 
     def get_monitors(self) -> list[dict]:
         """获取所有显示器配置"""
@@ -572,11 +582,12 @@ class WindowsSidecarScreenManager:
 class PushFrameReader:
     """推模式帧读取器 - 从 stderr 读取 Rust 推送的帧数据"""
 
-    def __init__(self, client: WindowsSidecarClient):
+    def __init__(self, client: WindowsSidecarClient, session_id: str = "windows/1"):
         self._client = client
+        self._session_id = session_id
         self._running = False
         self._fps = 20
-        self._frame_queue = None
+        self._frame_queue: asyncio.Queue | None = None
         self._proc = client.get_process()
 
     def set_fps(self, fps: int):
@@ -589,18 +600,27 @@ class PushFrameReader:
         return self._running and self._client.is_alive()
 
     def start_push(self, fps: int = 20):
-        """启动推流模式"""
+        """启动推流模���"""
         self._fps = fps
         self._frame_queue = asyncio.Queue(maxsize=2)
         self._running = True
-        # 通知 Rust 启动推送
-        self._client.request("stream_push_start", {"fps": fps})
+
+        # 禁用 stderr 日志线程，避免竞争 stderr
+        self._client.set_stderr_drain(False)
+
+        # 通知 Rust 启动推送（传递 session_id）
+        self._client.request("stream_push_start", {"session_id": self._session_id, "fps": fps})
+
         # 启动后台监听线程
         self._start_listener_thread()
 
     def stop_push(self):
         """停止推流模式"""
         self._running = False
+
+        # 恢复 stderr 日志线程
+        self._client.set_stderr_drain(True)
+
         # write_command 会自动添加 \n
         self._client.write_command("@PUSH_STOP")
 
@@ -623,7 +643,7 @@ class PushFrameReader:
 
     def _handle_line(self, line: bytes):
         """处理接收到的行"""
-        if not line:
+        if not line or not self._frame_queue:
             return
 
         prefix = line[0:1]
@@ -672,6 +692,8 @@ class PushFrameReader:
             tuple: (frame_type, data) - 帧类型和二进制数据
                    frame_type: 'sps' | 'pps' | 'idr' | 'p'
         """
+        if not self._frame_queue:
+            return ('', None)
         try:
             frame_type, data = await asyncio.wait_for(
                 self._frame_queue.get(),

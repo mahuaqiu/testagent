@@ -301,6 +301,33 @@ fn main() {
             continue;
         }
 
+        // 处理控制命令（以 @ 开头）
+        if line.starts_with('@') {
+            let cmd = line.trim();
+            let mut guard = match state.lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
+            if cmd == "@PUSH_STOP" {
+                // 停止所有会话的推模式
+                for (_, session) in guard.sessions.iter_mut() {
+                    session.push_enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                eprintln!("[windows-screen-sidecar] push mode stopped");
+            } else if cmd.starts_with("@FPS=") {
+                // 设置帧率
+                if let Some(fps_str) = cmd.strip_prefix("@FPS=") {
+                    if let Ok(fps) = fps_str.parse::<u32>() {
+                        for (_, session) in guard.sessions.iter_mut() {
+                            session.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        eprintln!("[windows-screen-sidecar] push fps set to {}", fps);
+                    }
+                }
+            }
+            continue;
+        }
+
         let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) => request,
             Err(err) => {

@@ -301,12 +301,20 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
         }
 
         // 获取当前状态 - 分开获取避免多次 mutable borrow
+        // 推流模式下使用 push_fps，否则使用 active_fps/idle_fps
         let (monitor, target_fps) = {
             let guard = match state.lock() {
                 Ok(g) => g,
                 Err(_) => break,
             };
-            (guard.monitor, guard.active_fps.max(guard.idle_fps).max(1))
+            // 如果启用推模式，使用 push_fps（优先），否则使用 active_fps/idle_fps
+            let base_fps = guard.active_fps.max(guard.idle_fps).max(1);
+            let effective_fps = if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                guard.push_fps.load(std::sync::atomic::Ordering::Relaxed).max(base_fps)
+            } else {
+                base_fps
+            };
+            (guard.monitor, effective_fps)
         };
 
         // 检查是否有活动的 recorder/encoder
