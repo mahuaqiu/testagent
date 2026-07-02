@@ -7,6 +7,8 @@ match_by 支持两种模式：title（窗口标题）、class（窗口类名）�
 
 import logging
 import subprocess
+import time
+from random import randint
 from typing import TYPE_CHECKING
 
 from worker.task import Action, ActionResult, ActionStatus
@@ -63,106 +65,94 @@ class ActivateWindowAction(BaseActionExecutor):
     def _activate_windows(self, value: str, match_by: str, exe_name: str | None = None) -> ActionResult:
         """Windows 平台窗口激活。
 
+        先通过标题或类名找到窗口句柄 HWND，然后用 Win32Window 激活并移动鼠标到窗口中心。
+        找不到句柄或激活异常时，走移动 500 兜底逻辑。
+
         Args:
             value: 窗口标题或窗口类名
             match_by: 定位方式，"title" 或 "class"
             exe_name: 进程 exe 名称过滤（可选），如 "chrome.exe"
         """
-        try:
-            if match_by == "title":
-                # 按标题查找（包含匹配）
-                import pygetwindow as gw
+        import pygetwindow as gw
+        import pyautogui
 
-                windows = gw.getWindowsWithTitle(value)
-                if not windows:
-                    logger.warning(f"Window not found by title: {value}")
-                    return ActionResult(
-                        number=0,
-                        action_type=self.name,
-                        status=ActionStatus.SUCCESS,
-                        output=f"Window not found by title: {value} (activate skipped)",
-                    )
-                # 如果指定了 exe_name，需要过滤
-                if exe_name:
-                    window = self._filter_window_by_exe(windows, exe_name)
-                    if not window:
-                        logger.warning(f"Window not found by title '{value}' with exe '{exe_name}'")
-                        return ActionResult(
-                            number=0,
-                            action_type=self.name,
-                            status=ActionStatus.SUCCESS,
-                            output=f"Window not found by title '{value}' with exe '{exe_name}' (activate skipped)",
-                        )
-                else:
-                    window = windows[0]
-                # 添加异常捕获，pygetwindow.activate() 在无权限时可能崩溃
-                try:
-                    window.activate()
-                except Exception as activate_err:
-                    logger.error(f"window.activate() failed: {activate_err}")
-                    return ActionResult(
-                        number=0,
-                        action_type=self.name,
-                        status=ActionStatus.SUCCESS,
-                        output=f"Failed to activate window: {activate_err} (activate skipped)",
-                    )
-                logger.info(f"Activated window by title: {window.title}")
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output=f"Activated window by title: {value}",
-                )
-            else:  # class
-                # 按窗口类名查找（精确匹配或包含匹配）
-                import win32gui
-                import win32con
-                import win32api
-
-                hwnd = self._find_window_by_class(value, exe_name)
-                if not hwnd:
-                    error_msg = f"Window not found by class: {value}"
-                    if exe_name:
-                        error_msg = f"Window not found by class '{value}' with exe '{exe_name}'"
-                    logger.warning(error_msg)
-                    return ActionResult(
-                        number=0,
-                        action_type=self.name,
-                        status=ActionStatus.SUCCESS,
-                        output=f"{error_msg} (activate skipped)",
-                    )
-
-                # 使用 AttachThreadInput 技术确保后台进程能正确激活窗口
-                # Windows 安全机制阻止后台进程直接调用 SetForegroundWindow
-                try:
-                    self._force_set_foreground_window(hwnd)
-                    # 获取窗口标题用于日志
-                    window_title = win32gui.GetWindowText(hwnd)
-                    logger.info(f"Activated window by class: {value}, title: {window_title}")
-                    return ActionResult(
-                        number=0,
-                        action_type=self.name,
-                        status=ActionStatus.SUCCESS,
-                        output=f"Activated window by class: {value}",
-                    )
-                except Exception as activate_err:
-                    # 激活失败只打印日志，不返回失败状态
-                    logger.error(f"Failed to activate window by class '{value}': {activate_err}")
-                    return ActionResult(
-                        number=0,
-                        action_type=self.name,
-                        status=ActionStatus.SUCCESS,
-                        output=f"Failed to activate window: {activate_err} (activate skipped)",
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to activate window on Windows: {e}")
+        # 1. 查找窗口句柄
+        hwnd = self._find_hwnd(value, match_by, exe_name)
+        if not hwnd:
+            logger.error(f"Window not found: {match_by}={value}" + (f", exe={exe_name}" if exe_name else ""))
+            # 找不到句柄，走移动 500 兜底
+            pyautogui.moveTo(500 + randint(0, 20), 500 + randint(0, 20), duration=0.1)
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.SUCCESS,
-                output=f"Failed to activate window: {e} (activate skipped)",
+                output=f"Window not found: {match_by}={value} (activate skipped, moved to 500,500)",
             )
+
+        # 2. 激活窗口并移动鼠标到窗口中心
+        try:
+            win = gw.Win32Window(hwnd)
+            if not win.isActive:
+                win.activate()
+                time.sleep(0.2)
+            pyautogui.moveTo(win.center[0] + randint(0, 20), win.center[1] + randint(0, 20), duration=0.1)
+            logger.info(f"Activated window: {match_by}={value}")
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Activated window: {match_by}={value}",
+            )
+        except gw.PyGetWindowException as e:
+            logger.error(f"Failed to activate window: {e}")
+            # 激活异常，走移动 500 兜底
+            pyautogui.moveTo(500 + randint(0, 20), 500 + randint(0, 20), duration=0.1)
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"Failed to activate window: {e} (moved to 500,500)",
+            )
+
+    def _find_hwnd(self, value: str, match_by: str, exe_name: str | None = None) -> int:
+        """查找窗口句柄。
+
+        统一入口，根据 match_by 选择按标题或类名查找。
+
+        Args:
+            value: 窗口标题或窗口类名
+            match_by: 定位方式，"title" 或 "class"
+            exe_name: 进程 exe 名称过滤（可选）
+
+        Returns:
+            窗口句柄（HWND），未找到返回 0
+        """
+        if match_by == "title":
+            return self._find_window_by_title(value, exe_name)
+        else:
+            return self._find_window_by_class(value, exe_name)
+
+    def _find_window_by_title(self, title: str, exe_name: str | None = None) -> int:
+        """通过窗口标题查找句柄（包含匹配）。
+
+        Args:
+            title: 窗口标题
+            exe_name: 进程 exe 名称过滤（可选）
+
+        Returns:
+            窗口句柄（HWND），未找到返回 0
+        """
+        import pygetwindow as gw
+
+        windows = gw.getWindowsWithTitle(title)
+        if not windows:
+            return 0
+        if exe_name:
+            window = self._filter_window_by_exe(windows, exe_name)
+            if not window:
+                return 0
+            return getattr(window, '_hWnd', 0)
+        return getattr(windows[0], '_hWnd', 0)
 
     def _find_window_by_class(self, class_name: str, exe_name: str | None = None) -> int:
         """通过窗口类名查找窗口句柄。
@@ -265,84 +255,6 @@ class ActivateWindowAction(BaseActionExecutor):
             except Exception:
                 continue
         return None
-
-    def _force_set_foreground_window(self, hwnd: int) -> None:
-        """强制将窗口设为前台窗口。
-
-        Windows 安全机制阻止后台进程直接调用 SetForegroundWindow。
-        使用 AttachThreadInput 技术绕过限制。
-
-        Args:
-            hwnd: 目标窗口句柄
-
-        Raises:
-            Exception: 当权限不足或其他原因导致操作失败时抛出异常
-        """
-        import win32gui
-        import win32process
-        import win32api
-        import win32con
-        import time
-
-        try:
-            # 如果窗口最小化，先恢复
-            if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-
-            # 获取当前前台窗口的线程 ID（最多重试一次）
-            max_retries = 2
-            for retry in range(max_retries):
-                foreground_hwnd = win32gui.GetForegroundWindow()
-
-                # 无前台窗口或句柄无效，等待后重试
-                if foreground_hwnd == 0 or not win32gui.IsWindow(foreground_hwnd):
-                    if retry < max_retries - 1:
-                        logger.warning(f"Foreground window handle invalid (hwnd={foreground_hwnd}), waiting 1s to retry...")
-                        time.sleep(1)
-                        continue
-                    else:
-                        # 重试后仍无效，直接尝试 SetForegroundWindow
-                        logger.warning("Foreground window still invalid after retry, attempting direct activation")
-                        win32gui.SetForegroundWindow(hwnd)
-                        return
-
-                # 验证通过，跳出重试循环
-                break
-
-            remote_thread_id, remote_process_id = win32process.GetWindowThreadProcessId(foreground_hwnd)
-            # 获取当前脚本运行的线程 ID
-            current_thread_id = win32api.GetCurrentThreadId()
-
-            # 诊断日志：记录前台窗口信息
-            fg_title = win32gui.GetWindowText(foreground_hwnd)
-            fg_class = win32gui.GetClassName(foreground_hwnd)
-            logger.info(f"Foreground window: hwnd={foreground_hwnd}, title='{fg_title}', class='{fg_class}', thread={remote_thread_id}, process={remote_process_id}")
-            logger.info(f"Current thread: {current_thread_id}")
-
-            if current_thread_id != remote_thread_id:
-                # 附加线程输入
-                win32process.AttachThreadInput(current_thread_id, remote_thread_id, True)
-                try:
-                    # 执行置顶操作
-                    win32gui.BringWindowToTop(hwnd)
-                    win32gui.SetForegroundWindow(hwnd)
-                finally:
-                    # 操作完成后解除附加，防止系统输入混乱
-                    win32process.AttachThreadInput(current_thread_id, remote_thread_id, False)
-            else:
-                win32gui.SetForegroundWindow(hwnd)
-        except Exception as e:
-            # 获取前台窗口进程名用于诊断
-            try:
-                import psutil
-                _, fg_pid = win32process.GetWindowThreadProcessId(foreground_hwnd)
-                fg_process = psutil.Process(fg_pid).name()
-            except Exception:
-                fg_process = "unknown"
-
-            logger.error(f"Failed to force set foreground window: {e}")
-            logger.error(f"Foreground window process: {fg_process}, target hwnd: {hwnd}")
-            raise Exception(f"{e}, foreground process: '{fg_process}'")
 
     def _activate_mac(self, value: str, match_by: str) -> ActionResult:
         """Mac 平台窗口激活。
