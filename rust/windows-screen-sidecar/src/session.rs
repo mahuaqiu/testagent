@@ -289,6 +289,20 @@ impl SessionHandle {
 
         Ok(json!({"closed": true}))
     }
+
+    /// 设置推流模式启用状态
+    pub fn set_push_enabled(&self, enabled: bool) -> Result<(), String> {
+        let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+        state.push_enabled.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 设置推流帧率
+    pub fn set_push_fps(&self, fps: u32) -> Result<(), String> {
+        let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+        state.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 /// 捕获循环 - 纯 Rust 实现

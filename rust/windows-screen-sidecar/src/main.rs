@@ -227,9 +227,9 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Ok(guard) => guard,
                 Err(_) => return Response::err(request.id, "state mutex poisoned"),
             };
-            if let Some(session) = guard.sessions.get_mut(&session_id) {
-                session.push_enabled.store(true, std::sync::atomic::Ordering::Relaxed);
-                session.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
+            if let Some(session_handle) = guard.sessions.get_mut(&session_id) {
+                let _ = session_handle.set_push_enabled(true);
+                let _ = session_handle.set_push_fps(fps);
             }
 
             Response::ok(request.id, serde_json::json!({"status": "push_started"}))
@@ -241,8 +241,8 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Ok(guard) => guard,
                 Err(_) => return Response::err(request.id, "state mutex poisoned"),
             };
-            if let Some(session) = guard.sessions.get_mut(&session_id) {
-                session.push_enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+            if let Some(session_handle) = guard.sessions.get_mut(&session_id) {
+                let _ = session_handle.set_push_enabled(false);
             }
 
             Response::ok(request.id, serde_json::json!({"status": "push_stopped"}))
@@ -310,16 +310,16 @@ fn main() {
             };
             if cmd == "@PUSH_STOP" {
                 // 停止所有会话的推模式
-                for (_, session) in guard.sessions.iter_mut() {
-                    session.push_enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+                for (_, session_handle) in guard.sessions.iter_mut() {
+                    let _ = session_handle.set_push_enabled(false);
                 }
                 eprintln!("[windows-screen-sidecar] push mode stopped");
             } else if cmd.starts_with("@FPS=") {
                 // 设置帧率
                 if let Some(fps_str) = cmd.strip_prefix("@FPS=") {
                     if let Ok(fps) = fps_str.parse::<u32>() {
-                        for (_, session) in guard.sessions.iter_mut() {
-                            session.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
+                        for (_, session_handle) in guard.sessions.iter_mut() {
+                            let _ = session_handle.set_push_fps(fps);
                         }
                         eprintln!("[windows-screen-sidecar] push fps set to {}", fps);
                     }
