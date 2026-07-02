@@ -217,6 +217,24 @@ class WindowsSidecarClient:
         if self._proc and self._proc.poll() is not None:
             raise RuntimeError(f"sidecar 进程已退出，退出码={self._proc.returncode}")
 
+    def get_process(self):
+        """暴露底层 subprocess 引用，供 PushFrameReader 使用"""
+        with self._lock:
+            return self._proc
+
+    def is_alive(self) -> bool:
+        """检查 sidecar 进程是否存活"""
+        with self._lock:
+            return self._proc is not None and self._proc.poll() is None
+
+    def write_command(self, cmd: str) -> None:
+        """发送控制命令到 stdin（不等待响应）"""
+        with self._lock:
+            if not self._proc or not self._proc.stdin:
+                raise RuntimeError("sidecar 进程未启动")
+            self._proc.stdin.write(cmd + "\n")
+            self._proc.stdin.flush()
+
     def get_monitors(self) -> list[dict]:
         """获取所有显示器配置"""
         result = self.request("get_monitors", {})
