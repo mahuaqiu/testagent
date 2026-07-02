@@ -998,7 +998,7 @@ async def screen_stream(
 
             # 获取 client 引用
             client = screen_manager._client
-            reader = PushFrameReader(client, session_id=device_id)
+            reader = PushFrameReader(client, session_id=conn_key)
             reader.start_push(fps=streaming_fps)
 
             # 先发送 SPS+PPS（它们会先到达，需要等待两者都收到）
