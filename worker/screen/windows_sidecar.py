@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -566,3 +567,116 @@ class WindowsSidecarScreenManager:
             )
             self._streamer.start(codec=codec)
         return self._streamer
+
+
+class PushFrameReader:
+    """推模式帧读取器 - 从 stderr 读取 Rust 推送的帧数据"""
+
+    def __init__(self, client: WindowsSidecarClient):
+        self._client = client
+        self._running = False
+        self._fps = 20
+        self._frame_queue = None
+        self._proc = client.get_process()
+
+    def set_fps(self, fps: int):
+        """动态配置帧率"""
+        self._fps = fps
+        self._client.write_command(f"@FPS={fps}")
+
+    def is_running(self) -> bool:
+        """检查推流是否仍在运行"""
+        return self._running and self._client.is_alive()
+
+    def start_push(self, fps: int = 20):
+        """启动推流模式"""
+        self._fps = fps
+        self._frame_queue = asyncio.Queue(maxsize=2)
+        self._running = True
+        # 通知 Rust 启动推送
+        self._client.request("stream_push_start", {"fps": fps})
+        # 启动后台监听线程
+        self._start_listener_thread()
+
+    def stop_push(self):
+        """停止推流模式"""
+        self._running = False
+        # write_command 会自动添加 \n
+        self._client.write_command("@PUSH_STOP")
+
+    def _start_listener_thread(self):
+        """后台线程监听 Rust 推送（通过 stderr）"""
+        def listener():
+            while self._running:
+                try:
+                    # 从 stderr 读取推送数据
+                    line = self._proc.stderr.readline()
+                    if not line:
+                        break
+                    self._handle_line(line)
+                except Exception as e:
+                    logger.error(f"帧监听异常: {e}")
+                    break
+
+        thread = threading.Thread(target=listener, daemon=True)
+        thread.start()
+
+    def _handle_line(self, line: bytes):
+        """处理接收到的行"""
+        if not line:
+            return
+
+        prefix = line[0:1]
+        content = line[1:].strip()
+
+        if prefix == b'@':
+            # 控制命令
+            self._handle_command(content)
+        elif prefix == b'0':
+            # SPS - 序列参数集
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('sps', data))
+        elif prefix == b'1':
+            # PPS - 图像参数集
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('pps', data))
+        elif prefix == b'2':
+            # IDR 帧
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('idr', data))
+        elif prefix == b'3':
+            # P 帧
+            data = base64.b64decode(content)
+            self._frame_queue.put_nowait(('p', data))
+        elif prefix == b'H':
+            # 心跳，忽略
+            pass
+        elif prefix == b'E':
+            # 错误日志
+            logger.error(f"[Rust] {content.decode('utf-8', errors='ignore')}")
+
+    def _handle_command(self, cmd: bytes):
+        """处理控制命令"""
+        try:
+            cmd_str = cmd.decode('utf-8')
+            if cmd_str.startswith("FPS="):
+                # 帧率确认
+                logger.info(f"帧率已设置为: {cmd_str}")
+        except Exception as e:
+            logger.warning(f"解析控制命令失败: {e}")
+
+    async def get_frame(self):
+        """获取一帧（异步）
+
+        Returns:
+            tuple: (frame_type, data) - 帧类型和二进制数据
+                   frame_type: 'sps' | 'pps' | 'idr' | 'p'
+        """
+        try:
+            frame_type, data = await asyncio.wait_for(
+                self._frame_queue.get(),
+                timeout=0.5
+            )
+            return (frame_type, data)
+        except asyncio.TimeoutError:
+            return ('', None)
