@@ -52,7 +52,7 @@ class WindowsSidecarClient:
         self._request_id = 1
         self._ref_count = 0
         self._stderr_thread: threading.Thread | None = None
-        self._stderr_drain_enabled = True  # 控制 stderr 日志线程是否运行
+        self._stderr_stop_event = threading.Event()  # 用于立即停止 stderr 线程
         self._closed = False
         self._restart_count = 0
         self._max_restarts = 3
@@ -139,8 +139,8 @@ class WindowsSidecarClient:
         if not self._proc or not self._proc.stderr:
             return
         for line in self._proc.stderr:
-            if not self._stderr_drain_enabled:
-                # 推流模式已启动，停止消费 stderr
+            # 检查停止事件，立即退出
+            if self._stderr_stop_event.is_set():
                 break
             line = line.rstrip("\n")
             if line:
@@ -243,7 +243,15 @@ class WindowsSidecarClient:
     def set_stderr_drain(self, enabled: bool) -> None:
         """控制 stderr 日志线程是否运行（推流模式需要禁用）"""
         with self._lock:
-            self._stderr_drain_enabled = enabled
+            if enabled:
+                # 启用：清除停止事件
+                self._stderr_stop_event.clear()
+            else:
+                # 禁用：设置停止事件并等待线程退出
+                self._stderr_stop_event.set()
+                # 等待线程退出（最多等待 100ms）
+                if self._stderr_thread and self._stderr_thread.is_alive():
+                    self._stderr_thread.join(timeout=0.1)
             logger.debug("stderr drain enabled=%s", enabled)
 
     def get_monitors(self) -> list[dict]:
