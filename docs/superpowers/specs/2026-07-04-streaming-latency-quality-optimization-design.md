@@ -68,9 +68,9 @@ server.py 主循环: reader.get_frame() → websocket.send_bytes(prefix + NAL)
 源码核实的三个根因：
 
 1. **黑帧伪 IDR bug**：`h264_encoder.rs` 的 `prime_encoder_with_black_frame`（line 321-347）只调用一次 `process_encoder_output`。H.264 MFT 流水线有约 1 帧延迟——首次 `ProcessOutput` 通常返回 `MF_E_TRANSFORM_NEED_MORE_INPUT`（`process_encoder_output` line 833 分支直接 `break`），黑帧 IDR 未被真正取出，残留在 MFT 内部。`capture_loop` 第一次送真实屏幕帧时，这个延迟的黑帧 IDR 才被吐出，形成 6KB 伪 IDR#1 推给客户端。客户端 jmuxer 把伪 IDR 当真 IDR 锁定黑屏基线，直到真 IDR#2（~2.8s）才出画面——首帧 ~2.8s 延迟的直接根因。
-2. **画质糊** = bitrate 2Mbps + profile Baseline(66)。实测 8Mbps + High(100) 清晰，坐实。
+2. **画质糊** = 低码率 + Baseline profile。核实链路：`stream_start` 请求真实下发给 Rust 的 bitrate 来自 `WindowsSidecarStreamer.__init__` 默认值（实测插桩期间临时改为 8_000_000 跑画质对比；解桩后/正式环境若未改默认则走原默认 2_000_000）。profile 在 `stream_start` 请求里写死 66（Baseline）。实测 8Mbps + High(100) 清晰坐实"高码率 + High profile 解决糊"——根因不在单一 bitrate 数值，而在 bitrate + profile 组合。正式方案采用 4Mbps + High(100)（VBR），实测验证该组合清晰度见 §3.4 复测。
 3. **配置链路三处电缆未接通**：
-   - `config.py` 的 `websocket_streaming_bitrate` 配置项从 yaml 读取后，从未传给 `WindowsSidecarStreamer`（实例化时漏传参数，走默认值）。
+   - `config.py` 的 `websocket_streaming_bitrate` 配置项从 yaml 读取后，从未传给 `WindowsSidecarStreamer`（实例化时漏传参数，走默认值，见根因 2）。
    - `profile`（66/100）写死在 `stream_start` 请求，无配置项。
    - `set_gop_size`（`h264_encoder.rs:500-504`）是**空实现**，`idr_interval` 字段（line 103, 149）声明为 30 但全代码库无任何使用点——GOP 完全走 MFT 默认。实测 IDR 间隔 1.23-1.34s 是 MFT 默认产物。
 
@@ -111,18 +111,21 @@ server.py 主循环: reader.get_frame() → websocket.send_bytes(prefix + NAL)
 
 ```rust
 unsafe fn prime_encoder_with_black_frame(&mut self) -> Result<(), RecorderError> {
-    // ... 现有：送 1 帧黑帧 + 一次 process_encoder_output（提取 SPS/PPS）...
+    // ... 现有：送 1 帧黑帧 + 一次 process_encoder_output（提取 SPS/PPS 填入 self.sps/self.pps）...
 
     // ★ 新增：冲刷 MFT 流水线残留，丢弃延迟的黑帧 IDR
+    // 冲刷用的是 process_encoder_output（非 encode_frame_data），故不会触发：
+    //   - frame_count 累加（frame_count += 1 在 encode_frame_data:310，不在 process_encoder_output）
+    //   - sps/pps 覆盖（process_encoder_output:797-808 对 SPS/PPS 用 is_empty() 守卫，prime 第一次已填非空，不会覆盖）
     let mut dry_count = 0;
     while dry_count < 2 {
-        let black = self.make_black_nv12()?;          // 抽出黑帧生成为辅助方法
-        let sample = self.create_nv12_sample(&black)?;
+        let black = self.make_black_nv12()?;          // 见下方签名
+        let sample = self.create_nv12_sample(&black)?; // 现有方法，line 338 已被调用，可复用
         let _ = self.h264_encoder.as_ref().unwrap()
                   .ProcessInput(self.encoder_input_id, &sample, 0);
         match self.process_encoder_output() {
             Ok(frames) => {
-                let _ = frames;                       // 丢弃所有输出帧
+                let _ = frames;                       // 丢弃所有输出帧（含延迟的黑帧 IDR）
                 dry_count = if frames.is_empty() { dry_count + 1 } else { 0 };
             }
             Err(_) => { dry_count += 1; }
@@ -130,6 +133,25 @@ unsafe fn prime_encoder_with_black_frame(&mut self) -> Result<(), RecorderError>
     }
     Ok(())
 }
+
+/// 新增辅助方法，逻辑与现有 prime line 322-331 内联黑帧生成一致
+fn make_black_nv12(&self) -> Result<Vec<u8>, RecorderError> {
+    let w = self.params.width as usize;
+    let h = self.params.height as usize;
+    let y_size = w * h;
+    let uv_size = w * h / 2;
+    let mut black = vec![0u8; y_size + uv_size];
+    for i in y_size..y_size + uv_size {
+        black[i] = 128;   // NV12 UV 平面中性值
+    }
+    Ok(black)
+}
+```
+
+**冲刷安全性说明**（澄清冲刷不会破坏已提取的 sps/pps、不污染 frame_count）：
+- `extract_sps_pps_from_attributes` 在 `encode_frame_data:300-302` 调用，**冲刷不经过 encode_frame_data**，冲刷只调 `process_encoder_output`，不会改动 sps/pps 提取路径。
+- `process_encoder_output` 内部（line 797-808）对 SPS 用 `if self.sps.is_empty() { self.sps = annex_b.clone() }`，对 PPS 同理——仅在为空时填充。prime 第一次已填非空，冲刷期间即使产出带 SPS/PPS 的帧也不会覆盖。
+- `self.frame_count += 1` 在 `encode_frame_data:310`，冲刷不经过此处，frame_count 不被冲刷帧累加。
 ```
 
 **为什么是冲刷而非"跳过首帧 6KB IDR"**：跳过首帧是症状治理——若 MFT 行为变化，6KB 可能不在首帧；且跳首帧可能误丢真 IDR。冲刷流水线是根因治理——保证 prime 后 MFT 内部无残留，`capture_loop` 第一帧拿到的就是真屏帧的 IDR。
@@ -155,59 +177,106 @@ unsafe fn prime_encoder_with_black_frame(&mut self) -> Result<(), RecorderError>
      max_connections_per_device: 3
      send_timeout_seconds: 30
      streaming_fps: 10
-     streaming_codec: jpeg
+     streaming_codec: jpeg          # 默认 codec 保持 jpeg，由 server.py 基于 codec 参数决定走 jpeg 还是 h264；本 spec 不改默认 codec
      streaming_bitrate: 4000000     # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
      streaming_profile: 100         # H.264 profile: 66=Baseline, 77=Main, 100=High
    ```
+   注：`streaming_codec` 保持 `jpeg` 默认不变——本 spec 围绕 H.264 优化，但 codec 选择由 server.py 基于 WebSocket query 参数 `codec` 决定（实测日志 `?codec=h264`），yaml 默认值只影响无 query 时的兜底，不与本 spec 冲突。
 
 3. `worker/server.py` `screen_stream` 函数：
    - 读出 `streaming_bitrate = worker.config.websocket_streaming_bitrate`
    - 读出 `streaming_profile = worker.config.websocket_streaming_profile`
    - 传给 `screen_manager.start_streaming(codec=codec, bitrate=streaming_bitrate, profile=streaming_profile)`
 
-4. `worker/screen/windows_sidecar.py`：
-   - `WindowsSidecarStreamer.__init__` 默认 `bitrate` 从 `8_000_000`（实测临时值）改回 `4_000_000`
-   - `start(codec, profile=100)` 接收 profile 参数
-   - `WindowsSidecarManager.start_streaming` 透传 bitrate/profile 给 `WindowsSidecarStreamer`
-   - `stream_start` 请求的 `profile` 字段用传入值，不再写死 100
+4. `worker/screen/windows_sidecar.py`——**统一经 `__init__` 注入**，`start()` 读 `self._bitrate/self._profile` 发请求，不再混用 init/start 两层语义：
+   - `WindowsSidecarStreamer.__init__` 签名增 `profile` 参数，`bitrate` 默认改回 `4_000_000`，`profile` 默认 `100`：
+     ```python
+     def __init__(self, client, session_id, codec, fps,
+                  bitrate: int = 4_000_000, profile: int = 100):
+         ...
+         self._bitrate = bitrate
+         self._profile = profile   # 新增
+     ```
+   - `start(self, codec="jpeg", on_fallback=None)` 签名**不变**（`start` 不接 profile 参数，避免与现状 line 374 的签名不一致）。`start` 内部发 `stream_start` 请求时读 `self._bitrate` / `self._profile`，`profile` 不再写死 100：
+     ```python
+     {
+         "session_id": self._session_id,
+         "fps": self._fps,
+         "bitrate": self._bitrate,
+         "profile": self._profile,   # 不再写死 100
+     }
+     ```
+   - `WindowsSidecarManager.start_streaming` 透传 `bitrate`/`profile` 给 `WindowsSidecarStreamer(...)` 实例化（实例化点 line 612-617 当前漏传 bit/profile，本 spec 接通）：
+     ```python
+     self._streamer = WindowsSidecarStreamer(
+         self._client, self._session_id,
+         codec=codec, fps=self._active_fps,
+         bitrate=bitrate, profile=profile,   # 接通配置
+     )
+     ```
+   - `start_streaming` 签名增 `bitrate`/`profile` 形参（server.py 第 3 点传入）。
 
 **改动 B — Rust 侧 GOP 真正生效**：
 
-`h264_encoder.rs:500-504` 的 `set_gop_size` 从空实现改为真正调用 ICodecAPI：
+`h264_encoder.rs:500-504` 的 `set_gop_size` 从空实现改为真正调用 ICodecAPI 设置 GOP=8。具体签名与代码统一到改动 C（与 VBR 共享 ICodecAPI 句柄、统一 swallow-回退语义），不再在此重复给出独立代码块。
+
+GOP 值用常量 8（YAGNI——这次不做成配置；若后续需调再加 `websocket_streaming_gop` 配置项）。取 8 而非 10：10fps × 8帧 = IDR 间隔 0.8s，为"延迟 ≤1s"目标留出 0.2s 冗余，避免最坏操作延迟卡在 1s 边界。同步清理 `idr_interval` 死字段（line 103, 149）或保留待后续配置化——本 spec 倾向保留字段、标注 TODO 待配置化，降低本次改动面。
+
+**改动 C — VBR 码率控制（Rust 侧，`configure_pipeline` 内新增，含改动 B 的 GOP 设置）**：
+
+为落实"4Mbps 平均、瞬时突发可超"，需显式设码控模式为 Peak VBR。**与改动 B 共享同一个 `ICodecAPI` 句柄**（避免重复 cast），且**设置时机必须在 `SetInputType` 之后、`prime_encoder_with_black_frame`（首次 ProcessInput）之前**——`configure_pipeline`（line 468-496）当前的结构正好满足：SetOutputType(line 482) → SetInputType(line 489) → set_gop_size(line 493)，所以把 VBR 设置紧跟 `set_gop_size` 之后即可（仍在 `start_encoding:190` 的 prime 之前）。
+
+为消除改动 B 用 `?` 传播错误、改动 C 又要求"不支持退回默认"的语义冲突，两处都改为**探测失败时静默 swallow + log warning 回默认**，而非中断 prime。GOP 设置若失败仍可继续（MFT 默认 GOP 即实测 1.23s 行为，可接受退路）。
 
 ```rust
-unsafe fn set_gop_size(&self, encoder: &IMFTransform) -> Result<(), RecorderError> {
-    let codec_api: ICodecAPI = encoder.cast()
-        .map_err(|e| RecorderError::MFError(format!("ICodecAPI cast 失败: {}", e)))?;
-    let gop: u32 = 10;                                  // 方案1: 10fps × 10帧 = IDR 间隔 1.0s
-    let var = windows::core::VARIANT::new(gop);
-    codec_api.SetValue(&CODECAPI_AVEncMPVGOPSize, &var)
-        .map_err(|e| RecorderError::MFError(format!("设置 GOP 大小失败: {}", e)))?;
+unsafe fn configure_pipeline(&mut self) -> Result<(), RecorderError> {
+    let h264_encoder = self.h264_encoder.as_ref().ok_or_else(|| ...)?;
+    // ... 现有 SetOutputType / SetInputType ...
+
+    // 共享一份 ICodecAPI 句柄，供 set_gop_size 与 VBR 设置使用
+    let codec_api: ICodecAPI = match h264_encoder.cast() {
+        Ok(api) => api,
+        Err(e) => {
+            // cast 失败：MFT 不支持 ICodecAPI，回退默认行为，推流仍可用（MFT 默认 GOP 与码控）
+            debug_eprintln!("[H264Encoder] ICodecAPI cast 失败，回退默认 GOP/码控: {}", e);
+            return Ok(());
+        }
+    };
+
+    // 设置 GOP=8（失败 swallow + log，不中断，MFT 默认 GOP 可接受）
+    self.set_gop_size(&codec_api)?;
+
+    // ★ 新增：码率控制模式 = Peak VBR (允许瞬时超码率)
+    //   时机在 SetInputType 之后、prime 之前；探测失败则 swallow 回默认
+    let rc_mode: u32 = 1;   // CODECAPI_AVEncCommonRateControlMode: 0=CBR, 1=Peak VBR, 2=Quality VBR
+    match codec_api.SetValue(&CODECAPI_AVEncCommonRateControlMode, &windows::core::VARIANT::new(rc_mode)) {
+        Ok(_) => {}
+        Err(e) => debug_eprintln!("[H264Encoder] VBR 设置失败，回退默认码控: {}", e),
+    }
+    // 平均码率由 bitrate 字段经 CODECAPI_AVEncCommonMeanBitRate 设置（同款 swallow 语义）
     Ok(())
+}
+
+// set_gop_size 改签名接收 ICodecAPI（不再内部 cast）；失败改为 swallow + log
+unsafe fn set_gop_size(&self, codec_api: &ICodecAPI) -> Result<(), RecorderError> {
+    let gop: u32 = 8;
+    match codec_api.SetValue(&CODECAPI_AVEncMPVGOPSize, &windows::core::VARIANT::new(gop)) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            debug_eprintln!("[H264Encoder] GOP 设置失败，回退默认 GOP: {}", e);
+            Ok(())   // swallow 不中断，调用方继续
+        }
+    }
 }
 ```
 
-GOP 值用常量 10（YAGNI——这次不做成配置；若后续需调再加 `websocket_streaming_gop` 配置项）。同步清理 `idr_interval` 死字段（line 103, 149）或保留待后续配置化——本 spec 倾向保留字段、标注 TODO 待配置化，降低本次改动面。
-
-**改动 C — VBR 码率控制（Rust 侧，`configure_pipeline` 内新增）**：
-
-为落实"4Mbps 平均、瞬时突发可超"，需显式设码控模式为 Peak VBR。在 `configure_pipeline`（line 468-496）末尾增：
-
-```rust
-// 码率控制模式 = Peak VBR (允许瞬时超码率)
-let codec_api: ICodecAPI = h264_encoder.cast()?;
-let rc_mode: u32 = 1;   // CODECAPI_AVEncCommonRateControlMode: 0=CBR, 1=Peak VBR, 2=Quality VBR
-codec_api.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::new(rc_mode))?;
-// 平均码率/峰值码率由 bitrate 字段经 CODECAPI_AVEncCommonMeanBitRate / AVEncCommonMaxBitRate 设置
-```
-
-⚠️ **实施时风险点**：Windows H.264 MFT 对 `CODECAPI_AVEncCommonRateControlMode` 的支持因 Windows 版本而异。某些版本只接受有限码控模式或属性名不同。**实施时必须先探测 MFT 支持的属性**（`ICodecAPI::IsSupported` 或尝试设置后看返回码），不支持则退回默认（MFT 默认码控，通常 CBR-ish）。这是本 spec 标注的"实施时需探测验证"项，不在设计阶段敲死具体属性值与回退码。
+⚠️ **实施时风险点**：Windows H.264 MFT 对 `CODECAPI_AVEncCommonRateControlMode` / `CODECAPI_AVEncMPVGOPSize` 的支持因 Windows 版本而异。实施时先 `ICodecAPI::IsSupported` 探测，不支持则上述 match 自动 swallow 回默认（MFT 默认码控 CBR-ish、默认 GOP ~1.23s，均为可接受退路）。`CODECAPI_AVEncCommonMeanBitRate` / `AVEncCommonMaxBitRate` 也按同款探测-回退语义实施。具体属性值不在此敲死，留实施时探测验证。
 
 **不改**：`mf_writer.rs` 录制分支的 5Mbps、`RecordingContext`、`WinRecorder`、`snapshot` 路径全部零改动。已核实录制走 `state.recorder`（RecordingContext），推流走 `state.encoder`（EncodingContext），两条路径在 `capture_loop` 内各有独立分支处理（line 527-537 录制 vs line 540-588 推流），bitrate/profile 参数完全解耦。
 
 ### 3.3 server.py 转发限速 + Rust 帧率强控
 
-**问题**：server.py H.264 推流分支主循环（line 1043-1061）没有限速，`get_frame` 队列有帧就立刻转发。实测 Rcapture_loop 真实捕获 ~8fps（非配置 10fps，因 capture 耗时吃掉部分节流），但若 Rust 突发产帧，会直接灌给前端 → frame_queue 积压 → 丢旧帧 + 带宽不可预测。
+**问题**：server.py H.264 推流分支主循环（line 1043-1061）没有限速，`get_frame` 队列有帧就立刻转发。实测 Rust `capture_loop` 真实捕获 ~8fps（非配置 10fps，因 capture 耗时吃掉部分节流），常态下 Rust 产帧节奏本身就低于 10fps 目标，server 转发限速在此现实下基本是 **no-op**。本限速改动的定位是**防突发兜底**——应对 Rust 偶发瞬时多产帧 / 编码器突发产 IDR+Slices 等瞬时积压导致 frame_queue 丢旧帧 + 带宽不可预测；**不期待它本身降低延迟**（延迟由 §3.1 冲刷和 §3.2 GOP/码控负责）。
 
 **帧率来源**（实测核实，单一来源）：worker.yaml `streaming_fps: 10` → `config.py` `websocket_streaming_fps` → `server.py:916` `streaming_fps` → 同时传给 Rust（`start_streaming(fps=...)` + `start_push(fps=...)`）和本次新增的 server 转发限速。**三层共用同一 `streaming_fps`**，改 fps 只改 worker.yaml 一处。
 
@@ -239,13 +308,13 @@ while reader.is_running():
 
 ### 3.4 延迟复测协议（修复完成后由用户验收）
 
-操作延迟 ~3s 的落差（实测 IDR 间隔 1.28s，落差 ~1.7s）有候选 a（黑帧伪 IDR 锁死客户端基线）与候选 b（不限速缓冲堆积）两个来源。两者已被 §3.1 与 §3.3 顺带覆盖，**本 spec 不单独新增额外修复**。
+操作延迟 ~3s 的落差（实测 IDR 间隔 1.28s，落差 ~1.7s）有候选 a（黑帧伪 IDR 锁死客户端基线）与候选 b（Rust 突发产帧致缓冲堆积）两个来源。候选 a 由 §3.1 冲刷根治；候选 b 由 §3.3 server 限速作**防突发兜底**覆盖（常态 Rust ~8fps 下限速 no-op，故候选 b 在常态本就不显著，限速主要压住瞬时突发）。两者已被 §3.1 与 §3.3 顺带覆盖，**本 spec 不单独新增额外修复**。
 
 **复测设计**（诊断测点保留为可 flag 开启，默认关闭）：
 
 | 指标 | 修复后目标 | 验证方法 |
 |------|-----------|----------|
-| 黑帧伪 IDR | IDR#1 不再是 6KB，应为 ~230KB+ 真屏 IDR | 开测点2 flag，grep `[测点2] IDR#1` 看 size |
+| 黑帧伪 IDR | IDR#1 不再是 6KB 黑帧伪 IDR，应为柱量级真屏 IDR（典型 ≥ 10× 黑帧 size，按真实屏帧内容浮动） | 开测点2 flag，grep `[测点2] IDR#1` 看 size |
 | 首帧延迟 | ~2.8s → ≤1s | 测点2 日志 + 用户肉眼首次出画面 |
 | 操作延迟 | ~3s → ≤1s | 用户实操移动文件看跟手 |
 | 带宽 | 平均 ≤4Mbps，瞬时峰值允许突发到 ~6Mbps | WS 流量统计或 Rust 侧 P 帧平均 size 反推 |
@@ -283,14 +352,14 @@ while reader.is_running():
 | MFT 对 VBR 码控属性支持因 Windows 版本异 | 实施时探测 `IsSupported`，不支持退回默认（§3.2 改动 C） |
 | 冲刷轮数 `dry_count < 2` 是否冲空彻底 | 实施后复测 IDR#1 size 验证；不达标回 Phase 1 |
 | 操作延迟落差剩余部分若来自客户端 jmuxer | 不在本 spec 范围，作 follow-up |
-| GOP=10 在 4Mbps 下静态画面码率是否被 IDR 占用过多 | 复测关注静态画面清晰度与平均带宽；若不达标调 GOP 或 bitrate |
+| GOP=8 在 4Mbps 下静态画面码率是否被 IDR 占用过多 | 复测关注静态画面清晰度与平均带宽；若不达标调 GOP 或 bitrate（GOP=8 已为"延迟 ≤1s"留 0.2s 余量，见 §3.2 改动 C） |
 | `idr_interval` 死字段清理 | 本 spec 保留待配置化，不强行删除降低改动面 |
 
 ## 7. 验收标准
 
 全部满足即 spec 完成：
 
-1. IDR#1 size ≥ 200KB（不再是 6KB 黑帧伪 IDR）
+1. IDR#1 为真屏 IDR（size 为黑帧伪 IDR 的 ≥10× 量级，而非固定绝对阈值——4Mbps 下真屏 IDR 典型数十到上百 KB，按屏内容浮动；只要明显伪黑帧量级即可判定冲刷生效）
 2. 首帧延迟 ≤ 1s
 3. 操作延迟 ≤ 1s（用户复测验收）
 4. 平均带宽 ≤ 4Mbps，瞬时峰值允许 ~6Mbps
