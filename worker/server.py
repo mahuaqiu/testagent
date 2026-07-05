@@ -18,7 +18,11 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from common.request_context import clear_request_id, generate_request_id, set_request_id
-from worker.config import load_config_version, merge_config_with_local_protection, merge_config_with_ip_protection, save_config_with_version
+from worker.config import (
+    load_config_version,
+    merge_config_with_ip_protection,
+    save_config_with_version,
+)
 from worker.log_query import (
     LogQueryError,
     query_by_lines,
@@ -50,6 +54,8 @@ _ws_connections: dict[str, int] = {}
 DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
 DEFAULT_WS_STREAMING_FPS = 10
+DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
+DEFAULT_WS_STREAMING_PROFILE = 100  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -898,7 +904,7 @@ async def screen_stream(
 
     # Windows 不支持 MJPEG
     if platform == "windows" and codec == "mjpeg":
-        logger.error(f"Windows does not support MJPEG codec, falling back to jpeg")
+        logger.error("Windows does not support MJPEG codec, falling back to jpeg")
         codec = "jpeg"
 
     # iOS/Android 不支持 H.264（当前版本）
@@ -910,10 +916,14 @@ async def screen_stream(
     max_connections = DEFAULT_WS_MAX_CONNECTIONS
     send_timeout = DEFAULT_WS_SEND_TIMEOUT
     streaming_fps = DEFAULT_WS_STREAMING_FPS
+    streaming_bitrate = DEFAULT_WS_STREAMING_BITRATE
+    streaming_profile = DEFAULT_WS_STREAMING_PROFILE
     if worker and worker.config:
         max_connections = worker.config.websocket_max_connections_per_device
         send_timeout = worker.config.websocket_send_timeout_seconds
         streaming_fps = worker.config.websocket_streaming_fps
+        streaming_bitrate = worker.config.websocket_streaming_bitrate
+        streaming_profile = worker.config.websocket_streaming_profile
 
     # 连接计数和 ScreenManager key
     # 桌面端设备：key 包含 monitor 参数，支持多屏幕
@@ -989,8 +999,10 @@ async def screen_stream(
             mjpeg_proxy.stop()
             return
 
-        # 根据 codec 配置帧源
-        streamer = screen_manager.start_streaming(codec=codec)
+        # 根据 codec 配置帧源（透传 bitrate/profile 给 H.264 推流；jpeg/mjpeg 忽略）
+        streamer = screen_manager.start_streaming(
+            codec=codec, bitrate=streaming_bitrate, profile=streaming_profile
+        )
 
         # Windows H.264 推流使用推模式
         if platform == "windows" and codec == "h264":
@@ -1009,15 +1021,21 @@ async def screen_stream(
             sps_data = None
             pps_data = None
             wait_count = 0
+            sps_pps_deadline = 5.0  # 最多等待 5 秒
+            import time as _time
+            _sps_pps_start = _time.monotonic()
 
-            # 等待 SPS 和 PPS 都收到
+            # 等待 SPS 和 PPS 都收到（带总超时，单次 0.5s 超时不立即放弃）
             while sps_data is None or pps_data is None:
                 wait_count += 1
                 frame_type, frame_data = await reader.get_frame()
                 logger.info("screen_stream: get_frame() 返回: type=%s, data=%s, wait_count=%d", frame_type, "None" if frame_data is None else f"{len(frame_data)} bytes", wait_count)
                 if frame_data is None:
-                    logger.warning("screen_stream: 未收到帧数据，退出等待循环")
-                    break
+                    # 单次超时：检查是否超过总时限，是才退出
+                    if _time.monotonic() - _sps_pps_start > sps_pps_deadline:
+                        logger.warning("screen_stream: 等待 SPS+PPS 超时(%ds)，退出等待循环, wait_count=%d", sps_pps_deadline, wait_count)
+                        break
+                    continue
                 if frame_type == 'sps':
                     sps_data = frame_data
                     logger.info("screen_stream: 收到 SPS, size=%d", len(sps_data))
@@ -1025,20 +1043,47 @@ async def screen_stream(
                     pps_data = frame_data
                     logger.info("screen_stream: 收到 PPS, size=%d", len(pps_data))
 
-            # 合并发送 SPS+PPS（格式：[1字节前缀][SPS][1字节前缀][PPS]）
+            # 合并发送 SPS+PPS（格式：[1字节前缀 0x01][SPS Annex-B][PPS Annex-B]）
+            # sps_data/pps_data 各自已带 00 00 00 01 起始码，直接串联即可，
+            # 不在中间再加 0x01 之类分隔符（会被 jmuxer 当成 SPS NAL 的尾部数据破坏解析）。
             if sps_data and pps_data:
-                combined = bytes([0x01]) + sps_data + bytes([0x01]) + pps_data
+                combined = bytes([0x01]) + sps_data + pps_data
                 await websocket.send_bytes(combined)
 
             # 主循环：从推模式读取器获取帧并发送
             try:
+                # ★ 限速兜底：用 streaming_fps 控制转发节奏，防 Rust 突发产帧
+                # （瞬时多产 IDR+P / 编码器突发）导致前端 frame_queue 积压丢旧帧 + 带宽不可预测。
+                # 常态下 Rust 真实捕获 ~8fps（低于配置 10fps），此限速基本 no-op；
+                # 不期待它降延迟（延迟由冲刷 + GOP/码控负责），仅压住瞬时突发。
+                frame_interval = 1.0 / streaming_fps if streaming_fps > 0 else 0.0
+                import time as _t
+                last_send = _t.monotonic()
                 while reader.is_running():
                     frame_type, frame_data = await reader.get_frame()
-                    if frame_data and frame_type in ('idr', 'p'):
+                    if not frame_data:
+                        continue
+                    if frame_type in ('idr', 'p'):
+                        # ws 协议契约（与前端 useMseDecoder 一致）：每帧前 1 字节类型前缀
+                        # 0x02=IDR, 0x03=P；Annex-B NAL 原样追加在后。
+                        # 不加前缀会被前端 detectFrameType 判为 Unknown 走 JPEG 分支，永远不出画面。
+                        prefix = b'\x02' if frame_type == 'idr' else b'\x03'
+                        _t0 = _t.monotonic()
                         await asyncio.wait_for(
-                            websocket.send_bytes(frame_data),
+                            websocket.send_bytes(prefix + frame_data),
                             timeout=send_timeout
                         )
+                        _dt = (_t.monotonic() - _t0) * 1000
+                        # 仅在 send 明显变慢时记录（>100ms 视为潜在客户端反压）
+                        if _dt > 100:
+                            logger.warning("[consume] send 慢 %s size=%d send=%.1fms", frame_type, len(frame_data), _dt)
+                        # 限速兜底：发送间隔不足 frame_interval 则补 sleep；超时则不 sleep（已落后）
+                        if frame_interval > 0:
+                            elapsed = _t.monotonic() - last_send
+                            if elapsed < frame_interval:
+                                await asyncio.sleep(frame_interval - elapsed)
+                        last_send = _t.monotonic()
+                    # sps/pps 不限速，确保尽快送达（已在 SPS+PPS 阶段提前发送，主循环偶发的 sps/pps 也应立即转发）
             finally:
                 # 停止推流模式
                 reader.stop_push()
@@ -1109,9 +1154,9 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         FrameSource 实例
     """
     from worker.screen.frame_source import (
+        MacFrameSource,
         MinicapFrameSource,
         MJPEGFrameSource,
-        MacFrameSource,
     )
 
     if platform == "ios":

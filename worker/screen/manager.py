@@ -2,11 +2,11 @@
 
 import io
 import logging
-import os
 import threading
 import time
-from queue import Queue, Empty
-from typing import Callable, Optional, TYPE_CHECKING
+from collections.abc import Callable
+from queue import Empty, Queue
+from typing import TYPE_CHECKING
 
 import numpy
 from PIL import Image
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _screen_managers: dict[str, "ScreenManager"] = {}
 
 # 帧捕获失败回调（全局）
-_on_capture_failed: Optional[Callable[[str], None]] = None
+_on_capture_failed: Callable[[str], None] | None = None
 
 
 def set_capture_failed_callback(callback: Callable[[str], None]) -> None:
@@ -70,16 +70,16 @@ class ScreenManager:
         self._device_id = device_id  # 用于失败通知
         self._frame_queue: Queue[bytes] = Queue(maxsize=10)
         self._bgra_queue: Queue[bytearray] = Queue(maxsize=2)  # 录制只需要 1 帧当前 + 1 帧缓冲
-        self._capture_thread: Optional[threading.Thread] = None
+        self._capture_thread: threading.Thread | None = None
         self._running: bool = False
         self._is_recording: bool = False
         self._recording_lock: threading.Lock = threading.Lock()
-        self._recorder: Optional["ScreenRecorder"] = None
-        self._streamer: Optional["WebSocketStreamer"] = None
+        self._recorder: ScreenRecorder | None = None
+        self._streamer: WebSocketStreamer | None = None
         # 消费者计数与延迟释放
         self._active_consumers: int = 0
         self._consumers_lock: threading.Lock = threading.Lock()
-        self._release_timer: Optional[threading.Timer] = None
+        self._release_timer: threading.Timer | None = None
         self._release_delay: float = 60.0
 
     def start_capture(self) -> None:
@@ -228,7 +228,6 @@ class ScreenManager:
         Windows 使用 WindowsSidecarScreenManager，不走此路径。
         帧率使用录制帧率（如果正在录制），否则默认 10 FPS。
         """
-        import time
 
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误阈值
@@ -388,11 +387,18 @@ class ScreenManager:
 
             return output_path
 
-    def start_streaming(self, codec: str = "jpeg") -> "WebSocketStreamer":
+    def start_streaming(
+        self,
+        codec: str = "jpeg",
+        bitrate: int = 4_000_000,
+        profile: int = 100,
+    ) -> "WebSocketStreamer":
         """启动 WebSocket 推流。
 
         Args:
             codec: 推流编码格式 (jpeg/h264/mjpeg)
+            bitrate: H.264 平均码率（仅 Windows hard-encode 推流生效，其它平台忽略）
+            profile: H.264 profile（仅 Windows hard-encode 推流生效，其它平台忽略）
         """
         from worker.screen.streamer import WebSocketStreamer
 

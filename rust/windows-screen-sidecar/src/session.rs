@@ -1,12 +1,27 @@
 //! Session 管理 - 纯 Rust 实现，不依赖 Python
 use crate::capture::{bgra_to_jpeg, capture_monitor, current_timestamp_ms, CapturedFrame};
-use crate::win_recorder::{init_media_foundation, EncodingContext, RecordingContext};
+use crate::win_recorder::{init_media_foundation, EncodingContext, EncodedFrame, FrameType, RecordingContext};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::io::{self, Write, stderr};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// 全局推流模式标志：当为 true 时，禁用 stderr 调试日志，避免污染帧流
+static PUSH_MODE_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 打印调试日志到 stderr 并刷新
+/// 推流模式下禁用调试日志（避免与帧推送冲突）
+macro_rules! debug_eprintln {
+    ($($arg:tt)*) => {{
+        if !PUSH_MODE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            eprintln!($($arg)*);
+            let _ = stderr().flush();
+        }
+    };
+}}
 
 #[derive(Clone)]
 pub struct SessionHandle {
@@ -36,7 +51,7 @@ impl SessionHandle {
     pub fn new(_session_id: String, monitor: u32, idle_fps: u32, active_fps: u32) -> Result<Self, String> {
         // 初始化 Media Foundation
         if let Err(e) = init_media_foundation() {
-            eprintln!("[session] Warning: init_media_foundation failed: {}", e);
+            debug_eprintln!("[session] Warning: init_media_foundation failed: {}", e);
         }
 
         let capture_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -178,21 +193,34 @@ impl SessionHandle {
     /// 开始推流 - 纯 Rust 实现
     pub fn start_streaming(&self, fps: u32, bitrate: u32, profile: u32) -> Result<Value, String> {
         let monitor = self.monitor()?;
+        debug_eprintln!("[windows-sidecar] === start_streaming ENTRY === fps={}, monitor={}", fps, monitor);
 
         // 检查是否已经在推流
         {
             let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
             if state.encoder.is_some() {
+                debug_eprintln!("[windows-sidecar] start_streaming: stream already running");
                 return Err("stream already running".to_string());
             }
         }
 
-        // 创建并启动编码器
-        let encoder = EncodingContext::new(fps, bitrate, monitor, profile)
-            .map_err(|e| e.to_string())?;
+        debug_eprintln!("[windows-sidecar] === start_streaming CALLING EncodingContext::new ===");
+
+        // 创建编码器
+        let encoder = match EncodingContext::new(fps, bitrate, monitor, profile) {
+            Ok(e) => e,
+            Err(e) => {
+                debug_eprintln!("[windows-sidecar] EncodingContext::new error: {}", e);
+                return Err(e.to_string());
+            }
+        };
+
+        debug_eprintln!("[windows-sidecar] === start_streaming EncodingContext::new SUCCESS ===");
 
         // 获取 SPS/PPS
         let (sps, pps) = encoder.get_sps_pps().unwrap_or((Vec::new(), Vec::new()));
+
+        debug_eprintln!("[windows-sidecar] start_streaming: SPS={} bytes, PPS={} bytes", sps.len(), pps.len());
 
         let info = json!({
             "width": encoder.width(),
@@ -202,15 +230,27 @@ impl SessionHandle {
             "pps_b64": STANDARD.encode(&pps),
         });
 
+        debug_eprintln!("[windows-sidecar] start_streaming: storing encoder in state");
+
         // 保存到状态（先设置 encoder，这样捕获线程启动时才会正常运行）
-        let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+        let mut state = self.inner.lock().map_err(|e| {
+            debug_eprintln!("[windows-sidecar] start_streaming: lock error: {}", e);
+            "session mutex poisoned".to_string()
+        })?;
         state.encoder = Some(encoder);
         state.encoder_info = Some(info.clone());
         state.active_fps = state.active_fps.max(fps);
 
+        debug_eprintln!("[windows-sidecar] start_streaming: drop state lock");
+
         // 确保捕获线程正在运行（在 encoder 设置之后再启动）
         drop(state); // 释放锁
+        debug_eprintln!("[windows-sidecar] start_streaming: calling ensure_capture_thread_running");
         self.ensure_capture_thread_running()?;
+        debug_eprintln!("[windows-sidecar] start_streaming: ensure_capture_thread_running 返回成功");
+
+        debug_eprintln!("[windows-sidecar] === start_streaming RETURNING ===");
+        debug_eprintln!("[windows-sidecar] start_streaming: done");
 
         Ok(info)
     }
@@ -243,13 +283,18 @@ impl SessionHandle {
     }
 
     /// 确保捕获线程正在运行（如果已退出则重新启动）
-    fn ensure_capture_thread_running(&self) -> Result<(), String> {
+    pub fn ensure_capture_thread_running(&self) -> Result<(), String> {
+        // 使用 eprintln! 而非 debug_eprintln!，确保始终可见
+        eprintln!("[windows-sidecar] ensure_capture_thread_running: 开始检查");
         let needs_spawn = {
             let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
-            state.capture_thread.is_none()
+            let is_none = state.capture_thread.is_none();
+            eprintln!("[windows-sidecar] ensure_capture_thread_running: is_none={}", is_none);
+            is_none
         };
 
         if needs_spawn {
+            eprintln!("[windows-sidecar] ensure_capture_thread_running: 需要启动新线程");
             // 重置停止标志
             self.inner
                 .lock()
@@ -265,6 +310,9 @@ impl SessionHandle {
 
             let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
             state.capture_thread = Some(handle);
+            eprintln!("[windows-sidecar] ensure_capture_thread_running: 新线程已启动");
+        } else {
+            eprintln!("[windows-sidecar] ensure_capture_thread_running: 线程已在运行");
         }
 
         Ok(())
@@ -294,6 +342,12 @@ impl SessionHandle {
     pub fn set_push_enabled(&self, enabled: bool) -> Result<(), String> {
         let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
         state.push_enabled.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        // 设置全局推流标志，禁用 stderr 调试日志
+        PUSH_MODE_ACTIVE.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        // 推流模式启用时，强制刷新一下 stderr
+        if enabled {
+            let _ = stderr().flush();
+        }
         Ok(())
     }
 
@@ -303,14 +357,72 @@ impl SessionHandle {
         state.push_fps.store(fps, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
+
+    /// 推流启动时主动推送一次 SPS/PPS 到 stderr，
+    /// 避免 Python 等待 SPS+PPS 时依赖编码器后续是否输出独立 SPS/PPS NAL。
+    /// 必须在 set_push_enabled(true) 之后调用，确保 PUSH_MODE_ACTIVE 已生效（屏蔽调试日志）。
+    pub fn push_sps_pps_once(&self) -> Result<(), String> {
+        let (sps, pps) = {
+            let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+            if let Some(encoder) = state.encoder.as_ref() {
+                encoder.get_sps_pps().unwrap_or((Vec::new(), Vec::new()))
+            } else {
+                (Vec::new(), Vec::new())
+            }
+        };
+        eprintln!("[windows-sidecar] push_sps_pps_once: sps={} bytes, pps={} bytes", sps.len(), pps.len());
+        if !sps.is_empty() {
+            push_frame_to_stderr(0, &sps);
+        }
+        if !pps.is_empty() {
+            push_frame_to_stderr(1, &pps);
+        }
+        Ok(())
+    }
+
+    /// 检查捕获线程是否已停止
+    pub fn is_capture_thread_stopped(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|s| s.capture_thread.is_none())
+            .unwrap_or(true)
+    }
+
+    /// 重新启动捕获线程（用于推流模式）
+    pub fn restart_capture_thread(&self) -> Result<(), String> {
+        // 重置停止标志
+        self.inner
+            .lock()
+            .map_err(|_| "session mutex poisoned".to_string())?
+            .capture_stop
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let thread_inner = self.inner.clone();
+        let thread_capture_stop = self.inner.lock()
+            .map_err(|_| "session mutex poisoned".to_string())?
+            .capture_stop.clone();
+        let handle = thread::spawn(move || capture_loop(thread_inner, thread_capture_stop));
+
+        let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
+        state.capture_thread = Some(handle);
+        debug_eprintln!("[windows-sidecar] restart_capture_thread: 新线程已启动");
+        Ok(())
+    }
 }
 
 /// 捕获循环 - 纯 Rust 实现
 /// 当没有活动的 recorder 和 encoder 时，循环退出以节省资源
 fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomic::AtomicBool>) {
+    eprintln!("[windows-sidecar] capture_loop: 线程启动");  // 始终打印
     let mut last_tick = Instant::now();
+    // 诊断：编码器预热测量——记录 push 启动时刻到首帧产出的耗时（测点1）
+    let mut prev_push_enabled = false;
+    let mut push_just_on: Option<Instant> = None;
+    let mut none_count_after_push_on: u64 = 0;
+    let mut first_frame_logged = false;
     loop {
         if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("[windows-sidecar] capture_loop: stop_flag 触发，退出");
             break;
         }
 
@@ -331,26 +443,57 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             (guard.monitor, effective_fps)
         };
 
-        // 检查是否有活动的 recorder/encoder
-        let (has_recorder, has_encoder) = {
+        // 检查是否有活动的 recorder/encoder/推流
+        let (has_recorder, has_encoder, push_enabled) = {
             let guard = match state.lock() {
                 Ok(g) => g,
                 Err(_) => break,
             };
-            (guard.recorder.is_some(), guard.encoder.is_some())
+            (
+                guard.recorder.is_some(),
+                guard.encoder.is_some(),
+                guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed),
+            )
         };
 
-        // 关键优化：当既没有 recorder 也没有 encoder 时，退出循环
-        // 节省 CPU 资源，让 sidecar 在空闲时几乎不占用 CPU
-        // 需要时会通过 start_recording/start_streaming/snapshot 重新启动
+        eprintln!("[windows-sidecar] capture_loop: has_recorder={}, has_encoder={}, push_enabled={}",
+            has_recorder, has_encoder, push_enabled);  // 始终打印
+
+        // 诊断测点1：检测 push_enabled 从 false→true 跳变，记录预热起点
+        if push_enabled && !prev_push_enabled {
+            push_just_on = Some(Instant::now());
+            none_count_after_push_on = 0;
+            first_frame_logged = false;
+        }
+        prev_push_enabled = push_enabled;
+
+        // 关键优化：当既没有 recorder 也没有 encoder 也没有推流时，退出循环
+        // 但推流模式下需要等待 encoder 被创建
         if !has_recorder && !has_encoder {
-            // 标记线程已停止，等待被重新启动
             let mut guard = match state.lock() {
                 Ok(g) => g,
                 Err(_) => break,
             };
+            // 如果有推流标志但没有 encoder，说明正在初始化，等待
+            if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("[windows-sidecar] capture_loop: push enabled but no encoder, waiting...");  // 始终打印
+                drop(guard);
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
             guard.capture_thread = None;
+            eprintln!("[windows-sidecar] capture_loop: exiting (no work)");  // 始终打印
             break;
+        }
+
+        // 如果有推流但没有 encoder，需要创建临时 encoder
+        if push_enabled && !has_encoder {
+            eprintln!("[windows-sidecar] capture_loop: 需要创建临时 encoder");  // 始终打印
+            // 这里需要创建 encoder，但目前简化处理暂时无法实现
+            // 因为 EncodingContext 创建涉及更多逻辑
+            // 暂时让循环休眠一段时间后继续
+            thread::sleep(Duration::from_millis(500));
+            continue;
         }
 
         // 控制帧率
@@ -364,7 +507,7 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
         let frame = match capture_monitor(monitor) {
             Ok(frame) => frame,
             Err(err) => {
-                eprintln!("[windows-screen-sidecar] capture failed: {err}");
+                debug_eprintln!("[windows-screen-sidecar] capture failed: {err}");
                 thread::sleep(Duration::from_millis(250));
                 continue;
             }
@@ -388,7 +531,7 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             };
             if let Some(recorder) = guard.recorder.as_mut() {
                 if let Err(err) = recorder.write_frame(&frame.bgra) {
-                    eprintln!("[windows-screen-sidecar] write_frame failed: {}", err);
+                    debug_eprintln!("[windows-screen-sidecar] write_frame failed: {}", err);
                 }
             }
         }
@@ -400,28 +543,50 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
                 Err(_) => break,
             };
             if let Some(encoder) = guard.encoder.as_mut() {
-                match encoder.encode_frame(&frame.bgra) {
-                    Ok(Some(encoded_frame)) => {
-                        drop(guard); // 释放锁后再操作 stream_queue
-                        let mut guard = match state.lock() {
-                            Ok(guard) => guard,
-                            Err(_) => break,
-                        };
-                        if guard.stream_queue.len() >= 16 {
-                            guard.stream_queue.pop_front();
+                match encoder.encode_frames_detailed(&frame.bgra) {
+                    Ok(Some(frames)) => {
+                        // 诊断测点1：编码器首帧产出耗时（push 启动后首个 Some）
+                        if push_enabled && !first_frame_logged {
+                            if let Some(t0) = push_just_on {
+                                eprintln!("[windows-sidecar] 预热测点1: push→首帧耗时={}ms (期间 None 次数={})",
+                                    t0.elapsed().as_millis(), none_count_after_push_on);
+                            }
+                            first_frame_logged = true;
                         }
-                        guard.stream_queue.push_back(encoded_frame.clone());
+                        let push_enabled =
+                            guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                        drop(guard); // 释放锁后再操作 stream_queue / stderr
 
-                        // 如果启用推模式，推送到 stderr
-                        if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                            let frame_type = determine_frame_type(&encoded_frame);
-                            eprintln!("[windows-sidecar] pushing frame: type={}, size={}", frame_type, encoded_frame.len());
-                            push_frame_to_stderr(frame_type, &encoded_frame);
+                        // 录制仍使用拼包结果：把本组 NAL 拼成 [自定义前缀][NAL...]
+                        // 兼容现有 stream_queue 消费格式（与原 encode_frame 行为一致）
+                        {
+                            let mut guard = match state.lock() {
+                                Ok(guard) => guard,
+                                Err(_) => break,
+                            };
+                            if guard.stream_queue.len() >= 16 {
+                                guard.stream_queue.pop_front();
+                            }
+                            let combined = assemble_packet(&frames);
+                            guard.stream_queue.push_back(combined);
+                        }
+
+                        // 推流：逐 NAL 分别推送到 stderr，前缀用 ASCII 数字字符
+                        if push_enabled {
+                            for ef in &frames {
+                                let frame_type = frame_type_to_u8(&ef.frame_type);
+                                push_frame_to_stderr(frame_type, &ef.data);
+                            }
                         }
                     }
-                    Ok(None) => {} // 没有输出帧（流水线延迟）
+                    Ok(None) => {
+                        // 诊断测点1：push 启动后编码器返回 None 计数（流水线预热/冷启动）
+                        if push_enabled && !first_frame_logged {
+                            none_count_after_push_on += 1;
+                        }
+                    } // 没有输出帧（流水线延迟）
                     Err(err) => {
-                        eprintln!("[windows-screen-sidecar] encode_frame failed: {}", err);
+                        debug_eprintln!("[windows-screen-sidecar] encode_frame failed: {}", err);
                     }
                 }
             }
@@ -431,23 +596,46 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
 
 /// 通过 stderr 推送帧数据
 /// frame_type: 0=SPS, 1=PPS, 2=IDR, 3=P
+/// 注意：这个函数不受 PUSH_MODE_ACTIVE 影响，始终输出帧数据
+/// 前缀使用 ASCII 数字字符 ('0'..'3')，与 Python _handle_line 的 b'0'..b'3' 匹配。
 fn push_frame_to_stderr(frame_type: u8, data: &[u8]) {
     let encoded = STANDARD.encode(data);
-    // 使用 eprintln! 输出到 stderr（自动换行）
-    eprintln!("{}{}", frame_type as char, encoded);
+    // 直接输出到 stderr，不经过 debug_eprintln!（因为推流时需要禁用调试日志但要发送帧）
+    // frame_type 转为 ASCII 数字字符，避免控制字符前缀
+    eprintln!("{}{}", (b'0' + frame_type) as char, encoded);
+    let _ = stderr().flush();
 }
 
-/// 判断 H.264 帧类型
-/// 0 = SPS, 1 = PPS, 2 = IDR, 3 = P
-fn determine_frame_type(nal: &[u8]) -> u8 {
-    if nal.is_empty() {
-        return 3;
+/// 把 FrameType 枚举映射为推送用的 u8 类型码
+/// SPS=0, PPS=1, IDR=2, PFrame/Unknown=3
+fn frame_type_to_u8(ft: &FrameType) -> u8 {
+    match ft {
+        FrameType::SPS => 0,
+        FrameType::PPS => 1,
+        FrameType::IDR => 2,
+        FrameType::PFrame | FrameType::Unknown => 3,
     }
-    let nal_type = nal[0] & 0x1F;
-    match nal_type {
-        7 => 0,  // SPS
-        8 => 1,  // PPS
-        5 => 2,  // IDR
-        _ => 3,  // P frame
+}
+
+/// 把一组 NAL 拼装为兼容原 encode_frame 的拼包结果：[1字节自定义前缀][NAL...]
+/// 前缀语义：含 IDR=0x02，含 SPS/PPS=0x01，否则=0x03。用于 stream_queue(录制消费)兼容。
+fn assemble_packet(frames: &[EncodedFrame]) -> Vec<u8> {
+    let has_idr = frames.iter().any(|f| matches!(f.frame_type, FrameType::IDR));
+    let final_prefix = if has_idr {
+        0x02
+    } else {
+        let has_sps_pps = frames
+            .iter()
+            .any(|f| matches!(f.frame_type, FrameType::SPS | FrameType::PPS));
+        if has_sps_pps {
+            0x01
+        } else {
+            0x03
+        }
+    };
+    let mut result = vec![final_prefix];
+    for f in frames {
+        result.extend_from_slice(&f.data);
     }
+    result
 }

@@ -7,12 +7,12 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
+from common.packaging import get_base_dir, is_packaged
 from common.utils import popen_cmd
-from common.packaging import is_packaged, get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class WorkerConfig:
 
     # Worker 基础配置
     id: str = field(default_factory=_generate_worker_id)
-    ip: Optional[str] = None  # 指定 IP 地址，None 表示自动获取
+    ip: str | None = None  # 指定 IP 地址，None 表示自动获取
     port: int = 8080
     namespace: str = "public"               # 命名空间，用于分类 Worker
     device_check_interval: int = 300        # 设备检测间隔(秒)，改为5分钟
@@ -62,16 +62,16 @@ class WorkerConfig:
     ocr_service: str = ""
 
     # 平台配置
-    platforms: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    platforms: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 日志配置
     log_level: str = "INFO"
-    log_file: Optional[str] = None  # None 表示使用默认路径
+    log_file: str | None = None  # None 表示使用默认路径
     log_max_size: int = 52428800  # 50MB
     log_backup_count: int = 5
 
     # 图像匹配配置
-    image_matching: Dict[str, Any] = field(default_factory=dict)
+    image_matching: dict[str, Any] = field(default_factory=dict)
 
     # 升级配置
     upgrade_check_url: str = ""       # 升级检查 URL（对应 YAML 的 upgrade.check_url）
@@ -79,7 +79,7 @@ class WorkerConfig:
     upgrade_download_timeout: int = 300  # 升级下载超时（秒）
 
     # 解锁屏幕配置
-    unlock: Dict[str, Any] = field(default_factory=dict)
+    unlock: dict[str, Any] = field(default_factory=dict)
 
     # 录屏配置
     recording_output_dir: str = "data/recordings"
@@ -91,10 +91,11 @@ class WorkerConfig:
     websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
     websocket_streaming_fps: int = 10  # 推流帧率
     websocket_streaming_codec: str = "jpeg"  # 默认编码格式
-    websocket_streaming_bitrate: int = 2000000  # H.264 码率 (2Mbps)
+    websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
+    websocket_streaming_profile: int = 100  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
     # 配置版本号
-    config_version: Optional[str] = None
+    config_version: str | None = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
@@ -110,7 +111,7 @@ class WorkerConfig:
 
         for encoding in encodings:
             try:
-                with open(path, "r", encoding=encoding) as f:
+                with open(path, encoding=encoding) as f:
                     data = yaml.safe_load(f) or {}
                 break
             except UnicodeDecodeError:
@@ -161,10 +162,11 @@ class WorkerConfig:
             websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
             websocket_streaming_fps=websocket_cfg.get("streaming_fps", 10),
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
-            websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 2000000),
+            websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
+            websocket_streaming_profile=websocket_cfg.get("streaming_profile", 100),
         )
 
-    def get_platform_config(self, platform: str) -> Dict[str, Any]:
+    def get_platform_config(self, platform: str) -> dict[str, Any]:
         """获取指定平台的配置。"""
         return self.platforms.get(platform, {})
 
@@ -182,7 +184,7 @@ class PlatformConfig:
     browser_type: str = "chromium"
     timeout: int = 30000
     ignore_https_errors: bool = True
-    permissions: List[str] = field(default_factory=lambda: ["camera", "microphone"])
+    permissions: list[str] = field(default_factory=lambda: ["camera", "microphone"])
     user_data_dir: str = "data/chrome_profile"  # 浏览器用户数据目录
 
     # 启动前清理 Default 目录数据（保留 Cache 目录），避免账号缓存
@@ -191,13 +193,13 @@ class PlatformConfig:
     # 请求黑名单：拦截特定请求（如某些 JS 文件加载超时）
     # 格式：[{"pattern": "uba.js", "action": "abort"}, {"pattern": "tinyReporter.min.js", "action": "abort"}]
     # action 可选：abort（中止）、404（返回404）、empty（返回空响应）
-    request_blacklist: List[Dict[str, str]] = field(default_factory=list)
+    request_blacklist: list[dict[str, str]] = field(default_factory=list)
 
     # Web 专用 - Token 捕获
-    token_headers: List[str] = field(default_factory=list)  # 要监听的 token header 名称列表
+    token_headers: list[str] = field(default_factory=list)  # 要监听的 token header 名称列表
 
     # Web 专用 - Chromium 启动参数（字符串列表）
-    browser_args: List[str] = field(default_factory=list)
+    browser_args: list[str] = field(default_factory=list)
 
     # Web 专用 - 缓存自动清理
     cache_clear_enabled: bool = True           # 是否启用自动清理
@@ -218,7 +220,7 @@ class PlatformConfig:
     u2_port: int = 7912
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PlatformConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "PlatformConfig":
         """从字典创建配置。"""
         return cls(
             enabled=data.get("enabled", True),
@@ -315,9 +317,9 @@ def get_default_config_path() -> str:
 
 
 def _merge_missing_config(
-    user_data: Dict[str, Any],
-    template_data: Dict[str, Any]
-) -> Dict[str, Any]:
+    user_data: dict[str, Any],
+    template_data: dict[str, Any]
+) -> dict[str, Any]:
     """
     合并缺失配置项：保留用户配置，补充模板中新增的配置项。
 
@@ -328,7 +330,7 @@ def _merge_missing_config(
     Returns:
         dict: 合并后的配置数据
     """
-    def deep_merge(base: Dict[str, Any], supplement: Dict[str, Any]) -> Dict[str, Any]:
+    def deep_merge(base: dict[str, Any], supplement: dict[str, Any]) -> dict[str, Any]:
         """深度合并字典：base 保留，supplement 中新增的 key 补充到 base。"""
         result = base.copy()
         for key, value in supplement.items():
@@ -348,7 +350,7 @@ def _get_config_template_yaml() -> str:
     """获取配置模板 YAML 内容。"""
     template_path = get_default_template_path()
     if os.path.exists(template_path):
-        with open(template_path, "r", encoding="utf-8") as f:
+        with open(template_path, encoding="utf-8") as f:
             return f.read()
     return ""
 
@@ -396,14 +398,14 @@ def _read_file_with_encoding(path: str) -> str:
     encodings = ["utf-8", "gbk", "gb18030"]
     for encoding in encodings:
         try:
-            with open(path, "r", encoding=encoding) as f:
+            with open(path, encoding=encoding) as f:
                 return f.read()
         except UnicodeDecodeError:
             continue
     return ""
 
 
-def _save_user_config(data: Dict[str, Any], path: str) -> None:
+def _save_user_config(data: dict[str, Any], path: str) -> None:
     """保存用户配置文件。"""
     config_yaml = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -416,7 +418,7 @@ def get_config_version_path() -> str:
     return os.path.join(_get_base_dir(), "config", ".config_version")
 
 
-def load_config_version() -> Optional[str]:
+def load_config_version() -> str | None:
     """
     从单独文件读取配置版本号。
 

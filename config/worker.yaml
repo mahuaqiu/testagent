@@ -285,5 +285,8 @@ websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
   streaming_fps: 10              # Streaming frame rate
-  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg)
-  streaming_bitrate: 2000000     # H.264 bitrate (2Mbps)
+  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). 默认保持 jpeg，
+                                  # codec 实际由 server.py 基于 WebSocket query 参数 codec 决定（实测 ?codec=h264）；
+                                  # 此默认值仅影响无 query 时的兜底，不与 H.264 推流优化冲突
+  streaming_bitrate: 4000000     # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
+  streaming_profile: 100         # H.264 profile: 66=Baseline, 77=Main, 100=High

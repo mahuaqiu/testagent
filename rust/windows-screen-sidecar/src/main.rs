@@ -176,6 +176,9 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
             let fps = parse_u32(&params, "fps", 10);
             let bitrate = parse_u32(&params, "bitrate", 2_000_000);
             let profile = parse_u32(&params, "profile", 66);
+
+            eprintln!("[windows-sidecar] stream_start: session_id={}, fps={}", session_id, fps);
+
             let guard = match state.lock() {
                 Ok(guard) => guard,
                 Err(_) => return Response::err(request.id, "state mutex poisoned"),
@@ -184,9 +187,20 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Some(session) => session,
                 None => return Response::err(request.id, format!("session not found: {session_id}")),
             };
-            match session.start_streaming(fps, bitrate, profile) {
-                Ok(data) => Response::ok(request.id, data),
-                Err(err) => Response::err(request.id, err),
+            let result = session.start_streaming(fps, bitrate, profile);
+            eprintln!("[windows-sidecar] stream_start: result ready, generating response");
+            // 强制刷新 stderr
+            use std::io::Write;
+            std::io::stderr().flush().ok();
+            match result {
+                Ok(data) => {
+                    eprintln!("[windows-sidecar] stream_start: sending ok response");
+                    Response::ok(request.id, data)
+                }
+                Err(err) => {
+                    eprintln!("[windows-sidecar] stream_start: sending error response: {}", err);
+                    Response::err(request.id, err)
+                }
             }
         }
         "stream_next" => {
@@ -219,27 +233,46 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Err(err) => Response::err(request.id, err),
             }
         }
-        "stream_push_start" => {
+"stream_push_start" => {
             let session_id = parse_string(&params, "session_id", "windows/1");
             let fps = parse_u32(&params, "fps", 20);
 
             eprintln!("[windows-sidecar] stream_push_start: session_id={}, fps={}", session_id, fps);
 
-            let mut guard = match state.lock() {
-                Ok(guard) => guard,
-                Err(_) => return Response::err(request.id, "state mutex poisoned"),
-            };
-            if let Some(session_handle) = guard.sessions.get_mut(&session_id) {
-                let _ = session_handle.set_push_enabled(true);
-                let _ = session_handle.set_push_fps(fps);
-                eprintln!("[windows-sidecar] push_enabled set to true for session {}", session_id);
-            } else {
-                eprintln!("[windows-sidecar] session not found: {}", session_id);
+            // 强制重启 capture_loop（因为即使线程还在，也可能很快退出）
+            let session_id_clone = session_id.clone();
+            {
+                let mut guard = match state.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return Response::err(request.id, "state mutex poisoned"),
+                };
+                if let Some(session_handle) = guard.sessions.get_mut(&session_id) {
+                    let _ = session_handle.set_push_enabled(true);
+                    let _ = session_handle.set_push_fps(fps);
+                    eprintln!("[windows-sidecar] push_enabled set to true");
+                } else {
+                    eprintln!("[windows-sidecar] session not found: {}", session_id);
+                }
+            }
+
+            // 总是重启 capture_loop，确保它运行
+            if let Ok(mut guard) = state.lock() {
+                if let Some(session_handle) = guard.sessions.get_mut(&session_id_clone) {
+                    match session_handle.ensure_capture_thread_running() {
+                        Ok(()) => eprintln!("[windows-sidecar] stream_push_start: capture_loop restarted"),
+                        Err(e) => eprintln!("[windows-sidecar] stream_push_start: restart failed: {}", e),
+                    }
+                    // 主动推送一次 SPS/PPS，确保 Python 等待 SPS+PPS 能可靠拿到
+                    if let Err(e) = session_handle.push_sps_pps_once() {
+                        eprintln!("[windows-sidecar] stream_push_start: push_sps_pps_once failed: {}", e);
+                    } else {
+                        eprintln!("[windows-sidecar] stream_push_start: SPS/PPS pushed");
+                    }
+                }
             }
 
             Response::ok(request.id, serde_json::json!({"status": "push_started"}))
-        }
-        "stream_push_stop" => {
+        }        "stream_push_stop" => {
             let session_id = parse_string(&params, "session_id", "windows/1");
 
             let mut guard = match state.lock() {
@@ -287,6 +320,23 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
 }
 
 fn main() {
+    // 设置 panic 处理器，将 panic 信息输出到 stderr
+    std::panic::set_hook(Box::new(|panic_info| {
+        let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        let location = if let Some(loc) = panic_info.location() {
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        } else {
+            "unknown location".to_string()
+        };
+        eprintln!("[windows-sidecar] PANIC: {} at {}", msg, location);
+    }));
+
     let state = Arc::new(Mutex::new(AppState::new()));
     eprintln!("[windows-screen-sidecar] started");
 

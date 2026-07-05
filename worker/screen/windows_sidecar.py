@@ -6,23 +6,22 @@ import asyncio
 import base64
 import json
 import logging
-import os
-import queue
 import shutil
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd
 
 logger = logging.getLogger(__name__)
 
-_shared_client: "WindowsSidecarClient | None" = None
+_shared_client: WindowsSidecarClient | None = None
 _shared_client_lock = threading.Lock()
-_windows_managers: dict[str, "WindowsSidecarScreenManager"] = {}
+_windows_managers: dict[str, WindowsSidecarScreenManager] = {}
 _windows_managers_lock = threading.Lock()
 
 
@@ -56,6 +55,12 @@ class WindowsSidecarClient:
         self._closed = False
         self._restart_count = 0
         self._max_restarts = 3
+        # stderr 归属：True 表示日志态（_drain_stderr 记日志），False 表示推流态（行投递给推流回调）
+        # 关键：stderr 始终由单一 _stderr_pump 线程读取，避免两个 readline 抢读导致行被瓜分截断。
+        # 切换归属只切下游分发，不切读取线程。
+        self._stderr_owner_drain = True
+        # 推流态下的行处理回调（由 PushFrameReader 注册）
+        self._push_line_handler: Callable[[str], None] | None = None
 
     def acquire(self) -> None:
         with self._lock:
@@ -136,15 +141,36 @@ class WindowsSidecarClient:
         raise RuntimeError(f"无法启动 sidecar，已尝试 {self._max_restarts} 次")
 
     def _drain_stderr(self) -> None:
+        """stderr 单消费者：唯一调用 _proc.stderr.readline() 的线程。
+
+        根据当前归属把每一行分发到日志或推流回调，避免多线程抢读同一管道。
+        """
         if not self._proc or not self._proc.stderr:
             return
-        for line in self._proc.stderr:
-            # 检查停止事件，立即退出
-            if self._stderr_stop_event.is_set():
+        stream = self._proc.stderr
+        while not self._stderr_stop_event.is_set():
+            try:
+                line = stream.readline()
+            except Exception:
+                break
+            if not line:
+                # readline 返回空表示 EOF（进程已退出）
                 break
             line = line.rstrip("\n")
-            if line:
+            if not line:
+                continue
+            # 切换归属只切分发，不切读取：始终由本线程独占读取
+            if self._stderr_owner_drain:
                 logger.info("[windows-sidecar] %s", line)
+            else:
+                handler = self._push_line_handler
+                if handler is not None:
+                    try:
+                        handler(line)
+                    except Exception as exc:
+                        # 打印异常类型/repr + 行原文前缀，便于定位（不再打完整 traceback 降噪）
+                        line_preview = line[:60]
+                        logger.warning("推流行处理异常: %r | 行原文前缀=%r", exc, line_preview)
 
     # 重试无意义的确定性错误关键词：这些错误反映当前业务状态，重试不会改变结果
     _NON_RETRYABLE_KEYWORDS = (
@@ -154,7 +180,7 @@ class WindowsSidecarClient:
         "invalid request",
     )
 
-    def request(self, cmd: str, params: Optional[dict[str, Any]] = None, max_retries: int = 2) -> dict[str, Any]:
+    def request(self, cmd: str, params: dict[str, Any] | None = None, max_retries: int = 2) -> dict[str, Any]:
         """发送请求到 sidecar，支持失败重试
 
         对于确定性错误（如 recording not running、session not found），不会重试，直接抛出。
@@ -240,21 +266,24 @@ class WindowsSidecarClient:
             self._proc.stdin.write(cmd + "\n")
             self._proc.stdin.flush()
 
-    def set_stderr_drain(self, enabled: bool) -> None:
-        """控制 stderr 日志线程是否运行（推流模式需要禁用）"""
+    def set_stderr_drain(self, enabled: bool, push_handler: Callable[[str], None] | None = None) -> None:
+        """切换 stderr 归属（始终由 _drain_stderr 线程独占读取，只切下游分发）。
+
+        enabled=True：行记日志（正常态）。
+        enabled=False：行投递给 push_handler（推流态）。push_handler 必须非空。
+        """
         with self._lock:
-            if enabled:
-                # 启用：清除停止事件
-                self._stderr_stop_event.clear()
+            if not enabled:
+                self._push_line_handler = push_handler
             else:
-                # 禁用：设置停止事件并等待线程退出
-                self._stderr_stop_event.set()
-                # 强制终止并重建 stderr 线程（避免阻塞）
-                if self._stderr_thread and self._stderr_thread.is_alive():
-                    self._stderr_thread.join(timeout=0.1)
-                # 重新创建 stderr 线程（暂时不启动，等 stop 时启动）
+                self._push_line_handler = None
+            self._stderr_owner_drain = enabled
+            # 确保 pump 线程在运行
+            self._stderr_stop_event.clear()
+            if self._stderr_thread is None or not self._stderr_thread.is_alive():
                 self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
-            logger.debug("stderr drain enabled=%s", enabled)
+                self._stderr_thread.start()
+            logger.debug("stderr drain owner=drain? %s", enabled)
 
     def get_monitors(self) -> list[dict]:
         """获取所有显示器配置"""
@@ -307,7 +336,7 @@ def get_windows_sidecar_manager(
     monitor: int = 1,
     idle_fps: int = 1,
     active_fps: int = 15,
-) -> "WindowsSidecarScreenManager":
+) -> WindowsSidecarScreenManager:
     with _windows_managers_lock:
         manager = _windows_managers.get(session_id)
         if manager is None:
@@ -331,17 +360,26 @@ def close_windows_sidecar_manager(session_id: str) -> None:
 class WindowsSidecarStreamer:
     """Windows 侧车推流适配器。"""
 
-    def __init__(self, client: WindowsSidecarClient, session_id: str, codec: str, fps: int, bitrate: int = 2_000_000):
+    def __init__(
+        self,
+        client: WindowsSidecarClient,
+        session_id: str,
+        codec: str,
+        fps: int,
+        bitrate: int = 4_000_000,
+        profile: int = 100,
+    ):
         self._client = client
         self._session_id = session_id
         self.codec = codec
         self._fps = fps
         self._bitrate = bitrate
+        self._profile = profile  # H.264 profile: 66=Baseline, 77=Main, 100=High
         self._running = False
         self._h264_info: dict[str, Any] | None = None
-        self._on_fallback: Optional[Callable[[], None]] = None
+        self._on_fallback: Callable[[], None] | None = None
 
-    def start(self, codec: str = "jpeg", on_fallback: Optional[Callable[[], None]] = None) -> None:
+    def start(self, codec: str = "jpeg", on_fallback: Callable[[], None] | None = None) -> None:
         self._on_fallback = on_fallback
         self.codec = codec
         self._running = True
@@ -353,7 +391,7 @@ class WindowsSidecarStreamer:
                         "session_id": self._session_id,
                         "fps": self._fps,
                         "bitrate": self._bitrate,
-                        "profile": 66,
+                        "profile": self._profile,
                     },
                 )
                 self._h264_info = data
@@ -378,7 +416,7 @@ class WindowsSidecarStreamer:
                 logger.warning("停止 Windows H264 推流失败: %s", exc)
         self._running = False
 
-    async def get_frame_async(self) -> Optional[bytes]:
+    async def get_frame_async(self) -> bytes | None:
         if not self._running:
             return None
 
@@ -406,7 +444,7 @@ class WindowsSidecarStreamer:
     def is_running(self) -> bool:
         return self._running
 
-    def get_h264_info(self) -> Optional[dict[str, Any]]:
+    def get_h264_info(self) -> dict[str, Any] | None:
         return self._h264_info
 
 
@@ -573,7 +611,12 @@ class WindowsSidecarScreenManager:
             logger.error("停止 Windows 录制失败: %s", exc)
             return ""
 
-    def start_streaming(self, codec: str = "jpeg") -> WindowsSidecarStreamer:
+    def start_streaming(
+        self,
+        codec: str = "jpeg",
+        bitrate: int = 4_000_000,
+        profile: int = 100,
+    ) -> WindowsSidecarStreamer:
         if self._streamer and self._streamer.codec != codec:
             self._streamer.stop()
             self._streamer = None
@@ -584,13 +627,15 @@ class WindowsSidecarScreenManager:
                 self._session_id,
                 codec=codec,
                 fps=self._active_fps,
+                bitrate=bitrate,
+                profile=profile,
             )
             self._streamer.start(codec=codec)
         return self._streamer
 
 
 class PushFrameReader:
-    """推模式帧读取器 - 从 stderr 读取 Rust 推送的帧数据"""
+    """推模式帧读取器 - 通过 client 的 stderr 单消费者分发接收 Rust 推送的帧数据"""
 
     def __init__(self, client: WindowsSidecarClient, session_id: str = "windows/1"):
         self._client = client
@@ -598,7 +643,9 @@ class PushFrameReader:
         self._running = False
         self._fps = 20
         self._frame_queue: asyncio.Queue | None = None
-        self._proc = client.get_process()
+        # 诊断测点2：记录推流启动时刻 + IDR 到达计数与时间戳
+        self._push_start_time: float | None = None
+        self._idr_count: int = 0
 
     def set_fps(self, fps: int):
         """动态配置帧率"""
@@ -613,96 +660,110 @@ class PushFrameReader:
         """启动推流模式"""
         logger.info("PushFrameReader.start_push: session_id=%s, fps=%d", self._session_id, fps)
         self._fps = fps
-        self._frame_queue = asyncio.Queue(maxsize=2)
+        # 缓冲约 1 秒帧量：足够吸收 Rust 编码突发（bursty producer），
+        # 又不至于累积过多延迟。满时由 _enqueue_frame 丢最旧保最新。
+        self._frame_queue = asyncio.Queue(maxsize=30)
         self._running = True
+        # 诊断测点2：记录推流启动时刻，用于计算 IDR 首次到达延迟与 IDR 间隔
+        import time as _time
+        self._push_start_time = _time.monotonic()
+        self._idr_count = 0
+        logger.info("PushFrameReader.start_push: 推流启动时刻已记录（测点2基准）")
 
-        # 禁用 stderr 日志线程，避免竞争 stderr
-        logger.info("PushFrameReader.start_push: 禁用 stderr 日志线程")
-        self._client.set_stderr_drain(False)
+        # 关键：把 stderr 归属切换为推流态，并注册自己的行处理回调。
+        # _drain_stderr 线程仍独占读取 stderr，但把每一行投递给 _handle_line，
+        # 不再有第二个线程抢读同一管道。
+        self._client.set_stderr_drain(False, push_handler=self._handle_line)
+        logger.info("PushFrameReader.start_push: stderr 归属已切换给推流回调")
 
-        # 通知 Rust 启动推送（传递 session_id）
+        # 通知 Rust 启动推送
         logger.info("PushFrameReader.start_push: 发送 stream_push_start 请求, session_id=%s", self._session_id)
         try:
             result = self._client.request("stream_push_start", {"session_id": self._session_id, "fps": fps})
             logger.info("PushFrameReader.start_push: stream_push_start 响应: %s", result)
         except Exception as e:
             logger.error("PushFrameReader.start_push: stream_push_start 请求失败: %s", e)
+            self._running = False
+            self._client.set_stderr_drain(True)
             raise
-
-        # 启动后台监听线程
-        self._start_listener_thread()
-        logger.info("PushFrameReader.start_push: 监听线程已启动")
 
     def stop_push(self):
         """停止推流模式"""
         self._running = False
-
-        # 恢复 stderr 日志线程
+        self._client.write_command("@PUSH_STOP")
+        # 恢复 stderr 归属为日志态
         self._client.set_stderr_drain(True)
 
-        # write_command 会自动添加 \n
-        self._client.write_command("@PUSH_STOP")
+    def _handle_line(self, line: str):
+        """处理接收到的行（由 client 的 _drain_stderr 线程调用，已去除换行）
 
-    def _start_listener_thread(self):
-        """后台线程监听 Rust 推送（通过 stderr）"""
-        def listener():
-            while self._running:
-                try:
-                    # 从 stderr 读取推送数据
-                    line = self._proc.stderr.readline()
-                    if not line:
-                        break
-                    self._handle_line(line)
-                except Exception as e:
-                    logger.error(f"帧监听异常: {e}")
-                    break
-
-        thread = threading.Thread(target=listener, daemon=True)
-        thread.start()
-
-    def _handle_line(self, line: bytes):
-        """处理接收到的行"""
+        line 为 str（stderr 是 text 模式）。
+        """
         if not line or not self._frame_queue:
             return
-
-        prefix = line[0:1]
+        prefix = line[:1]
         content = line[1:].strip()
 
-        if prefix == b'@':
-            # 控制命令
+        if prefix == '@':
             self._handle_command(content)
-        elif prefix == b'0':
-            # SPS - 序列参数集
+        elif prefix == '0':
             data = base64.b64decode(content)
-            self._frame_queue.put_nowait(('sps', data))
-        elif prefix == b'1':
-            # PPS - 图像参数集
+            self._enqueue_frame('sps', data)
+        elif prefix == '1':
             data = base64.b64decode(content)
-            self._frame_queue.put_nowait(('pps', data))
-        elif prefix == b'2':
-            # IDR 帧
+            self._enqueue_frame('pps', data)
+        elif prefix == '2':
             data = base64.b64decode(content)
-            self._frame_queue.put_nowait(('idr', data))
-        elif prefix == b'3':
-            # P 帧
+            # 诊断测点2：IDR 到达时间戳——距推流启动多久、距上一个 IDR 多久、累计第几个
+            import time as _time
+            now = _time.monotonic()
+            self._idr_count += 1
+            t0 = self._push_start_time
+            if t0 is not None:
+                since_start = (now - t0) * 1000.0
+                logger.info("[测点2] IDR#%d 到达: 距推流启动 %.0fms, size=%d",
+                            self._idr_count, since_start, len(data))
+            self._enqueue_frame('idr', data)
+        elif prefix == '3':
             data = base64.b64decode(content)
-            self._frame_queue.put_nowait(('p', data))
-        elif prefix == b'H':
+            self._enqueue_frame('p', data)
+        elif prefix == 'H':
             # 心跳，忽略
             pass
-        elif prefix == b'E':
-            # 错误日志
-            logger.error(f"[Rust] {content.decode('utf-8', errors='ignore')}")
+        elif prefix == 'E':
+            logger.error("[Rust] %s", content)
+        else:
+            # 其他行（Rust 调试日志等）记录用于调试
+            logger.info("[rust-stderr] %s", line)
 
-    def _handle_command(self, cmd: bytes):
-        """处理控制命令"""
+    def _enqueue_frame(self, frame_type: str, data: bytes) -> None:
+        """关键帧友好的入队：队列满时丢最旧帧保最新，避免 QueueFull 崩掉推流。
+
+        实时推流容忍丢中间 P 帧（客户端等到下个 IDR 自动恢复），
+        但绝不能让生产侧因消费侧瞬时跟不上而阻塞或崩溃。
+        """
+        q = self._frame_queue
+        if q is None:
+            return
         try:
-            cmd_str = cmd.decode('utf-8')
-            if cmd_str.startswith("FPS="):
-                # 帧率确认
-                logger.info(f"帧率已设置为: {cmd_str}")
-        except Exception as e:
-            logger.warning(f"解析控制命令失败: {e}")
+            q.put_nowait((frame_type, data))
+        except asyncio.QueueFull:
+            # 队列满：丢最旧一帧，给最新帧腾位（保最新，实时性优先于完整性）
+            try:
+                old_type, _old_data = q.get_nowait()
+                q.put_nowait((frame_type, data))
+                logger.info("[push] 队列满，丢旧 %s 帧入新 %s 帧 size=%d", old_type, frame_type, len(data))
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                # 竞态：被并发取空 / 再次满，尽力而为直接放；仍失败即放弃此帧
+                try:
+                    q.put_nowait((frame_type, data))
+                except asyncio.QueueFull:
+                    logger.warning("[push] 丢帧(队列仍满) %s size=%d", frame_type, len(data))
+
+    def _handle_command(self, cmd: str):
+        """处理控制命令"""
+        if cmd.startswith("FPS="):
+            logger.info("帧率已设置为: %s", cmd)
 
     async def get_frame(self):
         """获取一帧（异步）

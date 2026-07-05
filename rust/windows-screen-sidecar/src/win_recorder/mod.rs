@@ -12,7 +12,7 @@ mod recorder;
 
 pub use error::RecorderError;
 pub use recorder::WinRecorder;
-pub use h264_encoder::H264Encoder;
+pub use h264_encoder::{H264Encoder, EncodedFrame, FrameType};
 
 /// 全局 Media Foundation 初始化
 pub fn init_media_foundation() -> Result<(), RecorderError> {
@@ -106,6 +106,29 @@ impl EncodingContext {
     pub fn encode_frame(&mut self, bgra_data: &[u8]) -> Result<Option<Vec<u8>>, RecorderError> {
         if let Some(ref mut encoder) = self.encoder {
             encoder.encode_frame(bgra_data)
+        } else {
+            Err(RecorderError::NotEncoding)
+        }
+    }
+
+    /// 逐 NAL 输出（供推流使用）：返回本帧编码出的所有 NAL 及其类型，不做拼包、不加自定义前缀。
+    /// 推流路径据此分别推送 SPS/PPS/IDR/P 帧到 stderr，避免与拼包前缀字节混淆。
+    pub fn encode_frames_detailed(&mut self, bgra_data: &[u8]) -> Result<Option<Vec<EncodedFrame>>, RecorderError> {
+        if let Some(ref mut encoder) = self.encoder {
+            let frames = encoder.encode_frame_data(bgra_data)?;
+            if frames.is_empty() {
+                return Ok(None);
+            }
+            // 过滤掉 AUD (nal_type=9)，与拼包路径行为一致
+            let filtered: Vec<EncodedFrame> = frames
+                .into_iter()
+                .filter(|f| !(f.data.len() > 4 && (f.data[4] & 0x1F) == 9))
+                .collect();
+            if filtered.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(filtered))
+            }
         } else {
             Err(RecorderError::NotEncoding)
         }
