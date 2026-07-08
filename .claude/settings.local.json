@@ -323,7 +323,11 @@
       "Read(//d/code/autotest/rust/windows-screen-sidecar/**)",
       "PowerShell(\\(Get-Item D:\\\\code\\\\autotest\\\\rust\\\\windows-screen-sidecar\\\\target\\\\release\\\\windows-screen-sidecar.exe\\).LastWriteTime)",
       "Bash(chcp *)",
-      "Bash(copy *)"
+      "Bash(copy *)",
+      "Bash(sed -i '225,256d' main.rs)",
+      "Bash(sed -i '224r main.rs.push' main.rs)",
+      "PowerShell(Stop-Process *)",
+      "Bash(cargo metadata *)"
     ]
   }
 }
