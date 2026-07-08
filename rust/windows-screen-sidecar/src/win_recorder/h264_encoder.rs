@@ -19,7 +19,7 @@ use crate::win_recorder::error::RecorderError;
 use crate::win_recorder::memory_byte_stream::{extract_nal_units, get_nal_type};
 use std::mem::ManuallyDrop;
 use std::ptr;
-use windows::core::{GUID, Interface, VARIANT};
+use windows::core::GUID;
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::*;
@@ -267,8 +267,10 @@ impl H264Encoder {
                 .as_ref()
                 .ok_or(RecorderError::NotRecording)?;
 
-            // 直接送入帧，IDR 由编码器根据 GOP 大小自动生成
-            //（通过 ICodecAPI::CODECAPI_AVEncMPVGOPSize 在 configure_pipeline 中设置）
+            // 直接送入帧，IDR 由编码器按自身默认 GOP 自动生成
+            //（CodecAPI/GetAttributes 通道在本机 MFT 实测失效，GOP 不可控，
+            //  靠 session.rs 丢帧门等下一个GOP 边界的真屏 IDR，首帧 ~1.86s）
+
             let input_sample = self.create_nv12_sample(&nv12)?;
             encoder
                 .ProcessInput(self.encoder_input_id, &input_sample, 0)
@@ -313,62 +315,71 @@ impl H264Encoder {
         }
     }
 
-    /// 送入一帧黑帧以触发编码器生成 SPS/PPS，并冲干流水线残留的黑帧 IDR。
+    /// 送入多帧黑帧暖管 MFT，使编码器预先进入"满载平衡态"，并提取 SPS/PPS。
     ///
-    /// 裸 H.264 MFT 在收到第一帧之前不会在输出属性中暴露 SPS/PPS。
-    /// 本方法生成一帧全黑 NV12，喂给编码器，提取 SPS/PPS，然后用 DRAIN 主动
-    /// 排干流水线（H.264 MFT 异步流水线有 ~1 帧延迟，黑帧 IDR 不会在首次
-    /// ProcessOutput 立刻吐出），丢弃所有排出帧（含延迟的黑帧 IDR），最后
-    /// FLUSH 复位流状态（DRAIN 后 MFT 处于 draining 态拒绝 ProcessInput，
-    /// 必须 FLUSH 让流重新可接收输入，否则 capture_loop 第一帧 ProcessInput
-    /// 会被拒绝）。
+    /// 背景：裸 H.264 MFT 在收到第一帧之前不会在输出属性中暴露 SPS/PPS，
+    /// 且异步流水线存在暖管延迟——空 MFT 需连续送入约 13 帧才有第一帧输出
+    /// （实测探针：in_count=0..12 全 None，in_count=13 才出首帧，1.5s @10fps）。
     ///
-    /// 排干后再 extract_sps_pps_from_attributes（DRAIN 促使 MFT 把 SPS/PPS
-    /// 写入输出属性，此时才有值）。
+    /// 旧实现送 1 帧黑帧后就 DRAIN+FLUSH 复位流，把暖管成果全冲掉，
+    /// 导致 capture_loop 第一帧进入的是"全新空 MFT"，须重新暖管 1.5s，
+    /// 这是首帧延迟 ~1.8s 的真实主因。
+    ///
+    /// 新实现：连续送 WARMUP_FRAMES 帧黑帧，边送边 process 取走已就绪输出
+    /// 并丢弃（含黑帧 IDR/P），从输出帧或属性中提取 SPS/PPS。不发 DRAIN、
+    /// 不发 FLUSH——暖管使 MFT 进入"满载平衡态"（输入输出 1:1 的稳态），
+    /// 后续 capture_loop 每帧进 1 帧，立即顶出 1 帧输出，无暖管开销。
+    ///
+    /// 残余：满载态下 MFT 管道内挂着 1 帧未就绪（最后那帧黑帧的输出），
+    /// capture_loop 第一帧真屏进 MFT 时会把它顶出。实测（2026-07-05 复测）证明
+    /// 顶出的不是预想的"1 帧黑屏 P"，而是黑帧 IDR（~6KB）——因为 prime 15 帧黑帧
+    /// 必然产生至少一个黑帧 IDR，且"取空到 dry"取不走管道里那帧未就绪输出。
+    /// 黑帧 IDR 若直接推给 jmuxer 会被锁成黑屏基线，直到真屏 IDR 才覆盖（实测画面
+    /// 真正出现要 2s，比旧版 1.8s 全黑暖管更糟——回归）。
+    ///
+    /// 因此暖管冒出的黑帧序列（IDR + 跟随的 P）不能推给客户端，由 capture_loop
+    /// 推流分支负责丢弃——丢到第一个真屏 IDR（size 远大于黑帧 IDR）才开始推送。
+    /// 详见 session.rs capture_loop 的 `push_skip_until_real_idr` 逻辑。这里 prime
+    /// 本身只负责暖管不冒，保留满载平衡态正确，注释纠正此前"1 帧黑屏 P 可忽略"
+    /// 的错误假设。
+    ///
+    /// SPS/PPS 来源优先级：①输出帧里带的参集（jmuxer 需要）→ 由调用方在
+    /// configure 后的 extract_sps_pps_from_attributes 兜底提取（attribute 在
+    /// ProcessInput 后即暴露，无需 DRAIN）。
     unsafe fn prime_encoder_with_black_frame(&mut self) -> Result<(), RecorderError> {
-        // 第一次：送 1 帧黑帧 + 一次 process_encoder_output（提取 SPS/PPS 填入 self.sps/self.pps）
+        // 暖管帧数：覆盖实测 13 帧暖管深度 + 余量，确保 MFT 进入满载平衡态。
+        // 送太多浪费启动时间（每帧含 NV12 转换 + BitBlt 黑帧生成），取 15 帧平衡。
+        const WARMUP_FRAMES: u32 = 15;
+
         let black_nv12 = self.make_black_nv12()?;
-
-        let input_sample = self.create_nv12_sample(&black_nv12)?;
-        {
-            let encoder = self
-                .h264_encoder
-                .as_ref()
-                .ok_or(RecorderError::NotRecording)?;
-            encoder
-                .ProcessInput(self.encoder_input_id, &input_sample, 0)
-                .map_err(|e| RecorderError::MFError(format!("启动帧 ProcessInput 失败: {}", e)))?;
-        }
-        // 取出输出（IDR 帧），不需要保留。借用在此行已释放，可安全 &mut self。
-        let _ = self.process_encoder_output();
-
-        // ★ DRAIN 主动排干流水线残留的黑帧 IDR。
-        // H.264 MFT 异步流水线有 ~1 帧延迟：首次 process_encoder_output 通常返回
-        // MF_E_TRANSFORM_NEED_MORE_INPUT（process_encoder_output 内部直接 break），
-        // 黑帧 IDR 仍残留在 MFT 内部。若不冲干，capture_loop 第一帧真屏帧时它才被吐出，
-        // 形成 6KB 伪 IDR#1 推给客户端，被 jmuxer 锁成黑屏基线直到真 IDR#2 才出画面。
-        //
-        // DRAIN = 阻塞产出所有 pending 输出（把黑帧 IDR 排出来再丢，可确认）；
-        // DRAIN 后 MFT 进入 draining 态、拒绝 ProcessInput，必须 FLUSH 复位流状态
-        // 才能继续接收输入。顺序不可反：FLUSH 会丢弃 pending，先 flush 则拿不到黑帧
-        // IDR 的确认（虽然本场景黑帧 IDR 最终也要丢，但 DRAIN→FLUSH 顺序更稳）。
-        {
-            let encoder = self
-                .h264_encoder
-                .as_ref()
-                .ok_or(RecorderError::NotRecording)?;
-            let _ = encoder.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+        // 每帧累加 frame_count 以保证 pts 单调（MFT 要求），结束时统一复位 frame_count=0。
+        for _ in 0..WARMUP_FRAMES {
+            // 每帧递增 frame_count 以保证时间戳严格递增（MFT 要求 pts 单调），
+            // prime 结束时下面统一复位 frame_count=0，capture_loop 从 0 重新计时。
+            // create_nv12_sample 用 self.frame_count * frame_duration 算 timestamp，
+            // 故此处手动累加而非在送帧后补加（与 encode_frame_data 末尾的自加语义一致）。
+            let input_sample = self.create_nv12_sample(&black_nv12)?;
+            self.frame_count += 1;
+            {
+                let encoder = self
+                    .h264_encoder
+                    .as_ref()
+                    .ok_or(RecorderError::NotRecording)?;
+                encoder
+                    .ProcessInput(self.encoder_input_id, &input_sample, 0)
+                    .map_err(|e| RecorderError::MFError(format!("暖管 ProcessInput 失败: {}", e)))?;
+            }
+            // 取走本轮已就绪的输出并丢弃；不需要从帧里提 SPS/PPS
+            // （attribute 在 ProcessInput 后即暴露，由外部 extract_sps_pps_from_attributes 负责）。
+            let _ = self.process_encoder_output();
         }
 
-        // DRAIN 之后循环取输出直到连续 2 次空（DRAIN 后 MFT 通常 1-2 次 ProcessOutput
-        // 即吐出所有 pending 输出，再 1 次空即排干；阈值 2 足够，关键在于 DRAIN 之后
-        // 才开始计数，而非边送黑帧边计数——后者会被异步流水线欺骗提前退出）。
-        // 所有排出帧一律丢弃，不外送。
+        // 取空输出端所有已就绪帧到 dry，丢弃。不发 DRAIN/FLUSH，保留暖管态。
+        // 管道内挂着的最后 1 帧未就绪延迟帧不取（取不出），由 capture_loop 第一帧顶出。
         let mut dry_count = 0u32;
         while dry_count < 2 {
             match self.process_encoder_output() {
                 Ok(frames) => {
-                    // 丢弃所有输出帧（含延迟的黑帧 IDR），不外送
                     dry_count = if frames.is_empty() { dry_count + 1 } else { 0 };
                 }
                 Err(_) => {
@@ -377,19 +388,10 @@ impl H264Encoder {
             }
         }
 
-        // FLUSH 复位流状态：DRAIN 后 MFT 处于 draining 态拒绝 ProcessInput，
-        // FLUSH 让流重新可接收输入。必须先 DRAIN 排干再 FLUSH（顺序不可反）。
-        {
-            let encoder = self
-                .h264_encoder
-                .as_ref()
-                .ok_or(RecorderError::NotRecording)?;
-            let _ = encoder.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
-        }
-
-        // 防御性复位 frame_count。prime 用的是 frame_count=0 算黑帧时间戳（0），
-        // prime 本身不累加 frame_count，故此处仍为 0；显式声明防后续重构误在 prime
-        // 增量后污染首帧时间戳。黑帧时间戳=0 与首帧时间戳=0 重合但黑帧被丢弃，无害。
+        // 防御性复位 frame_count。prime 内的黑帧均以 frame_count=0 算时间戳（多帧时间戳全 0，
+        // 对 MFT 暖管无碍——MFT 按 arrival 顺序吞吐，相同 timestamp 不影响暖管与 GOP）。
+        // capture_loop 第一帧真屏也从 frame_count=0 起，timestamp=0，与黑帧时间戳重合但
+        // 黑帧已被丢弃且未外送，无害。
         self.frame_count = 0;
 
         Ok(())
@@ -529,9 +531,9 @@ impl H264Encoder {
     /// 裸 H264 MFT 不接受 RGB32 直连，因此统一使用 NV12 作为输入类型。
     /// BGRA->NV12 的颜色转换在 `encode_frame_data` 中由 CPU 完成。
     ///
-    /// ICodecAPI（GOP、码控模式）**必须在 SetOutputType 之前**设置——
-    /// SetOutputType 之后 MFT 已固定输出类型，后续 ICodecAPI SetValue 虽返回 Ok
-    /// 但被静默忽略（实测默认 GOP 1.26s 即此现象）。这是 MFT 编码器配置的既定时序。
+    /// 注：GOP/码控等 CodecAPI 配置在本机 MFT 实测失效（ICodecAPI、GetAttributes
+    /// 两条通道调用全返回 Ok 但运行时不生效），故此处不再尝试设置，统一靠
+    /// session.rs 丢帧门等 GOP 边界真屏 IDR。MFT 只认 media type。
     unsafe fn configure_pipeline(&mut self) -> Result<(), RecorderError> {
         let h264_encoder = self
             .h264_encoder
@@ -542,41 +544,7 @@ impl H264Encoder {
         self.encoder_input_id = self.get_input_stream_id(h264_encoder)?;
         self.encoder_output_id = self.get_output_stream_id(h264_encoder)?;
 
-        // 1. 先设置 ICodecAPI（GOP + Peak VBR）——必须在 SetOutputType 之前。
-        //    cast 失败：MFT 不支持 ICodecAPI，回退默认行为（MFT 默认 GOP 与码控），
-        //    但**不能 return**——必须继续往下走 SetOutputType/SetInputType，否则编码
-        //    管线根本没建立。故 cast 结果存 Option，后续 codec 设置用守卫跳过，
-        //    SetOutputType/SetInputType 无条件执行。
-        //    时机要求：SetOutputType 之前（MFT 锁定输出类型后 ICodecAPI 设置被忽略）。
-        let codec_api: Option<ICodecAPI> = match h264_encoder.cast() {
-            Ok(api) => Some(api),
-            Err(e) => {
-                eprintln!("[H264Encoder] ICodecAPI cast 失败，回退默认 GOP/码控: {}", e);
-                None
-            }
-        };
-
-        // 2. 设置 GOP=8（IDR 间隔 0.8s @ 10fps，为"延迟 ≤1s"留 0.2s 余量）。
-        //    失败 swallow + log，不中断——MFT 默认 GOP ~1.23s 行为可接受退路。
-        if let Some(api) = &codec_api {
-            self.set_gop_size(api)?;
-            // 3. 设置码率控制模式 = Peak VBR (CODECAPI_AVEncCommonRateControlMode=1，
-            //    允许瞬时超码率，落实"4Mbps 平均、瞬时突发可超")。
-            //    探测失败则 swallow 回默认码控（MFT 默认 CBR-ish）。
-            //    平均码率由 bitrate 字段经 MF_MT_AVG_BITRATE 在 media type 上设置
-            //    （见 create_h264_media_type），此处不动 mean bitrate，仅切码控模式。
-            //    profile/bitrate 完全交由 media type，不在 ICodecAPI 重复设置——
-            //    两边都设会产生未定义冲突。
-            let rc_mode: u32 = 1; // 0=CBR, 1=Peak VBR, 2=Quality VBR
-            if let Err(e) = api.SetValue(
-                &CODECAPI_AVEncCommonRateControlMode as *const GUID,
-                &VARIANT::from(rc_mode) as *const VARIANT,
-            ) {
-                eprintln!("[H264Encoder] VBR 设置失败，回退默认码控: {}", e);
-            }
-        }
-
-        // 4. 设置 H264 输出类型（ICodecAPI 必须在此之前已设完）。
+        // 设置 H264 输出类型。
         let h264_type = self.create_h264_media_type()?;
         h264_encoder
             .SetOutputType(self.encoder_output_id, &h264_type, 0)
@@ -589,23 +557,6 @@ impl H264Encoder {
             .SetInputType(self.encoder_input_id, &nv12_type, 0)
             .map_err(|e| RecorderError::MFError(format!("设置 NV12 输入类型失败: {}", e)))?;
 
-        Ok(())
-    }
-
-    /// 通过 ICodecAPI 设置 GOP 大小，控制 IDR 关键帧间隔。
-    ///
-    /// 失败时 swallow + log，不向上传播错误——MFT 默认 GOP 行为可接受。
-    /// 签名收 `&ICodecAPI`（与 configure_pipeline 共享同一句柄，避免重复 cast）。
-    unsafe fn set_gop_size(&self, codec_api: &ICodecAPI) -> Result<(), RecorderError> {
-        // GOP=8：10fps × 8帧 = IDR 间隔 0.8s，为"延迟 ≤1s"目标留 0.2s 余量，
-        // 避免最坏操作延迟卡在 1s 边界。常量配置，YAGNI——若后续需调再加配置项。
-        let gop: u32 = 8;
-        if let Err(e) = codec_api.SetValue(
-            &CODECAPI_AVEncMPVGOPSize as *const GUID,
-            &VARIANT::from(gop) as *const VARIANT,
-        ) {
-            eprintln!("[H264Encoder] GOP 设置失败，回退默认 GOP: {}", e);
-        }
         Ok(())
     }
 
@@ -791,8 +742,9 @@ impl H264Encoder {
             .SetSampleDuration(self.frame_duration)
             .map_err(|e| RecorderError::MFError(format!("设置样本持续时间失败: {}", e)))?;
 
-        // 注意：Windows H.264 MFT 不支持通过 MFSAMPLE_EXTENSION_CLEAN_POINT 强制 IDR
-        // IDR 间隔通过 ICodecAPI::CODECAPI_AVEncMPVGOPSize 在 configure_pipeline 中设置
+        // 注意：Windows H.264 MFT 不支持通过 MFSAMPLE_EXTENSION_CLEAN_POINT 强制 IDR，
+        // 也不响应 ICodecAPI::CODECAPI_AVEncMPVGOPSize / transforms attributes（本机实测全失效）。
+        // IDR 完全由 MFT 自身默认 GOP（实测 ~10 帧）自动产出，靠 session.rs 丢帧门等真屏 IDR。
 
         let buffer_size = nv12_data.len() as u32;
         let buffer = MFCreateMemoryBuffer(buffer_size)

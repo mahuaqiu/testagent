@@ -284,17 +284,19 @@ impl SessionHandle {
 
     /// 确保捕获线程正在运行（如果已退出则重新启动）
     pub fn ensure_capture_thread_running(&self) -> Result<(), String> {
-        // 使用 eprintln! 而非 debug_eprintln!，确保始终可见
-        eprintln!("[windows-sidecar] ensure_capture_thread_running: 开始检查");
+        // 用 debug_eprintln!：推流态下屏蔽，避免与 push_frame_to_stderr 抢同一 stderr
+        // 管道（裸 eprintln 在 stderr 缓冲满时会阻塞 capture_loop，放大首帧延迟）。
+        // 非推流态 PUSH_MODE_ACTIVE=false，日志仍正常可见。
+        debug_eprintln!("[windows-sidecar] ensure_capture_thread_running: 开始检查");
         let needs_spawn = {
             let state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
             let is_none = state.capture_thread.is_none();
-            eprintln!("[windows-sidecar] ensure_capture_thread_running: is_none={}", is_none);
+            debug_eprintln!("[windows-sidecar] ensure_capture_thread_running: is_none={}", is_none);
             is_none
         };
 
         if needs_spawn {
-            eprintln!("[windows-sidecar] ensure_capture_thread_running: 需要启动新线程");
+            debug_eprintln!("[windows-sidecar] ensure_capture_thread_running: 需要启动新线程");
             // 重置停止标志
             self.inner
                 .lock()
@@ -310,9 +312,9 @@ impl SessionHandle {
 
             let mut state = self.inner.lock().map_err(|_| "session mutex poisoned".to_string())?;
             state.capture_thread = Some(handle);
-            eprintln!("[windows-sidecar] ensure_capture_thread_running: 新线程已启动");
+            debug_eprintln!("[windows-sidecar] ensure_capture_thread_running: 新线程已启动");
         } else {
-            eprintln!("[windows-sidecar] ensure_capture_thread_running: 线程已在运行");
+            debug_eprintln!("[windows-sidecar] ensure_capture_thread_running: 线程已在运行");
         }
 
         Ok(())
@@ -370,7 +372,10 @@ impl SessionHandle {
                 (Vec::new(), Vec::new())
             }
         };
-        eprintln!("[windows-sidecar] push_sps_pps_once: sps={} bytes, pps={} bytes", sps.len(), pps.len());
+        // 用 debug_eprintln!：推流态屏蔽，避免与紧随其后的 push_frame_to_stderr(SPS/PPS 帧)
+        // 在同一瞬抢 stderr——首帧路径上少一次管道竞争。SPS/PPS 帧数据本身由下方
+        // push_frame_tostderr 输出，功能不受影响。非推流态仍可见。
+        debug_eprintln!("[windows-sidecar] push_sps_pps_once: sps={} bytes, pps={} bytes", sps.len(), pps.len());
         if !sps.is_empty() {
             push_frame_to_stderr(0, &sps);
         }
@@ -413,16 +418,29 @@ impl SessionHandle {
 /// 捕获循环 - 纯 Rust 实现
 /// 当没有活动的 recorder 和 encoder 时，循环退出以节省资源
 fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomic::AtomicBool>) {
-    eprintln!("[windows-sidecar] capture_loop: 线程启动");  // 始终打印
+    // 用 debug_eprintln!：推流态下 capture_loop 每轮都跑，裸 eprintln 会与
+    // push_frame_to_stderr 抢同一 stderr 管道。stderr 缓冲满时 eprintln 阻塞
+    // capture_loop 线程，是首帧延迟放大的主因（实测裸 eprintln 每帧打 1-2 行）。
+    // 非推流态 PUSH_MODE_ACTIVE=false，日志仍正常可见。
+    debug_eprintln!("[windows-sidecar] capture_loop: 线程启动");
     let mut last_tick = Instant::now();
     // 诊断：编码器预热测量——记录 push 启动时刻到首帧产出的耗时（测点1）
     let mut prev_push_enabled = false;
     let mut push_just_on: Option<Instant> = None;
     let mut none_count_after_push_on: u64 = 0;
     let mut first_frame_logged = false;
+    // 暖管冒帧丢弃标志：prime 暖管后 MFT 管道里挂着 1 帧黑帧（实测是黑帧 IDR ~6KB），
+    // capture_loop 第一帧真屏会把它顶出。这批暖管冒出的黑帧序列不能推给 jmuxer
+    // （黑帧 IDR 会被锁成黑屏基线，直到真屏 IDR 才覆盖，反而比旧版 1.5s 全黑暖管更糟）。
+    // push 启动跳变时置 true，丢帧直到第一个真屏 IDR（size > REAL_IDR_MIN_BYTES）
+    // 才开始推送给客户端。
+    let mut push_skip_until_real_idr = false;
+    // 真屏 IDR 最小字节阈值：黑帧 IDR 实测 ~6KB，真屏 IDR ~240KB，30KB 区分度极大。
+    // 阈值取 30KB：远大于黑帧 IDR，远小于真屏 IDR，避免黑屏/极简画面被误判为真屏。
+    const REAL_IDR_MIN_BYTES: usize = 30_000;
     loop {
         if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
-            eprintln!("[windows-sidecar] capture_loop: stop_flag 触发，退出");
+            debug_eprintln!("[windows-sidecar] capture_loop: stop_flag 触发，退出");
             break;
         }
 
@@ -456,14 +474,19 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             )
         };
 
-        eprintln!("[windows-sidecar] capture_loop: has_recorder={}, has_encoder={}, push_enabled={}",
-            has_recorder, has_encoder, push_enabled);  // 始终打印
+        // 每帧都跑的诊断行：推流态屏蔽（最大污染源——实测每帧打此行 + 多次锁竞争）。
+        // 非推流态仍可见。
+        debug_eprintln!("[windows-sidecar] capture_loop: has_recorder={}, has_encoder={}, push_enabled={}",
+            has_recorder, has_encoder, push_enabled);
 
         // 诊断测点1：检测 push_enabled 从 false→true 跳变，记录预热起点
         if push_enabled && !prev_push_enabled {
             push_just_on = Some(Instant::now());
             none_count_after_push_on = 0;
             first_frame_logged = false;
+            // 暖管冒帧丢弃：push 每次启动都重新进入"丢弃直到真屏 IDR"模式。
+            // 前一次 push 留下的丢帧状态（若中途 push 关了又开）会被这里复位。
+            push_skip_until_real_idr = true;
         }
         prev_push_enabled = push_enabled;
 
@@ -476,19 +499,19 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             };
             // 如果有推流标志但没有 encoder，说明正在初始化，等待
             if guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("[windows-sidecar] capture_loop: push enabled but no encoder, waiting...");  // 始终打印
+                debug_eprintln!("[windows-sidecar] capture_loop: push enabled but no encoder, waiting...");
                 drop(guard);
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
             guard.capture_thread = None;
-            eprintln!("[windows-sidecar] capture_loop: exiting (no work)");  // 始终打印
+            debug_eprintln!("[windows-sidecar] capture_loop: exiting (no work)");
             break;
         }
 
         // 如果有推流但没有 encoder，需要创建临时 encoder
         if push_enabled && !has_encoder {
-            eprintln!("[windows-sidecar] capture_loop: 需要创建临时 encoder");  // 始终打印
+            debug_eprintln!("[windows-sidecar] capture_loop: 需要创建临时 encoder");
             // 这里需要创建 encoder，但目前简化处理暂时无法实现
             // 因为 EncodingContext 创建涉及更多逻辑
             // 暂时让循环休眠一段时间后继续
@@ -545,20 +568,14 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
             if let Some(encoder) = guard.encoder.as_mut() {
                 match encoder.encode_frames_detailed(&frame.bgra) {
                     Ok(Some(frames)) => {
-                        // 诊断测点1：编码器首帧产出耗时（push 启动后首个 Some）
-                        if push_enabled && !first_frame_logged {
-                            if let Some(t0) = push_just_on {
-                                eprintln!("[windows-sidecar] 预热测点1: push→首帧耗时={}ms (期间 None 次数={})",
-                                    t0.elapsed().as_millis(), none_count_after_push_on);
-                            }
-                            first_frame_logged = true;
-                        }
                         let push_enabled =
                             guard.push_enabled.load(std::sync::atomic::Ordering::Relaxed);
                         drop(guard); // 释放锁后再操作 stream_queue / stderr
 
                         // 录制仍使用拼包结果：把本组 NAL 拼成 [自定义前缀][NAL...]
                         // 兼容现有 stream_queue 消费格式（与原 encode_frame 行为一致）
+                        // 注意：丢帧只影响 stderr 推流路径，stream_queue（本地录制）照常
+                        // 塞入暖管冒帧也无妨——录制里多几帧黑帧无意义但不影响正确性。
                         {
                             let mut guard = match state.lock() {
                                 Ok(guard) => guard,
@@ -573,9 +590,52 @@ fn capture_loop(state: Arc<Mutex<SessionState>>, stop_flag: Arc<std::sync::atomi
 
                         // 推流：逐 NAL 分别推送到 stderr，前缀用 ASCII 数字字符
                         if push_enabled {
-                            for ef in &frames {
-                                let frame_type = frame_type_to_u8(&ef.frame_type);
-                                push_frame_to_stderr(frame_type, &ef.data);
+                            // 暖管冒帧丢弃：prime 暖管后 MFT 管道里挂的 1 帧黑帧（实测黑帧 IDR
+                            // ~6KB）会被 capture_loop 第一帧真屏顶出。在找到第一个真屏 IDR 之前，
+                            // 暖管冒出的黑帧序列（黑帧 IDR + 跟随的黑屏 P）不推给 jmuxer，
+                            // 避免黑帧 IDR 被锁成黑屏基线（实测画面真正出现要 2s，比旧版 1.8s
+                            // 全黑暖管更糟）。
+                            //
+                            // 判定真屏 IDR：本批 frames 里含 IDR 且其 data.len 超过阈值。
+                            // 黑帧 IDR ~6KB，真屏 IDR ~240KB，30KB 阈值区分度极大。
+                            // 本批不含真屏 IDR（要么纯黑屏 P，要么黑帧 IDR）→ 整批 stderr 不推。
+                            // 一旦命中真屏 IDR → 清掉丢帧标志，本批（含其自带 SPS/PPS+IDR）
+                            // 正常推送给 jmuxer 建真屏基线。
+                            if push_skip_until_real_idr {
+                                let found_real_idr = frames.iter().any(|ef| {
+                                    matches!(ef.frame_type, FrameType::IDR)
+                                        && ef.data.len() >= REAL_IDR_MIN_BYTES
+                                });
+                                if !found_real_idr {
+                                    debug_eprintln!(
+                                        "[windows-sidecar] 暖管冒帧丢弃: 本批无真屏 IDR，跳过推送 (NAL 类型 {:?})",
+                                        frames.iter().map(|f| &f.frame_type).collect::<Vec<_>>()
+                                    );
+                                } else {
+                                    push_skip_until_real_idr = false;
+                                    debug_eprintln!(
+                                        "[windows-sidecar] 暖管冒帧结束: 命中真屏 IDR，开始推送客户端首帧"
+                                    );
+                                }
+                            }
+
+                            if !push_skip_until_real_idr {
+                                for ef in &frames {
+                                    let frame_type = frame_type_to_u8(&ef.frame_type);
+                                    push_frame_to_stderr(frame_type, &ef.data);
+                                }
+                            }
+
+                            // 诊断测点1：客户端首帧推送耗时（push 启动后首个真正推送的真屏帧）
+                            // 注意：原实现一收到 Some 就标记 first_frame_logged，会把暖管冒出的
+                            // 黑帧当首帧统计。现改为只在真正推送给客户端后才标记，测得的是端到端
+                            // 首帧可见延迟（含暖管冒帧丢弃等待）。
+                            if !first_frame_logged && !push_skip_until_real_idr {
+                                if let Some(t0) = push_just_on {
+                                    debug_eprintln!("[windows-sidecar] 预热测点1: push→客户端首帧耗时={}ms (期间 None 次数={})",
+                                        t0.elapsed().as_millis(), none_count_after_push_on);
+                                }
+                                first_frame_logged = true;
                             }
                         }
                     }
