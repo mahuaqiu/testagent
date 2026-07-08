@@ -327,7 +327,11 @@
       "Bash(sed -i '225,256d' main.rs)",
       "Bash(sed -i '224r main.rs.push' main.rs)",
       "PowerShell(Stop-Process *)",
-      "Bash(cargo metadata *)"
+      "Bash(cargo metadata *)",
+      "Bash(./venv/Scripts/python.exe -m ruff --version)",
+      "Bash(./venv/Scripts/python.exe -m black --version)",
+      "Bash(./venv/Scripts/python.exe -m pytest --version)",
+      "Bash(./venv/Scripts/python.exe -m pip show ruff black pytest)"
     ]
   }
 }
