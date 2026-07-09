@@ -458,6 +458,10 @@ class WindowsSidecarScreenManager:
         self._monitor = monitor
         self._idle_fps = idle_fps
         self._active_fps = active_fps
+        # 保存创建参数,用于 session 丢失后幂等重建（sidecar 重启场景）
+        self._open_monitor = monitor
+        self._open_idle_fps = idle_fps
+        self._open_active_fps = active_fps
         self._streamer: WindowsSidecarStreamer | None = None
         self._closed = False
         self._aligned_width: int | None = None
@@ -467,11 +471,53 @@ class WindowsSidecarScreenManager:
             "session_open",
             {
                 "session_id": self._session_id,
-                "monitor": self._monitor,
-                "idle_fps": self._idle_fps,
-                "active_fps": self._active_fps,
+                "monitor": self._open_monitor,
+                "idle_fps": self._open_idle_fps,
+                "active_fps": self._open_active_fps,
             },
         )
+
+    def _is_session_lost_error(self, exc: Exception) -> bool:
+        """判断异常是否为 session 丢失（sidecar 重启后 session 表清空）。"""
+        msg = str(exc).lower()
+        return "session not found" in msg or ("not found" in msg and "session" in msg)
+
+    def _reopen_session(self) -> bool:
+        """幂等重建 session。session_open 在 Rust 侧 get_or_create_session 不存在即创建。
+
+        Returns:
+            True=重建成功，False=重建失败。
+        """
+        try:
+            self._client.request(
+                "session_open",
+                {
+                    "session_id": self._session_id,
+                    "monitor": self._open_monitor,
+                    "idle_fps": self._open_idle_fps,
+                    "active_fps": self._open_active_fps,
+                },
+            )
+            logger.warning("session 重建成功: session_id=%s", self._session_id)
+            return True
+        except Exception as e:
+            logger.error("session 重建失败: session_id=%s err=%s", self._session_id, e)
+            return False
+
+    def _call_with_session_recovery(self, op_name: str, do_call):
+        """执行一次 client 请求；命中 session not found 时重建 session 后重试一次。
+
+        用于截图/录制等命令,使 sidecar 重启场景能自愈,不再永久 fallback 到 pyautogui。
+        """
+        try:
+            return do_call()
+        except Exception as e:
+            if not self._is_session_lost_error(e):
+                raise
+            logger.warning("检测到 session 丢失(%s): %s，尝试重建后重试", op_name, e)
+            if not self._reopen_session():
+                raise
+            return do_call()  # 重建后重试一次,失败则抛出由上层处理
 
     def start_capture(self) -> None:
         return
@@ -496,13 +542,16 @@ class WindowsSidecarScreenManager:
         return self.get_frame_jpeg()
 
     def get_frame_bgra(self) -> bytearray:
-        data = self._client.request(
-            "snapshot",
-            {
-                "session_id": self._session_id,
-                "format": "raw",
-                "max_age_ms": 100,
-            },
+        data = self._call_with_session_recovery(
+            "snapshot_raw",
+            lambda: self._client.request(
+                "snapshot",
+                {
+                    "session_id": self._session_id,
+                    "format": "raw",
+                    "max_age_ms": 100,
+                },
+            ),
         )
         bgra_b64 = data.get("bgra_b64")
         if not bgra_b64:
@@ -529,15 +578,35 @@ class WindowsSidecarScreenManager:
 
         return bytearray(bgra_bytes)
 
+    def get_frame_raw_with_meta(self) -> dict:
+        """获取 raw 全屏帧及元信息（bgra_b64/width/height），支持 session 自愈。
+
+        供 windows.py 窗口级截图使用：先取全屏 raw，再按 window_rect 裁剪。
+        """
+        return self._call_with_session_recovery(
+            "snapshot_raw_meta",
+            lambda: self._client.request(
+                "snapshot",
+                {
+                    "session_id": self._session_id,
+                    "format": "raw",
+                    "max_age_ms": 100,
+                },
+            ),
+        )
+
     def get_frame_jpeg(self) -> bytes:
-        data = self._client.request(
-            "snapshot",
-            {
-                "session_id": self._session_id,
-                "format": "jpeg",
-                "quality": 80,
-                "max_age_ms": 100,
-            },
+        data = self._call_with_session_recovery(
+            "snapshot_jpeg",
+            lambda: self._client.request(
+                "snapshot",
+                {
+                    "session_id": self._session_id,
+                    "format": "jpeg",
+                    "quality": 80,
+                    "max_age_ms": 100,
+                },
+            ),
         )
         image_b64 = data.get("image_b64")
         if not image_b64:
@@ -545,13 +614,16 @@ class WindowsSidecarScreenManager:
         return base64.b64decode(image_b64)
 
     def get_screen_size(self) -> tuple[int, int]:
-        data = self._client.request(
-            "snapshot",
-            {
-                "session_id": self._session_id,
-                "format": "raw",
-                "max_age_ms": 100,
-            },
+        data = self._call_with_session_recovery(
+            "snapshot_size",
+            lambda: self._client.request(
+                "snapshot",
+                {
+                    "session_id": self._session_id,
+                    "format": "raw",
+                    "max_age_ms": 100,
+                },
+            ),
         )
         width = int(data.get("width", 0))
         height = int(data.get("height", 0))
@@ -581,15 +653,18 @@ class WindowsSidecarScreenManager:
         watermark: bool = True,
     ) -> bool:
         try:
-            data = self._client.request(
+            data = self._call_with_session_recovery(
                 "recording_start",
-                {
-                    "session_id": self._session_id,
-                    "output_path": output_path,
-                    "fps": fps,
-                    "audio": audio,
-                    "watermark": watermark,
-                },
+                lambda: self._client.request(
+                    "recording_start",
+                    {
+                        "session_id": self._session_id,
+                        "output_path": output_path,
+                        "fps": fps,
+                        "audio": audio,
+                        "watermark": watermark,
+                    },
+                ),
             )
             # 获取对齐后的尺寸并设置，用于帧填充
             aligned_width = data.get("aligned_width")
@@ -605,7 +680,10 @@ class WindowsSidecarScreenManager:
 
     def stop_recording(self) -> str:
         try:
-            data = self._client.request("recording_stop", {"session_id": self._session_id})
+            data = self._call_with_session_recovery(
+                "recording_stop",
+                lambda: self._client.request("recording_stop", {"session_id": self._session_id}),
+            )
             return str(data.get("output_path") or "")
         except Exception as exc:
             logger.error("停止 Windows 录制失败: %s", exc)

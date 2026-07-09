@@ -249,14 +249,7 @@ class WindowsPlatformManager(PlatformManager):
                 from PIL import Image
                 from worker.screen.monitor_utils import get_monitor_offset
 
-                data = manager._client.request(
-                    "snapshot",
-                    {
-                        "session_id": manager._session_id,
-                        "format": "raw",
-                        "max_age_ms": 100,
-                    },
-                )
+                data = manager.get_frame_raw_with_meta()
                 bgra_b64 = data.get("bgra_b64")
                 width = int(data.get("width", 0))
                 height = int(data.get("height", 0))
@@ -286,6 +279,15 @@ class WindowsPlatformManager(PlatformManager):
                 return buffer.getvalue()
             except Exception as e:
                 logger.error(f"Window sidecar screenshot failed: {e}, fallback to pyautogui")
+                # fallback 到全屏前清除窗口绑定，保持坐标准基一致
+                if self._window_handle or self._window_rect:
+                    logger.warning(
+                        "窗口截图失败 fallback 到全屏，清除窗口绑定以保持坐标准基一致: handle=%s rect=%s",
+                        self._window_handle,
+                        self._window_rect,
+                    )
+                    self._window_handle = None
+                    self._window_rect = None
                 screenshot = pyautogui.screenshot()
                 buffer = io.BytesIO()
                 screenshot.save(buffer, format="PNG")
@@ -293,18 +295,7 @@ class WindowsPlatformManager(PlatformManager):
         else:
             # 全屏截图：使用 sidecar
             try:
-                data = manager._client.request(
-                    "snapshot",
-                    {
-                        "session_id": manager._session_id,
-                        "format": "jpeg",
-                        "quality": 85,
-                    },
-                )
-                image_b64 = data.get("image_b64")
-                if image_b64:
-                    return base64.b64decode(image_b64)
-                raise RuntimeError("sidecar snapshot is empty")
+                return manager.get_frame_jpeg()
             except Exception as e:
                 logger.error(f"sidecar screenshot failed: {e}, fallback to pyautogui")
                 screenshot = pyautogui.screenshot()
@@ -587,14 +578,7 @@ def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any 
         manager = get_windows_sidecar_manager(f"windows/{device_id}/{monitor}", monitor=monitor)
 
         if self._window_handle and self._window_rect:
-            data = manager._client.request(
-                "snapshot",
-                {
-                    "session_id": manager._session_id,
-                    "format": "raw",
-                    "max_age_ms": 100,
-                },
-            )
+            data = manager.get_frame_raw_with_meta()
             bgra_b64 = data.get("bgra_b64")
             width = int(data.get("width", 0))
             height = int(data.get("height", 0))
@@ -625,6 +609,16 @@ def _windows_take_screenshot_sidecar(self: WindowsPlatformManager, context: Any 
         return manager.get_frame_jpeg()
     except Exception as exc:
         logger.error("Sidecar screenshot failed, fallback to pyautogui: %s", exc)
+        # fallback 到全屏前清除窗口绑定，使后续 _convert_to_global_coords 走全屏分支，
+        # 避免全屏坐标准基被叠加窗口偏移导致点击点整体错位。
+        if self._window_handle or self._window_rect:
+            logger.warning(
+                "窗口截图失败 fallback 到全屏，清除窗口绑定以保持坐标准基一致: handle=%s rect=%s",
+                self._window_handle,
+                self._window_rect,
+            )
+            self._window_handle = None
+            self._window_rect = None
         screenshot = pyautogui.screenshot()
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
