@@ -331,7 +331,18 @@
       "Bash(./venv/Scripts/python.exe -m ruff --version)",
       "Bash(./venv/Scripts/python.exe -m black --version)",
       "Bash(./venv/Scripts/python.exe -m pytest --version)",
-      "Bash(./venv/Scripts/python.exe -m pip show ruff black pytest)"
+      "Bash(./venv/Scripts/python.exe -m pip show ruff black pytest)",
+      "Bash(./venv/Scripts/python.exe -m pip install ruff black -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_sidecar.py -q)",
+      "Bash(./venv/Scripts/python.exe -m ruff check worker/platforms/windows.py worker/screen/windows_sidecar.py)",
+      "Bash(./venv/Scripts/python.exe -m black --check worker/platforms/windows.py worker/screen/windows_sidecar.py)",
+      "Bash(./venv/Scripts/python.exe -m ruff check worker/platforms/windows.py)",
+      "Bash(./venv/Scripts/python.exe -m black --diff worker/screen/windows_sidecar.py)",
+      "Bash(./venv/Scripts/python.exe -m black --diff worker/platforms/windows.py)",
+      "Bash(./venv/Scripts/python.exe -m pytest -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_worker_screenshot_recording.py -q)",
+      "Bash(PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe -c ' *)",
+      "Bash(./venv/Scripts/python.exe *)"
     ]
   }
 }
