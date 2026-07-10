@@ -44,6 +44,7 @@ from worker.tools import (
 )
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
 from worker.worker import TaskConflictError, Worker
+from worker.screen.windows_sidecar import media_packet_to_websocket_frame
 
 logger = logging.getLogger(__name__)
 
@@ -1000,12 +1001,33 @@ async def screen_stream(
             return
 
         # 根据 codec 配置帧源（透传 bitrate/profile 给 H.264 推流；jpeg/mjpeg 忽略）
-        streamer = screen_manager.start_streaming(
-            codec=codec, bitrate=streaming_bitrate, profile=streaming_profile
-        )
+        # Windows H.264 优先使用 RSM1 二进制媒体通道；如果当前客户端或 sidecar
+        # 不支持，会在 manager 内部保留旧的文本/base64 兼容路径。
+        use_binary_media = platform == "windows" and codec == "h264"
+        stream_options = {
+            "codec": codec,
+            "bitrate": streaming_bitrate,
+            "profile": streaming_profile,
+        }
+        if use_binary_media:
+            stream_options["binary"] = True
+        streamer = screen_manager.start_streaming(**stream_options)
 
         # Windows H.264 推流使用推模式
-        if platform == "windows" and codec == "h264":
+        if platform == "windows" and codec == "h264" and streamer.uses_binary_media:
+            logger.info("screen_stream: 使用 Windows RSM1 二进制媒体通道, conn_key=%s", conn_key)
+            try:
+                while streamer.is_running():
+                    packet = await streamer.get_media_packet_async()
+                    if not packet:
+                        continue
+                    await asyncio.wait_for(
+                        websocket.send_bytes(media_packet_to_websocket_frame(packet)),
+                        timeout=send_timeout,
+                    )
+            finally:
+                streamer.stop()
+        elif platform == "windows" and codec == "h264" and streamer.codec == "h264":
             from worker.screen.windows_sidecar import PushFrameReader
 
             logger.info("screen_stream: 开始 Windows H.264 推流, conn_key=%s", conn_key)

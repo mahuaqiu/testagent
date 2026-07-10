@@ -7,8 +7,11 @@ import base64
 import json
 import logging
 import shutil
+import socket
+import struct
 import subprocess
 import threading
+from urllib.parse import urlparse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -368,6 +371,7 @@ class WindowsSidecarStreamer:
         fps: int,
         bitrate: int = 4_000_000,
         profile: int = 100,
+        binary: bool = False,
     ):
         self._client = client
         self._session_id = session_id
@@ -375,8 +379,10 @@ class WindowsSidecarStreamer:
         self._fps = fps
         self._bitrate = bitrate
         self._profile = profile  # H.264 profile: 66=Baseline, 77=Main, 100=High
+        self._binary = binary
         self._running = False
         self._h264_info: dict[str, Any] | None = None
+        self._media_reader: MediaPacketReader | None = None
         self._on_fallback: Callable[[], None] | None = None
 
     def start(self, codec: str = "jpeg", on_fallback: Callable[[], None] | None = None) -> None:
@@ -392,10 +398,23 @@ class WindowsSidecarStreamer:
                         "fps": self._fps,
                         "bitrate": self._bitrate,
                         "profile": self._profile,
+                        "binary": self._binary,
                     },
                 )
                 self._h264_info = data
+                if self._binary:
+                    endpoint = data.get("binary_media_endpoint")
+                    if not endpoint:
+                        raise RuntimeError("sidecar 未返回二进制媒体 endpoint")
+                    self._media_reader = MediaPacketReader(endpoint)
             except Exception as e:
+                try:
+                    self._client.request("stream_stop", {"session_id": self._session_id})
+                except Exception:
+                    pass
+                if self._media_reader:
+                    self._media_reader.close()
+                    self._media_reader = None
                 logger.error(f"Failed to start H.264 stream: {e}, falling back to JPEG")
                 self._trigger_fallback()
         else:
@@ -415,12 +434,18 @@ class WindowsSidecarStreamer:
             except Exception as exc:
                 logger.warning("停止 Windows H264 推流失败: %s", exc)
         self._running = False
+        if self._media_reader:
+            self._media_reader.close()
+            self._media_reader = None
 
     async def get_frame_async(self) -> bytes | None:
         if not self._running:
             return None
 
         if self.codec == "h264":
+            if self._media_reader:
+                packet = await asyncio.to_thread(self._media_reader.read_packet)
+                return packet["payload"] if packet else None
             data = self._client.request("stream_next", {"session_id": self._session_id})
             frame_b64 = data.get("frame_b64")
             if not frame_b64:
@@ -441,11 +466,136 @@ class WindowsSidecarStreamer:
             return None
         return base64.b64decode(image_b64)
 
+    async def get_media_packet_async(self) -> dict[str, Any] | None:
+        """读取一个完整 RSM1 媒体包，保留逻辑时间和关键帧元数据。"""
+        if not self._running or self.codec != "h264" or not self._media_reader:
+            return None
+        try:
+            return await asyncio.to_thread(self._media_reader.read_packet)
+        except (EOFError, OSError, TimeoutError) as exc:
+            # Rust 二进制输出支持新客户端重新接入。这里不立即结束 WebSocket，
+            # 而是先重连一次；Rust 端会对新 TCP 连接重新执行首个关键帧门控。
+            logger.warning("Windows RSM1 通道断开，尝试重连: %s", exc)
+            try:
+                await asyncio.to_thread(self._media_reader.reconnect)
+            except (OSError, TimeoutError, ValueError) as reconnect_exc:
+                logger.error("Windows RSM1 通道重连失败: %s", reconnect_exc)
+                self._running = False
+            return None
+
     def is_running(self) -> bool:
         return self._running
 
     def get_h264_info(self) -> dict[str, Any] | None:
         return self._h264_info
+
+    @property
+    def uses_binary_media(self) -> bool:
+        """是否已成功建立二进制媒体通道。"""
+        return self._media_reader is not None and self.codec == "h264"
+
+    @property
+    def binary_enabled(self) -> bool:
+        """是否请求使用二进制媒体通道。"""
+        return self._binary
+
+
+class MediaPacketReader:
+    """读取 Rust RSM1 二进制媒体通道，处理 TCP 半包和粘包。"""
+
+    HEADER = struct.Struct("<4sBBH Q q q I I I")
+    MAGIC = b"RSM1"
+    VERSION = 1
+    MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
+
+    def __init__(self, endpoint: str, sock: socket.socket | Any | None = None) -> None:
+        parsed = urlparse(endpoint)
+        if parsed.scheme != "tcp" or not parsed.hostname or not parsed.port:
+            raise ValueError(f"不支持的二进制媒体 endpoint: {endpoint}")
+        self._endpoint = (parsed.hostname, parsed.port)
+        self._buffer = bytearray()
+        self._socket = sock or self._connect()
+
+    def _connect(self) -> socket.socket:
+        """建立一个新的 TCP 媒体连接。"""
+        return socket.create_connection(self._endpoint, timeout=5.0)
+
+    def reconnect(self) -> None:
+        """断线后重新连接 Rust 二进制媒体端点，并丢弃旧连接残留数据。"""
+        self.close()
+        self._buffer.clear()
+        self._socket = self._connect()
+
+    def close(self) -> None:
+        try:
+            self._socket.close()
+        except Exception:
+            pass
+
+    def _recv_exact(self, size: int) -> None:
+        while len(self._buffer) < size:
+            chunk = self._socket.recv(max(4096, size - len(self._buffer)))
+            if not chunk:
+                raise EOFError("二进制媒体通道已断开")
+            self._buffer.extend(chunk)
+
+    def read_packet(self) -> dict[str, Any]:
+        self._recv_exact(self.HEADER.size)
+        header = bytes(self._buffer[: self.HEADER.size])
+        (
+            magic,
+            version,
+            message_type,
+            flags,
+            sequence,
+            pts_100ns,
+            duration_100ns,
+            width,
+            height,
+            payload_length,
+        ) = self.HEADER.unpack(header)
+        if magic != self.MAGIC:
+            raise ValueError("媒体 packet magic 不匹配")
+        if version != self.VERSION:
+            raise ValueError(f"不支持的媒体 packet 版本: {version}")
+        if payload_length > self.MAX_PAYLOAD_BYTES:
+            raise ValueError(f"媒体 packet payload 过大: {payload_length}")
+
+        packet_length = self.HEADER.size + payload_length
+        self._recv_exact(packet_length)
+        payload = bytes(self._buffer[self.HEADER.size : packet_length])
+        del self._buffer[:packet_length]
+        return {
+            "sequence": sequence,
+            "pts_100ns": pts_100ns,
+            "duration_100ns": duration_100ns,
+            "width": width,
+            "height": height,
+            "flags": flags,
+            "message_type": message_type,
+            "payload": payload,
+        }
+
+
+def media_packet_to_websocket_frame(packet: dict[str, Any]) -> bytes:
+    """将 RSM1 媒体包转换为现有 WebSocket 帧协议。
+
+    WebSocket 兼容协议使用一个字节标识帧类型：0x01 表示配置数据，
+    0x02 表示关键帧，0x03 表示普通 P 帧。配置包同时携带关键帧时，
+    必须优先使用关键帧前缀，避免前端只更新解码器参数而不触发解码。
+    """
+    flags = int(packet.get("flags", 0))
+    payload = packet.get("payload", b"")
+    if not isinstance(payload, bytes):
+        raise TypeError("媒体 packet payload 必须是 bytes")
+
+    if flags & 0x01:
+        prefix = b"\x02"
+    elif flags & 0x02:
+        prefix = b"\x01"
+    else:
+        prefix = b"\x03"
+    return prefix + payload
 
 
 class WindowsSidecarScreenManager:
@@ -694,8 +844,12 @@ class WindowsSidecarScreenManager:
         codec: str = "jpeg",
         bitrate: int = 4_000_000,
         profile: int = 100,
+        binary: bool = False,
     ) -> WindowsSidecarStreamer:
-        if self._streamer and self._streamer.codec != codec:
+        if self._streamer and (
+            self._streamer.codec != codec
+            or (codec == "h264" and self._streamer.binary_enabled != binary)
+        ):
             self._streamer.stop()
             self._streamer = None
 
@@ -707,6 +861,7 @@ class WindowsSidecarScreenManager:
                 fps=self._active_fps,
                 bitrate=bitrate,
                 profile=profile,
+                binary=binary,
             )
             self._streamer.start(codec=codec)
         return self._streamer
@@ -772,11 +927,13 @@ class PushFrameReader:
         # 恢复 stderr 归属为日志态
         self._client.set_stderr_drain(True)
 
-    def _handle_line(self, line: str):
+    def _handle_line(self, line: str | bytes):
         """处理接收到的行（由 client 的 _drain_stderr 线程调用，已去除换行）
 
         line 为 str（stderr 是 text 模式）。
         """
+        if isinstance(line, bytes):
+            line = line.decode("utf-8", errors="replace")
         if not line or not self._frame_queue:
             return
         prefix = line[:1]
@@ -840,6 +997,8 @@ class PushFrameReader:
 
     def _handle_command(self, cmd: str):
         """处理控制命令"""
+        if isinstance(cmd, bytes):
+            cmd = cmd.decode("utf-8", errors="replace")
         if cmd.startswith("FPS="):
             logger.info("帧率已设置为: %s", cmd)
 

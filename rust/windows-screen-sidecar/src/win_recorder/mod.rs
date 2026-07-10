@@ -9,10 +9,13 @@ mod d3d11;
 mod mf_writer;
 mod h264_encoder;
 mod recorder;
+mod logical_time;
+
 
 pub use error::RecorderError;
 pub use recorder::WinRecorder;
 pub use h264_encoder::{H264Encoder, EncodedFrame, FrameType};
+pub use logical_time::{frame_index_to_pts_100ns, sample_timing_for_frame_index};
 
 /// 全局 Media Foundation 初始化
 pub fn init_media_foundation() -> Result<(), RecorderError> {
@@ -78,6 +81,16 @@ impl RecordingContext {
 
     pub fn width(&self) -> u32 { self.width }
     pub fn height(&self) -> u32 { self.height }
+}
+
+impl crate::media::FrameSink for RecordingContext {
+    fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String> {
+        RecordingContext::write_frame(self, bgra).map_err(|e| e.to_string())
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        RecordingContext::stop(self).map(|_| ()).map_err(|e| e.to_string())
+    }
 }
 
 /// H.264 编码器上下文

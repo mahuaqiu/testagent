@@ -1,11 +1,13 @@
 //! 纯 Rust 屏幕录制器 - 从 win_recorder 移植，移除 PyO3 依赖
 use crate::win_recorder::d3d11::D3D11TextureManager;
 use crate::win_recorder::error::RecorderError;
+use crate::win_recorder::logical_time::{logical_time_for_frame_index, ClockTime};
 use crate::win_recorder::mf_writer::MFSinkWriter;
 use crate::win_recorder::watermark::WatermarkRenderer;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// Windows 录屏器
 ///
@@ -22,6 +24,14 @@ pub struct WinRecorder {
     recording: bool,
     watermark: bool,
     watermark_renderer: Option<WatermarkRenderer>,
+    recording_start_time: Option<ClockTime>,
+}
+
+fn current_local_clock_time() -> ClockTime {
+    unsafe {
+        let st = GetLocalTime();
+        ClockTime::new(st.wHour as u8, st.wMinute as u8, st.wSecond as u8, st.wMilliseconds)
+    }
 }
 
 impl WinRecorder {
@@ -48,6 +58,7 @@ impl WinRecorder {
             recording: false,
             watermark,
             watermark_renderer,
+            recording_start_time: None,
         })
     }
 
@@ -78,6 +89,9 @@ impl WinRecorder {
         let texture_manager = D3D11TextureManager::new(aligned_width, aligned_height)?;
 
         sink_writer.begin_writing()?;
+
+        // 记录录制开始时的本地时钟，后续水印按逻辑时间推进
+        self.recording_start_time = Some(current_local_clock_time());
 
         // 更新内部尺寸为对齐后的尺寸
         self.width = aligned_width;
@@ -112,11 +126,15 @@ impl WinRecorder {
         // 如果开启水印，绘制水印到 staging 纹理
         if self.watermark {
             if let Some(renderer) = &mut self.watermark_renderer {
+                let frame_index = sink_writer.lock().frame_count();
+                let start_time = self.recording_start_time.unwrap_or_else(current_local_clock_time);
+                let time_str = logical_time_for_frame_index(start_time, frame_index, self.fps);
                 if let Err(e) = renderer.render(
                     texture_manager.context(),
                     texture_manager.staging_texture(),
                     self.width,
                     self.height,
+                    &time_str,
                 ) {
                     eprintln!("Warning: watermark render failed: {}", e);
                 }
@@ -148,6 +166,7 @@ impl WinRecorder {
         // 清理资源
         self.sink_writer = None;
         self.texture_manager = None;
+        self.recording_start_time = None;
         self.recording = false;
 
         // 关闭 Media Foundation

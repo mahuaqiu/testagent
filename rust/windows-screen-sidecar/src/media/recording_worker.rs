@@ -1,0 +1,186 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use super::{CapturedFrame, FrameHub};
+
+/// 录制 worker 使用的帧写入抽象，生产环境由 RecordingContext 实现。
+pub trait FrameSink: Send + 'static {
+    fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String>;
+    fn stop(&mut self) -> Result<(), String>;
+}
+
+/// 录制 worker 的运行统计。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordingWorkerStats {
+    pub written_frames: u64,
+    pub duplicated_frames: u64,
+    pub dropped_late_ticks: u64,
+    pub last_write_ms: u128,
+}
+
+pub struct RecordingWorkerHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<Result<RecordingWorkerStats, String>>>,
+}
+
+impl RecordingWorkerHandle {
+    pub fn start(
+        frame_hub: Arc<FrameHub>,
+        fps: u32,
+        mut sink: Box<dyn FrameSink>,
+    ) -> Result<Self, String> {
+        let fps = fps.max(1);
+        let interval = Duration::from_secs_f64(1.0 / fps as f64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+
+        let thread = thread::Builder::new()
+            .name("recording-worker".to_string())
+            .spawn(move || {
+                let mut stats = RecordingWorkerStats::default();
+                let mut next_tick = Instant::now();
+                let mut last_seq = 0_u64;
+                let mut last_frame: Option<Arc<CapturedFrame>> = None;
+
+                while !stop_thread.load(Ordering::Relaxed) {
+                    if last_frame.is_none() {
+                        if let Some(frame) = frame_hub.latest() {
+                            last_seq = frame.seq;
+                            last_frame = Some(frame);
+                            next_tick = Instant::now();
+                        } else {
+                            thread::sleep(Duration::from_millis(2));
+                            continue;
+                        }
+                    }
+
+                    let now = Instant::now();
+                    if now < next_tick {
+                        thread::sleep(next_tick.duration_since(now));
+                        continue;
+                    }
+
+                    let late_ticks = now
+                        .saturating_duration_since(next_tick)
+                        .as_nanos()
+                        .checked_div(interval.as_nanos().max(1))
+                        .unwrap_or(0) as u64;
+                    if late_ticks > 0 {
+                        stats.dropped_late_ticks =
+                            stats.dropped_late_ticks.saturating_add(late_ticks);
+                    }
+                    next_tick += interval.saturating_mul(late_ticks.saturating_add(1) as u32);
+
+                    let (frame, duplicated) = match frame_hub.latest() {
+                        Some(frame) if frame.seq > last_seq => {
+                            last_seq = frame.seq;
+                            last_frame = Some(frame.clone());
+                            (frame, false)
+                        }
+                        _ => (
+                            last_frame.as_ref().expect("last frame must exist").clone(),
+                            true,
+                        ),
+                    };
+
+                    let write_started = Instant::now();
+                    sink.write_frame(&frame.bgra)?;
+                    stats.last_write_ms = write_started.elapsed().as_millis();
+                    stats.written_frames = stats.written_frames.saturating_add(1);
+                    if duplicated {
+                        stats.duplicated_frames = stats.duplicated_frames.saturating_add(1);
+                    }
+                }
+
+                sink.stop()?;
+                Ok(stats)
+            })
+            .map_err(|e| format!("启动录制 worker 失败: {e}"))?;
+
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    pub fn stop(mut self) -> Result<RecordingWorkerStats, String> {
+        self.stop_and_join()
+    }
+
+    fn stop_and_join(&mut self) -> Result<RecordingWorkerStats, String> {
+        self.stop.store(true, Ordering::Relaxed);
+        let thread = self
+            .thread
+            .take()
+            .ok_or_else(|| "录制 worker 已停止".to_string())?;
+        thread
+            .join()
+            .map_err(|_| "录制 worker 线程异常退出".to_string())?
+    }
+}
+
+impl Drop for RecordingWorkerHandle {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            let _ = self.stop_and_join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    struct TestSink {
+        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl FrameSink for TestSink {
+        fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String> {
+            self.writes.lock().unwrap().push(bgra.to_vec());
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn publish_frame(hub: &FrameHub, seq: u64, value: u8) {
+        hub.publish(CapturedFrame {
+            seq,
+            capture_pts_100ns: seq as i64 * 10_000,
+            width: 1,
+            height: 1,
+            bgra: vec![value; 4],
+        });
+    }
+
+    #[test]
+    fn worker_writes_frames_at_fixed_ticks_and_reuses_latest_frame() {
+        let hub = Arc::new(FrameHub::new());
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let sink = TestSink {
+            writes: writes.clone(),
+        };
+        let worker = RecordingWorkerHandle::start(hub.clone(), 100, Box::new(sink))
+            .expect("worker should start");
+
+        publish_frame(&hub, 1, 7);
+        std::thread::sleep(Duration::from_millis(35));
+        let stats = worker.stop().expect("worker should stop");
+
+        let written = writes.lock().unwrap().clone();
+        assert!(
+            written.len() >= 2,
+            "expected fixed ticks to write multiple frames"
+        );
+        assert!(written.iter().all(|frame| frame == &vec![7; 4]));
+        assert_eq!(stats.written_frames as usize, written.len());
+        assert!(stats.duplicated_frames >= 1, "expected a duplicated tick");
+    }
+}

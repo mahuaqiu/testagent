@@ -2,6 +2,7 @@ mod capture;
 mod protocol;
 mod session;
 mod win_recorder;
+mod media;
 
 use crate::capture::current_timestamp_ms;
 use crate::protocol::{Request, Response};
@@ -63,6 +64,10 @@ fn parse_u128(value: &serde_json::Value, key: &str, default: u128) -> u128 {
         .and_then(|v| v.as_u64())
         .map(|v| v as u128)
         .unwrap_or(default)
+}
+
+fn parse_bool(value: &serde_json::Value, key: &str, default: bool) -> bool {
+    value.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }
 
 fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
@@ -176,6 +181,7 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
             let fps = parse_u32(&params, "fps", 10);
             let bitrate = parse_u32(&params, "bitrate", 2_000_000);
             let profile = parse_u32(&params, "profile", 66);
+            let binary = parse_bool(&params, "binary", false);
 
             eprintln!("[windows-sidecar] stream_start: session_id={}, fps={}", session_id, fps);
 
@@ -187,7 +193,7 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
                 Some(session) => session,
                 None => return Response::err(request.id, format!("session not found: {session_id}")),
             };
-            let result = session.start_streaming(fps, bitrate, profile);
+            let result = session.start_streaming(fps, bitrate, profile, binary);
             eprintln!("[windows-sidecar] stream_start: result ready, generating response");
             // 强制刷新 stderr
             use std::io::Write;

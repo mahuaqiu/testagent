@@ -1,4 +1,5 @@
 use crate::win_recorder::error::RecorderError;
+use crate::win_recorder::logical_time::sample_timing_for_frame_index;
 use windows::core::PCWSTR;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Media::MediaFoundation::*;
@@ -9,12 +10,10 @@ use windows::Win32::Media::MediaFoundation::*;
 pub struct MFSinkWriter {
     sink_writer: IMFSinkWriter,
     stream_index: u32,
-    frame_duration: i64,
     frame_count: u64,
     width: u32,
     height: u32,
-    /// 首帧的真实系统时间（100 纳秒单位），用于计算真实时间戳
-    first_frame_time: Option<i64>,
+    fps: u32,
 }
 
 // 手动实现 Send trait
@@ -166,16 +165,13 @@ impl MFSinkWriter {
                 .SetInputMediaType(stream_index, &input_type, None)
                 .map_err(|e| RecorderError::MFError(format!("设置输入类型失败: {}", e)))?;
 
-            let frame_duration = 10_000_000_i64 / fps as i64;
-
             Ok(Self {
                 sink_writer,
                 stream_index,
-                frame_duration,
                 frame_count: 0,
                 width: aligned_width,
                 height: aligned_height,
-                first_frame_time: None,
+                fps,
             })
         }
     }
@@ -192,28 +188,17 @@ impl MFSinkWriter {
 
     /// 写入一帧
     ///
-    /// 使用真实系统时间计算时间戳，确保视频播放时间与真实录制时长一致
+    /// 使用逻辑帧索引计算时间戳，确保视频播放时间连续且不受抓帧抖动影响
     pub fn write_sample(&mut self, sample: &IMFSample) -> Result<(), RecorderError> {
+        let (timestamp, duration) = sample_timing_for_frame_index(self.frame_count, self.fps);
+
         unsafe {
-            // 获取当前系统时间（100 纳秒单位）
-            let current_time = MFGetSystemTime();
-
-            // 首次写入时记录首帧时间
-            if self.first_frame_time.is_none() {
-                self.first_frame_time = Some(current_time);
-            }
-
-            // 时间戳 = 当前时间 - 首帧时间（转换为毫秒 / 10000 = 100纳秒单位）
-            let first_time = self.first_frame_time.unwrap();
-            let timestamp = current_time - first_time;
-
             sample
                 .SetSampleTime(timestamp)
                 .map_err(|e| RecorderError::MFError(format!("设置样本时间失败: {}", e)))?;
 
-            // 持续时间使用固定帧间隔，确保帧之间的时间均匀
             sample
-                .SetSampleDuration(self.frame_duration)
+                .SetSampleDuration(duration)
                 .map_err(|e| RecorderError::MFError(format!("设置样本持续时间失败: {}", e)))?;
 
             self.sink_writer

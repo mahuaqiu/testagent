@@ -7,7 +7,6 @@ use std::ptr;
 use windows::Win32::Foundation::{COLORREF, SIZE};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::SystemInformation::GetLocalTime;
 
 use crate::win_recorder::error::RecorderError;
 
@@ -206,17 +205,6 @@ impl WatermarkRenderer {
             let _ = SelectObject(hdc, old_bitmap);
 
             Ok(())
-        }
-    }
-
-    /// 获取当前时间字符串 HH:MM:SS.mmm
-    pub fn get_time_string() -> String {
-        unsafe {
-            let st = GetLocalTime();
-            format!(
-                "{:02}:{:02}:{:02}.{:03}",
-                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
-            )
         }
     }
 
@@ -444,6 +432,7 @@ impl WatermarkRenderer {
         staging_texture: &ID3D11Texture2D,
         width: u32,
         height: u32,
+        time_str: &str,
     ) -> Result<(), RecorderError> {
         // 更新缩放缓存（如果缩放比例变化，会释放旧的 GDI 对象）
         self.update_cache(width, height);
@@ -463,10 +452,9 @@ impl WatermarkRenderer {
         // 懒初始化 GDI 对象（首次渲染时创建，之后��用）
         self.lazy_init_gdi()?;
 
-        // 使用缓存的 GDI 对象渲染文字
-        let time_str = Self::get_time_string();
+        // 使用调用方提供的逻辑时间字符串渲染文字
         let gdi_result = unsafe { render_text_with_cached_gdi(
-            &time_str,
+            time_str,
             font_height,
             bg_width,
             bg_height,
