@@ -133,7 +133,7 @@ impl Drop for RecordingWorkerHandle {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     struct TestSink {
         writes: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -150,14 +150,14 @@ mod tests {
         }
     }
 
-    fn publish_frame(hub: &FrameHub, seq: u64, value: u8) {
+    fn publish_frame(hub: &FrameHub, seq: u64, value: u8) -> u64 {
         hub.publish(CapturedFrame {
             seq,
             capture_pts_100ns: seq as i64 * 10_000,
             width: 1,
             height: 1,
             bgra: vec![value; 4],
-        });
+        })
     }
 
     #[test]
@@ -182,5 +182,38 @@ mod tests {
         assert!(written.iter().all(|frame| frame == &vec![7; 4]));
         assert_eq!(stats.written_frames as usize, written.len());
         assert!(stats.duplicated_frames >= 1, "expected a duplicated tick");
+    }
+    #[test]
+    fn worker_accepts_new_frame_after_capture_producer_restarts() {
+        let hub = Arc::new(FrameHub::new());
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let sink = TestSink {
+            writes: writes.clone(),
+        };
+        let worker = RecordingWorkerHandle::start(hub.clone(), 100, Box::new(sink))
+            .expect("worker should start");
+
+        // 模拟上一轮 producer 的局部序号已经较大；FrameHub 仍从本 session 的第 1 帧编号。
+        let previous_seq = publish_frame(&hub, 300, 7);
+        assert_eq!(previous_seq, 1);
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while writes.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !writes.lock().unwrap().is_empty(),
+            "worker should consume the previous frame first"
+        );
+
+        // 模拟重启后的 producer 局部序号从 1 开始；FrameHub 序号必须继续递增。
+        let restarted_seq = publish_frame(&hub, 1, 9);
+        assert_eq!(restarted_seq, previous_seq + 1);
+        std::thread::sleep(Duration::from_millis(35));
+        worker.stop().expect("worker should stop");
+
+        assert!(
+            writes.lock().unwrap().iter().any(|frame| frame == &vec![9; 4]),
+            "worker should consume the restarted producer frame instead of repeating the stale frame"
+        );
     }
 }

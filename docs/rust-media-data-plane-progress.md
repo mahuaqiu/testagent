@@ -1,6 +1,6 @@
 # Rust 媒体数据面重构计划完成进展
 
-> 报告日期：2026-07-10
+> 报告日期：2026-07-11
 > 开发方式：当前分支直接开发
 > 项目路径：`D:\code\autotest`
 > Rust sidecar：`rust/windows-screen-sidecar`
@@ -331,7 +331,7 @@ cargo check
 最新全量测试结果：
 
 ```text
-32 passed; 0 failed
+34 passed; 0 failed
 ```
 
 ### 5.2 逻辑时间、媒体组件和协议测试
@@ -394,6 +394,27 @@ Release 构建尚未完成，当前机器对 Rust `target` 工作区目录返回
 
 ---
 
+## 5.4 录制重启后的帧连续性修复（2026-07-11）
+
+本轮针对“Worker 重启后第一次录制正常、后续录制底图卡住而水印连续”的问题完成了代码级修复：
+
+- `FrameHub` 现在统一分配 **session 级单调递增** 的帧序号；`CaptureProducer` 重启不会再从 `1` 覆盖或倒退消费者已经见过的序号。
+- 新增 `FrameHub::clear_latest()`：开始一轮新录制时清理上一轮最新帧快照，但不重置序号。
+- `start_recording()` 已调整为“清理旧快照与设置目标 FPS → 确保抓帧 producer 运行 → 启动 RecordingWorker”，并增加启动预留位避免并发请求重复创建录制 worker；worker 会等待本轮新帧，避免将上一轮残留帧作为首帧。
+- `CaptureProducer::is_running()` 现在同时检查线程是否已结束，避免 producer 异常退出后被误判为仍在运行。
+- 新增回归测试，模拟旧 producer 发布高序号帧、重启后的 producer 再从低序号发布；修复前测试失败，修复后录制 worker 会消费新画面而不会重复旧底图。
+
+本轮本地验证：
+
+```text
+cargo test                    -> 34 passed; 0 failed
+cargo check                   -> 通过（仅既有未使用代码 warning）
+cargo fmt --check             -> 通过
+```
+
+尚未执行真实 Worker 集成验证，按当前约定由用户执行。建议连续执行至少两轮“开始录制 → 产生画面变化 → 停止录制”，并确认第二轮的视频底图、水印、时长与画面变化均连续。
+
+---
 ## 6. 尚未完成的核心工作
 
 ### 6.1 真实端到端 binary 推流验证

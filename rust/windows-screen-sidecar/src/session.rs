@@ -1,4 +1,4 @@
-﻿//! Session 管理 - 纯 Rust 实现，不依赖 Python
+//! Session 管理 - 纯 Rust 实现，不依赖 Python
 use crate::capture::{bgra_to_jpeg, capture_monitor, current_timestamp_ms, CapturedFrame};
 use crate::media::{
     push_frame_to_stderr, BinaryMediaOutput, CaptureProducer, FrameHub, RecordingWorkerHandle,
@@ -39,6 +39,7 @@ pub struct SessionState {
     // Rust 媒体数据面：录制 worker 从 FrameHub 独立消费帧
     pub frame_hub: Arc<FrameHub>,
     pub recording_worker: Option<RecordingWorkerHandle>,
+    pub recording_starting: bool,
     pub capture_producer: Option<CaptureProducer>,
     pub capture_target_fps: Arc<AtomicU32>,
     pub stream_worker: Option<StreamWorkerHandle>,
@@ -90,6 +91,7 @@ impl SessionHandle {
             latest_frame: None,
             frame_hub: Arc::new(FrameHub::new()),
             recording_worker: None,
+            recording_starting: false,
             capture_producer: None,
             capture_target_fps: capture_target_fps.clone(),
             stream_worker: None,
@@ -168,50 +170,98 @@ impl SessionHandle {
     ) -> Result<Value, String> {
         let monitor = self.monitor()?;
 
-        // 检查是否已经在录制
+        // 预留录制启动权，避免并发请求在 worker 写入 state 之前重复创建录制器。
         {
-            let state = self
+            let mut state = self
                 .inner
                 .lock()
                 .map_err(|_| "session mutex poisoned".to_string())?;
-            if state.recording_worker.is_some() {
+            if state.recording_worker.is_some() || state.recording_starting {
                 return Err("recording already running".to_string());
             }
+            state.recording_starting = true;
         }
 
-        // 创建并启动录制器
+        // 创建并启动录制器。
         let mut recorder =
-            RecordingContext::new(output_path.clone(), fps, audio, monitor, watermark)
-                .map_err(|e| e.to_string())?;
-        recorder.start().map_err(|e| e.to_string())?;
+            match RecordingContext::new(output_path.clone(), fps, audio, monitor, watermark) {
+                Ok(recorder) => recorder,
+                Err(error) => {
+                    self.release_recording_start();
+                    return Err(error.to_string());
+                }
+            };
+        if let Err(error) = recorder.start() {
+            self.release_recording_start();
+            return Err(error.to_string());
+        }
 
-        // 在 move 到 state 之前获取对齐后的尺寸
+        // 在 move 到 worker 之前获取对齐后的尺寸。
         let aligned_width = recorder.width();
         let aligned_height = recorder.height();
 
-        // 将录制器交给独立 worker，录制不再占用 capture_loop 的写帧路径。
-        let mut state = self
-            .inner
-            .lock()
-            .map_err(|_| "session mutex poisoned".to_string())?;
-        let recording_worker =
-            RecordingWorkerHandle::start(state.frame_hub.clone(), fps, Box::new(recorder))?;
-        state.recording_output_path = Some(output_path.clone());
-        state.recording_worker = Some(recording_worker);
-        state.active_fps = state.active_fps.max(fps);
-        state.capture_target_fps.store(
-            state.active_fps.max(state.idle_fps).max(1),
-            Ordering::Relaxed,
-        );
+        // 建立新的录制消费边界：旧快照不能作为本轮录制的首帧，帧序号也绝不回退。
+        let frame_hub = {
+            let mut state = match self.inner.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    let _ = recorder.stop();
+                    self.release_recording_start();
+                    return Err("session mutex poisoned".to_string());
+                }
+            };
+            if !state.running {
+                state.recording_starting = false;
+                drop(state);
+                let _ = recorder.stop();
+                return Err("session 已关闭".to_string());
+            }
+            state.frame_hub.clear_latest();
+            state.active_fps = state.active_fps.max(fps);
+            state.capture_target_fps.store(
+                state.active_fps.max(state.idle_fps).max(1),
+                Ordering::Relaxed,
+            );
+            state.frame_hub.clone()
+        };
 
-        // 确保捕获线程正在运行（在 recorder 设置之后再启动）
-        drop(state); // 释放锁
+        // 先确保 producer 已运行，再启动录制消费者；worker 会等待本轮的新帧，不会消费已清理的旧快照。
         if let Err(error) = self.ensure_capture_thread_running() {
-            // 启动捕获线程失败时回滚已创建的编码器、worker、队列和 TCP 端点，
-            // 避免下一次 stream_start 被错误地判定为“stream already running”。
-            let _ = self.stop_streaming();
+            let _ = recorder.stop();
+            self.release_recording_start();
+            self.stop_capture_if_unused();
             return Err(error);
         }
+
+        let recording_worker =
+            match RecordingWorkerHandle::start(frame_hub, fps, Box::new(recorder)) {
+                Ok(worker) => worker,
+                Err(error) => {
+                    self.release_recording_start();
+                    self.stop_capture_if_unused();
+                    return Err(error);
+                }
+            };
+
+        let mut state = match self.inner.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                let _ = recording_worker.stop();
+                self.release_recording_start();
+                self.stop_capture_if_unused();
+                return Err("session mutex poisoned".to_string());
+            }
+        };
+        if !state.running {
+            state.recording_starting = false;
+            drop(state);
+            let _ = recording_worker.stop();
+            self.stop_capture_if_unused();
+            return Err("session 已关闭".to_string());
+        }
+        state.recording_output_path = Some(output_path.clone());
+        state.recording_worker = Some(recording_worker);
+        state.recording_starting = false;
 
         Ok(json!({
             "output_path": output_path,
@@ -221,6 +271,13 @@ impl SessionHandle {
             "aligned_width": aligned_width,
             "aligned_height": aligned_height,
         }))
+    }
+
+    /// 释放录制启动预留；该方法只负责状态回滚，不会停止已登记的录制 worker。
+    fn release_recording_start(&self) {
+        if let Ok(mut state) = self.inner.lock() {
+            state.recording_starting = false;
+        }
     }
 
     /// 停止录制 - 纯 Rust 实现
@@ -488,7 +545,7 @@ impl SessionHandle {
     fn stop_capture_if_unused(&self) {
         let producer = self.inner.lock().ok().and_then(|mut state| {
             if !capture_is_needed(
-                state.recording_worker.is_some(),
+                state.recording_worker.is_some() || state.recording_starting,
                 state.stream_worker.is_some(),
             ) {
                 state.capture_producer.take()

@@ -1,11 +1,11 @@
-﻿use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+﻿use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::capture::{capture_monitor, CapturedFrame as RawCapturedFrame};
 
-use super::{CapturedFrame, FrameHub};
+use super::FrameHub;
 
 /// 抓帧生产者：只负责按目标帧率抓屏并发布到 FrameHub，不参与编码或推流。
 pub struct CaptureProducer {
@@ -46,8 +46,6 @@ impl CaptureProducer {
     {
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
-        let seq = Arc::new(AtomicU64::new(0));
-        let seq_thread = seq.clone();
         let frame_hub_thread = frame_hub.clone();
         let capture_fn = Arc::new(capture_fn);
         let capture_fn_thread = capture_fn.clone();
@@ -72,15 +70,12 @@ impl CaptureProducer {
                         Err(_) => continue,
                     };
                     on_frame_thread(&raw_frame);
-                    let next_seq = seq_thread.fetch_add(1, Ordering::SeqCst) + 1;
-                    let frame = CapturedFrame {
-                        seq: next_seq,
-                        capture_pts_100ns: raw_frame.captured_at_ms.saturating_mul(10_000) as i64,
-                        width: raw_frame.width,
-                        height: raw_frame.height,
-                        bgra: raw_frame.bgra,
-                    };
-                    frame_hub_thread.publish(frame);
+                    frame_hub_thread.publish_raw(
+                        raw_frame.captured_at_ms.saturating_mul(10_000) as i64,
+                        raw_frame.width,
+                        raw_frame.height,
+                        raw_frame.bgra,
+                    );
                 }
             })
             .map_err(|e| format!("启动抓帧 producer 失败: {e}"))?;
@@ -100,6 +95,10 @@ impl CaptureProducer {
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
+            && self
+                .thread
+                .as_ref()
+                .is_some_and(|thread| !thread.is_finished())
     }
 }
 

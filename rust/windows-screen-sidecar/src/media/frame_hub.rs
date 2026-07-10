@@ -6,6 +6,7 @@ use super::types::{CapturedFrame, FrameHubStats};
 #[derive(Default, Debug)]
 struct State {
     latest: Option<Arc<CapturedFrame>>,
+    next_seq: u64,
     published_frames: u64,
     duplicate_reads: u64,
     last_frame_age_ms: u128,
@@ -23,11 +24,47 @@ impl FrameHub {
         }
     }
 
-    pub fn publish(&self, frame: CapturedFrame) {
+    /// 发布原始抓屏数据，并由 FrameHub 分配 session 级单调递增帧序号。
+    pub fn publish_raw(
+        &self,
+        capture_pts_100ns: i64,
+        width: u32,
+        height: u32,
+        bgra: Vec<u8>,
+    ) -> u64 {
+        self.publish(CapturedFrame {
+            seq: 0,
+            capture_pts_100ns,
+            width,
+            height,
+            bgra,
+        })
+    }
+
+    /// 发布帧。调用方提供的 seq 不参与排序，统一由 FrameHub 分配连续序号。
+    pub fn publish(&self, mut frame: CapturedFrame) -> u64 {
         let (lock, cvar) = &*self.state;
         if let Ok(mut state) = lock.lock() {
+            let next_seq = state
+                .next_seq
+                .checked_add(1)
+                .expect("FrameHub 帧序号已耗尽");
+            state.next_seq = next_seq;
+            frame.seq = next_seq;
             state.latest = Some(Arc::new(frame));
-            state.published_frames += 1;
+            state.published_frames = state.published_frames.saturating_add(1);
+            cvar.notify_all();
+            return next_seq;
+        }
+
+        0
+    }
+
+    /// 清除最新帧快照，但保留单调帧序号，避免新消费者误用上一轮的旧帧。
+    pub fn clear_latest(&self) {
+        let (lock, cvar) = &*self.state;
+        if let Ok(mut state) = lock.lock() {
+            state.latest = None;
             cvar.notify_all();
         }
     }
@@ -101,10 +138,20 @@ mod tests {
     #[test]
     fn publish_updates_latest_frame() {
         let hub = FrameHub::new();
-        hub.publish(make_frame(1));
+        assert_eq!(hub.publish(make_frame(1)), 1);
         let latest = hub.latest().expect("expected latest frame");
         assert_eq!(latest.seq, 1);
         assert_eq!(latest.capture_pts_100ns, 10_000);
+    }
+
+    #[test]
+    fn clear_latest_keeps_frame_sequence_monotonic() {
+        let hub = FrameHub::new();
+        assert_eq!(hub.publish(make_frame(300)), 1);
+        hub.clear_latest();
+        assert!(hub.latest().is_none());
+        assert_eq!(hub.publish(make_frame(1)), 2);
+        assert_eq!(hub.latest().expect("expected latest frame").seq, 2);
     }
 
     #[test]
