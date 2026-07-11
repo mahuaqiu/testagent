@@ -617,28 +617,32 @@ class WindowsSidecarScreenManager:
     def __init__(self, session_id: str, monitor: int = 1, idle_fps: int = 1, active_fps: int = 15):
         self._client = get_shared_windows_sidecar_client()
         self._client.acquire()
-        self._session_id = session_id
-        self._monitor = monitor
-        self._idle_fps = idle_fps
-        self._active_fps = active_fps
-        # 保存创建参数,用于 session 丢失后幂等重建（sidecar 重启场景）
-        self._open_monitor = monitor
-        self._open_idle_fps = idle_fps
-        self._open_active_fps = active_fps
-        self._streamer: WindowsSidecarStreamer | None = None
-        self._closed = False
-        self._aligned_width: int | None = None
-        self._aligned_height: int | None = None
+        try:
+            self._session_id = session_id
+            self._monitor = monitor
+            self._idle_fps = idle_fps
+            self._active_fps = active_fps
+            # 保存创建参数，用于 session 丢失后幂等重建（sidecar 重启场景）
+            self._open_monitor = monitor
+            self._open_idle_fps = idle_fps
+            self._open_active_fps = active_fps
+            self._streamer: WindowsSidecarStreamer | None = None
+            self._closed = False
+            self._aligned_width: int | None = None
+            self._aligned_height: int | None = None
 
-        self._client.request(
-            "session_open",
-            {
-                "session_id": self._session_id,
-                "monitor": self._open_monitor,
-                "idle_fps": self._open_idle_fps,
-                "active_fps": self._open_active_fps,
-            },
-        )
+            self._client.request(
+                "session_open",
+                {
+                    "session_id": self._session_id,
+                    "monitor": self._open_monitor,
+                    "idle_fps": self._open_idle_fps,
+                    "active_fps": self._open_active_fps,
+                },
+            )
+        except Exception:
+            self._client.release()
+            raise
 
     def _is_session_lost_error(self, exc: Exception) -> bool:
         """判断异常是否为 session 丢失（sidecar 重启后 session 表清空）。"""
@@ -720,7 +724,7 @@ class WindowsSidecarScreenManager:
         if not bgra_b64:
             return bytearray()
 
-        bgra_bytes = base64.b64decode(bgra_b64)
+        bgra_bytes = base64.b64decode(bgra_b64, validate=True)
         width = int(data.get("width", 0))
         height = int(data.get("height", 0))
 
@@ -773,8 +777,11 @@ class WindowsSidecarScreenManager:
         )
         image_b64 = data.get("image_b64")
         if not image_b64:
-            return b""
-        return base64.b64decode(image_b64)
+            raise RuntimeError("sidecar JPEG snapshot is empty")
+        image_bytes = base64.b64decode(image_b64, validate=True)
+        if not image_bytes:
+            raise RuntimeError("sidecar JPEG snapshot decoded to empty data")
+        return image_bytes
 
     def get_screen_size(self) -> tuple[int, int]:
         data = self._call_with_session_recovery(
