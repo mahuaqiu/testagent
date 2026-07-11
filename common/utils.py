@@ -6,6 +6,8 @@ Usage:
 """
 
 import platform
+import os
+import signal
 import subprocess
 import time
 import functools
@@ -111,6 +113,81 @@ def run_cmd(
 
     return result
 
+def run_cmd_with_process_tree_timeout(
+    cmd: Union[str, List[str]],
+    shell: bool = False,
+    timeout: Optional[float] = None,
+) -> subprocess.CompletedProcess:
+    """执行命令，并在超时后终止整个子进程树。"""
+    popen_kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    if platform.system().lower() == "windows":
+        popen_kwargs["creationflags"] = SUBPROCESS_HIDE_WINDOW
+        if shell:
+            popen_kwargs["creationflags"] |= subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(cmd, shell=shell, **popen_kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            for stream in (process.stdout, process.stderr):
+                if stream:
+                    stream.close()
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            stdout = exc.output or b""
+            stderr = exc.stderr or b""
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output=_decode_output(stdout or b""),
+            stderr=_decode_output(stderr or b""),
+        ) from exc
+
+    return subprocess.CompletedProcess(
+        cmd,
+        process.returncode,
+        _decode_output(stdout or b""),
+        _decode_output(stderr or b""),
+    )
+
+
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """终止命令进程及其子进程，不让超时清理阻塞任务线程。"""
+    if process.poll() is not None:
+        return
+    if platform.system().lower() == "windows":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=SUBPROCESS_HIDE_WINDOW,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning(f"终止 Windows 命令进程树失败，将继续终止父进程: {exc}")
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError) as exc:
+            logger.warning(f"终止命令进程组失败，将继续终止父进程: {exc}")
+    try:
+        process.kill()
+    except OSError:
+        pass
 
 def popen_cmd(
     cmd: Union[str, List[str]],

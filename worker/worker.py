@@ -86,8 +86,10 @@ class TaskScheduler:
         # blocking=False 时忽略 timeout 参数，直接非阻塞获取
         if not blocking:
             return lock.acquire(blocking=False)
-        # blocking=True 时，timeout > 0 用实际值，否则 None 表示无限等待
-        return lock.acquire(blocking=True, timeout=timeout if timeout > 0 else None)
+        # 不传 timeout 才是 threading.Lock 的无限等待方式
+        if timeout <= 0:
+            return lock.acquire(blocking=True)
+        return lock.acquire(blocking=True, timeout=timeout)
 
     def release(self, platform: str, device_id: str | None = None) -> None:
         """释放执行锁。"""
@@ -1065,31 +1067,73 @@ class Worker:
             TaskResult: 任务结果
         """
         started_at = datetime.now()
+        started_monotonic = time.monotonic()
+        timeout_ms = task.config.timeout
+        deadline = (
+            started_monotonic + timeout_ms / 1000
+            if timeout_ms and timeout_ms > 0
+            else None
+        )
         actions_results = []
         request_id = get_request_id()  # 获取 request_id
 
         for i, action in enumerate(task.actions):
-            # 取消检查点：在执行每个 action 之前检查
+            # 取消和总超时检查点：动作执行前先结束任务，避免继续占用设备。
             if cancel_event and cancel_event.is_set():
-                # 只有多个 action 且不是最后一个时才取消
-                total_actions = len(task.actions)
-                if total_actions > 1 and i < total_actions - 1:
-                    logger.info(f"Task cancelled at action {i}: task_id={task.task_id}")
-                    return TaskResult(
-                        task_id=task.task_id,
-                        request_id=request_id,  # 填充 request_id
-                        status=TaskStatus.CANCELLED,
-                        platform=task.platform,
-                        started_at=started_at,
-                        finished_at=datetime.now(),
-                        actions=actions_results,
-                        error="Task cancelled by user",
-                    )
+                logger.info(f"Task cancelled at action {i}: task_id={task.task_id}")
+                return TaskResult(
+                    task_id=task.task_id,
+                    request_id=request_id,
+                    status=TaskStatus.CANCELLED,
+                    platform=task.platform,
+                    started_at=started_at,
+                    finished_at=datetime.now(),
+                    actions=actions_results,
+                    error="Task cancelled by user",
+                )
 
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning(f"Task timeout before action {i}: task_id={task.task_id}")
+                return TaskResult(
+                    task_id=task.task_id,
+                    request_id=request_id,
+                    status=TaskStatus.TIMEOUT,
+                    platform=task.platform,
+                    started_at=started_at,
+                    finished_at=datetime.now(),
+                    actions=actions_results,
+                    error=f"Task timeout after {timeout_ms}ms",
+                )
             result = manager.execute_action(context, action)
             result.number = i
             result.request_id = request_id  # 填充 request_id
             actions_results.append(result)
+
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning(f"Task timeout after action {i}: task_id={task.task_id}")
+                return TaskResult(
+                    task_id=task.task_id,
+                    request_id=request_id,
+                    status=TaskStatus.TIMEOUT,
+                    platform=task.platform,
+                    started_at=started_at,
+                    finished_at=datetime.now(),
+                    actions=actions_results,
+                    error=f"Task timeout after {timeout_ms}ms",
+                )
+
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"Task cancelled after action {i}: task_id={task.task_id}")
+                return TaskResult(
+                    task_id=task.task_id,
+                    request_id=request_id,
+                    status=TaskStatus.CANCELLED,
+                    platform=task.platform,
+                    started_at=started_at,
+                    finished_at=datetime.now(),
+                    actions=actions_results,
+                    error="Task cancelled by user",
+                )
 
             # 如果动作返回了新的 context（如 start_app），更新后续动作使用的 context
             if result.context is not None:
@@ -1462,14 +1506,16 @@ class Worker:
             self.task_store.remove(task_id)
             return True, f"Task already {entry.status.value}, removed from store"
 
-        # 设置取消标志
+        # 设置取消标志。执行线程仍存活时不能立即移除 TaskStore，
+        # 否则 busy 索引会先清掉，而 scheduler 锁仍由执行线程持有。
         entry.cancel_event.set()
-        entry.status = TaskStatus.CANCELLED
 
-        # 等待线程结束（最多等待 5 秒）
+        # 等待线程结束（最多等待 5 秒）。
         if entry.thread and entry.thread.is_alive():
             entry.thread.join(timeout=5.0)
-
+            if entry.thread.is_alive():
+                logger.warning(f"Task cancellation requested but still stopping: task_id={task_id}")
+                return True, "Task cancellation requested; task is still stopping"
         # 删除任务
         self.task_store.remove(task_id)
 

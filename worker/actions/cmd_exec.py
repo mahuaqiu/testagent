@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import Optional, TYPE_CHECKING
 
-from common.utils import run_cmd
+from common.utils import run_cmd_with_process_tree_timeout
 from worker.tools import get_tools_dir
 from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
@@ -54,7 +54,7 @@ class CmdExecAction(BaseActionExecutor):
         def _run():
             timeout_sec = (action.timeout or 30000) / 1000
             try:
-                result = run_cmd(cmd, shell=True, timeout=timeout_sec)
+                result = run_cmd_with_process_tree_timeout(cmd, shell=True, timeout=timeout_sec)
                 status = "success" if result.returncode == 0 else "failed"
                 logger.info(f"[background] Command finished: exit_code={result.returncode}, status={status}")
                 if result.stdout:
@@ -90,7 +90,7 @@ class CmdExecAction(BaseActionExecutor):
         logger.info(f"Executing command: {cmd}")
 
         try:
-            result = run_cmd(
+            result = run_cmd_with_process_tree_timeout(
                 cmd,
                 shell=True,
                 timeout=timeout_sec,
