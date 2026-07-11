@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::io::{stderr, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// 全局推流模式标志：当为 true 时，禁用 stderr 调试日志，避免污染帧流
 static PUSH_MODE_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -335,18 +336,61 @@ impl SessionHandle {
             }
         }
 
+        // 先启动本轮采集并等待一张新鲜屏幕帧，再创建编码器。
+        // 这样真实帧可以在启动阶段预热 MFT，避免黑帧残留顶到客户端。
+        let (frame_hub, first_frame_seq) = {
+            let mut state = self
+                .inner
+                .lock()
+                .map_err(|_| "session mutex poisoned".to_string())?;
+            let baseline = state
+                .frame_hub
+                .latest()
+                .map(|frame| frame.seq)
+                .unwrap_or(0);
+            state.frame_hub.clear_latest();
+            state.active_fps = state.active_fps.max(fps);
+            state.capture_target_fps.store(
+                state.active_fps.max(state.idle_fps).max(1),
+                Ordering::Relaxed,
+            );
+            (state.frame_hub.clone(), baseline)
+        };
+        self.ensure_capture_thread_running()?;
+        let first_frame = match frame_hub.wait_newer_than(first_frame_seq, Duration::from_secs(2)) {
+            Some(frame) => frame,
+            None => {
+                self.stop_capture_if_unused();
+                return Err("等待首帧屏幕采集超时".to_string());
+            }
+        };
+
         debug_eprintln!("[windows-sidecar] === start_streaming CALLING EncodingContext::new ===");
 
         // 创建编码器
-        let encoder = match EncodingContext::new(fps, bitrate, monitor, profile) {
+        let mut encoder = match EncodingContext::new(fps, bitrate, monitor, profile) {
             Ok(e) => e,
             Err(e) => {
+                self.stop_capture_if_unused();
                 debug_eprintln!("[windows-sidecar] EncodingContext::new error: {}", e);
                 return Err(e.to_string());
             }
         };
 
         debug_eprintln!("[windows-sidecar] === start_streaming EncodingContext::new SUCCESS ===");
+
+        // 用真实屏幕帧消化黑帧暖机残留，返回真实 IDR 作为 binary 首包。
+        let initial_frames = match encoder.prime_with_frame_data(&first_frame.bgra) {
+            Ok(frames) => frames,
+            Err(error) => {
+                self.stop_capture_if_unused();
+                return Err(format!("真实帧预热编码器失败: {error}"));
+            }
+        };
+        debug_eprintln!(
+            "[windows-sidecar] real-frame warmup completed: has_initial_keyframe={}",
+            initial_frames.is_some()
+        );
 
         // 获取 SPS/PPS
         let (sps, pps) = encoder.get_sps_pps().unwrap_or((Vec::new(), Vec::new()));
@@ -395,9 +439,10 @@ impl SessionHandle {
             frame_hub,
             fps,
             encoder,
-            stream_queue,
+            if binary { None } else { Some(stream_queue) },
             push_enabled,
             binary_sender,
+            initial_frames,
         )?;
 
         let mut state = self.inner.lock().map_err(|e| {

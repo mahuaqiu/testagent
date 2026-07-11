@@ -92,7 +92,7 @@ class WorkerConfig:
     websocket_streaming_fps: int = 10  # 推流帧率
     websocket_streaming_codec: str = "jpeg"  # 默认编码格式
     websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
-    websocket_streaming_profile: int = 100  # H.264 profile: 66=Baseline, 77=Main, 100=High
+    websocket_streaming_profile: int = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
     # 配置版本号
     config_version: str | None = None
@@ -163,7 +163,7 @@ class WorkerConfig:
             websocket_streaming_fps=websocket_cfg.get("streaming_fps", 10),
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
             websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
-            websocket_streaming_profile=websocket_cfg.get("streaming_profile", 100),
+            websocket_streaming_profile=websocket_cfg.get("streaming_profile", 66),
         )
 
     def get_platform_config(self, platform: str) -> dict[str, Any]:

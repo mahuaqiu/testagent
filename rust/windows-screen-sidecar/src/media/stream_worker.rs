@@ -9,13 +9,10 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::win_recorder::{EncodedFrame, EncodingContext, FrameType};
 
-use super::{
-    packet_from_encoded_frames, BinaryMediaOutputSender, CapturedFrame, FrameHub,
-};
+use super::{packet_from_encoded_frames, BinaryMediaOutputSender, CapturedFrame, FrameHub};
 
-/// 暖管阶段的黑帧 IDR 通常只有几 KB，真屏 IDR 通常明显更大。
-/// 该阈值只用于兼容当前 Windows H.264 MFT 的暖管残留，不参与录制时间轴。
-const REAL_IDR_MIN_BYTES: usize = 30_000;
+/// 编码器启动阶段不再注入黑帧，首个 IDR 即可作为真实画面起点。
+
 
 #[derive(Debug, Default)]
 struct PushWarmupGate {
@@ -23,11 +20,11 @@ struct PushWarmupGate {
 }
 
 impl PushWarmupGate {
-    fn should_push(&mut self, frame_type: &FrameType, data_len: usize) -> bool {
+    fn should_push(&mut self, frame_type: &FrameType, _data_len: usize) -> bool {
         if self.real_idr_seen {
             return true;
         }
-        if matches!(frame_type, FrameType::IDR) && data_len >= REAL_IDR_MIN_BYTES {
+        if matches!(frame_type, FrameType::IDR) {
             self.real_idr_seen = true;
             return true;
         }
@@ -56,9 +53,10 @@ impl StreamWorkerHandle {
         frame_hub: Arc<FrameHub>,
         fps: u32,
         mut encoder: EncodingContext,
-        stream_queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        stream_queue: Option<Arc<Mutex<VecDeque<Vec<u8>>>>>,
         push_enabled: Arc<AtomicBool>,
         binary_sender: Option<BinaryMediaOutputSender>,
+        initial_frames: Option<Vec<EncodedFrame>>,
     ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -73,8 +71,68 @@ impl StreamWorkerHandle {
                 let mut packet_sequence = 0_u64;
                 let mut last_frame: Option<Arc<CapturedFrame>> = None;
                 let mut push_warmup_gate = PushWarmupGate::default();
+                let stream_started = Instant::now();
+                let mut diagnostic_started = Instant::now();
+                let mut diagnostic_packets = 0_u64;
+                let mut diagnostic_bytes = 0_usize;
+
+                // 真实屏幕帧已在启动阶段预热到 MFT，优先作为首个媒体包发送。
+                // 这会消化黑帧暖机残留，避免客户端等待下一个 GOP。
+                if let Some(frames) = initial_frames {
+                    if let Some(packet) = build_binary_packet(
+                        &frames,
+                        0,
+                        fps,
+                        encoder.width(),
+                        encoder.height(),
+                        &mut packet_sequence,
+                    ) {
+                        let encoded_packet = packet.encode()?;
+                        if let Some(sender) = &binary_sender {
+                            sender.send(encoded_packet);
+                        } else if let Some(stream_queue) = &stream_queue {
+                            if let Ok(mut queue) = stream_queue.lock() {
+                                if queue.len() >= 16 {
+                                    queue.pop_front();
+                                }
+                                queue.push_back(assemble_packet(&frames));
+                            }
+                        }
+                        if push_enabled.load(Ordering::Relaxed) {
+                            let mut gate = PushWarmupGate::default();
+                            for encoded in &frames {
+                                let is_config = matches!(encoded.frame_type, FrameType::SPS | FrameType::PPS);
+                                if is_config || gate.should_push(&encoded.frame_type, encoded.data.len()) {
+                                    push_frame_to_stderr(
+                                        frame_type_to_u8(&encoded.frame_type),
+                                        &encoded.data,
+                                    );
+                                    stats.pushed_nals = stats.pushed_nals.saturating_add(1);
+                                }
+                            }
+                        }
+                        stats.encoded_frames = stats.encoded_frames.saturating_add(1);
+                    }
+                }
+                tick_sequence = 1;
+                next_tick = Instant::now();
 
                 while !stop_thread.load(Ordering::Relaxed) {
+
+                    let now = Instant::now();
+                    if now < next_tick {
+                        thread::sleep(next_tick.duration_since(now));
+                    }
+                    let now = Instant::now();
+                    let late_ticks = now
+                        .saturating_duration_since(next_tick)
+                        .as_nanos()
+                        .checked_div(interval.as_nanos().max(1))
+                        .unwrap_or(0) as u64;
+                    stats.dropped_late_ticks = stats.dropped_late_ticks.saturating_add(late_ticks);
+                    next_tick += interval.saturating_mul(late_ticks.saturating_add(1) as u32);
+                    let tick_index = tick_sequence;
+                    // 先等到本次编码 tick，再读取最新帧，避免提前拿到旧帧后继续等待。
                     let frame = match frame_hub.latest() {
                         Some(frame) => {
                             if frame.seq == last_seq {
@@ -94,19 +152,6 @@ impl StreamWorkerHandle {
                         },
                     };
 
-                    let now = Instant::now();
-                    if now < next_tick {
-                        thread::sleep(next_tick.duration_since(now));
-                    }
-                    let now = Instant::now();
-                    let late_ticks = now
-                        .saturating_duration_since(next_tick)
-                        .as_nanos()
-                        .checked_div(interval.as_nanos().max(1))
-                        .unwrap_or(0) as u64;
-                    stats.dropped_late_ticks = stats.dropped_late_ticks.saturating_add(late_ticks);
-                    next_tick += interval.saturating_mul(late_ticks.saturating_add(1) as u32);
-                    let tick_index = tick_sequence;
                     tick_sequence = tick_sequence.saturating_add(1);
 
                     let started = Instant::now();
@@ -117,13 +162,30 @@ impl StreamWorkerHandle {
                     let Some(frames) = frames else { continue };
                     stats.encoded_frames = stats.encoded_frames.saturating_add(1);
 
-                    let combined = assemble_packet(&frames);
-                    if let Ok(mut queue) = stream_queue.lock() {
-                        if queue.len() >= 16 {
-                            queue.pop_front();
+                    let encoded_bytes = frames.iter().map(|item| item.data.len()).sum::<usize>();
+                    let has_idr = frames.iter().any(|item| matches!(item.frame_type, FrameType::IDR));
+                    let has_config = frames.iter().any(|item| matches!(item.frame_type, FrameType::SPS | FrameType::PPS));
+                    diagnostic_packets = diagnostic_packets.saturating_add(1);
+                    diagnostic_bytes = diagnostic_bytes.saturating_add(encoded_bytes);
+                    if stats.encoded_frames <= 15 || has_idr {
+                        let capture_age_ms = crate::capture::current_timestamp_ms().saturating_sub((frame.capture_pts_100ns.max(0) / 10_000) as u128);
+                        eprintln!("[stream-diag] encoder packet frame_seq={} tick={} packet_seq={} elapsed_ms={} encode_ms={} capture_age_ms={} bytes={} idr={} config={} duplicated_ticks={} dropped_late_ticks={}", frame.seq, tick_index, packet_sequence, stream_started.elapsed().as_millis(), stats.last_encode_ms, capture_age_ms, encoded_bytes, has_idr, has_config, stats.duplicated_ticks, stats.dropped_late_ticks);
+                    }
+                    if diagnostic_started.elapsed() >= Duration::from_secs(1) {
+                        eprintln!("[stream-diag] encoder summary elapsed_ms={} packets={} bytes={} last_frame_seq={} next_packet_seq={} encode_ms={} duplicated_ticks={} dropped_late_ticks={}", stream_started.elapsed().as_millis(), diagnostic_packets, diagnostic_bytes, frame.seq, packet_sequence, stats.last_encode_ms, stats.duplicated_ticks, stats.dropped_late_ticks);
+                        diagnostic_started = Instant::now();
+                        diagnostic_packets = 0;
+                        diagnostic_bytes = 0;
+                    }
+                    if let Some(stream_queue) = &stream_queue {
+                        let combined = assemble_packet(&frames);
+                        if let Ok(mut queue) = stream_queue.lock() {
+                            if queue.len() >= 16 {
+                                queue.pop_front();
+                            }
+                            queue.push_back(combined);
+                            stats.queued_packets = stats.queued_packets.saturating_add(1);
                         }
-                        queue.push_back(combined);
-                        stats.queued_packets = stats.queued_packets.saturating_add(1);
                     }
 
                     if let Some(sender) = &binary_sender {
@@ -228,7 +290,7 @@ pub fn push_frame_to_stderr(frame_type: u8, data: &[u8]) {
     let _ = output.flush();
 }
 
-    fn frame_type_to_u8(frame_type: &FrameType) -> u8 {
+fn frame_type_to_u8(frame_type: &FrameType) -> u8 {
     match frame_type {
         FrameType::SPS => 0,
         FrameType::PPS => 1,
@@ -267,17 +329,17 @@ mod tests {
     fn warmup_gate_discards_black_idr_and_pre_idr_frames() {
         let mut gate = PushWarmupGate::default();
 
-        assert!(!gate.should_push(&FrameType::IDR, REAL_IDR_MIN_BYTES - 1));
-        assert!(!gate.should_push(&FrameType::PFrame, 4_000));
-        assert!(!gate.should_push(&FrameType::SPS, 32));
-        assert!(!gate.should_push(&FrameType::PPS, 16));
+        assert!(gate.should_push(&FrameType::IDR, 6_176));
+        assert!(gate.should_push(&FrameType::PFrame, 4_000));
+        assert!(gate.should_push(&FrameType::SPS, 32));
+        assert!(gate.should_push(&FrameType::PPS, 16));
     }
 
     #[test]
     fn warmup_gate_opens_on_real_idr_and_keeps_following_nals() {
         let mut gate = PushWarmupGate::default();
 
-        assert!(gate.should_push(&FrameType::IDR, REAL_IDR_MIN_BYTES));
+        assert!(gate.should_push(&FrameType::IDR, 6_176));
         assert!(gate.should_push(&FrameType::PFrame, 100));
         assert!(gate.should_push(&FrameType::SPS, 32));
     }
@@ -310,28 +372,14 @@ mod tests {
         assert!(build_binary_packet(&[], 0, 30, 1920, 1080, &mut next_sequence).is_none());
         assert_eq!(next_sequence, 0);
 
-        let first = build_binary_packet(
-            &frames,
-            1,
-            30,
-            1920,
-            1080,
-            &mut next_sequence,
-        )
-        .expect("first encoded tick should produce a packet");
+        let first = build_binary_packet(&frames, 1, 30, 1920, 1080, &mut next_sequence)
+            .expect("first encoded tick should produce a packet");
         assert_eq!(first.sequence, 0);
         assert_eq!(first.pts_100ns, 333_333);
         assert_eq!(next_sequence, 1);
 
-        let second = build_binary_packet(
-            &frames,
-            4,
-            30,
-            1920,
-            1080,
-            &mut next_sequence,
-        )
-        .expect("later encoded tick should produce a packet");
+        let second = build_binary_packet(&frames, 4, 30, 1920, 1080, &mut next_sequence)
+            .expect("later encoded tick should produce a packet");
         assert_eq!(second.sequence, 1);
         assert_eq!(second.pts_100ns, 1_333_333);
         assert_eq!(next_sequence, 2);

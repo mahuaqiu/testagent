@@ -391,7 +391,7 @@ class ScreenManager:
         self,
         codec: str = "jpeg",
         bitrate: int = 4_000_000,
-        profile: int = 100,
+        profile: int = 66,
     ) -> "WebSocketStreamer":
         """启动 WebSocket 推流。
 

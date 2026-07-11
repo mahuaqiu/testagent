@@ -9,6 +9,7 @@ import logging
 import shutil
 import socket
 import struct
+import time
 import subprocess
 import threading
 from urllib.parse import urlparse
@@ -370,7 +371,7 @@ class WindowsSidecarStreamer:
         codec: str,
         fps: int,
         bitrate: int = 4_000_000,
-        profile: int = 100,
+        profile: int = 66,
         binary: bool = False,
     ):
         self._client = client
@@ -515,6 +516,8 @@ class MediaPacketReader:
         self._endpoint = (parsed.hostname, parsed.port)
         self._buffer = bytearray()
         self._socket = sock or self._connect()
+        self._connected_monotonic = time.monotonic()
+        self._packet_count = 0
 
     def _connect(self) -> socket.socket:
         """建立一个新的 TCP 媒体连接。"""
@@ -525,6 +528,8 @@ class MediaPacketReader:
         self.close()
         self._buffer.clear()
         self._socket = self._connect()
+        self._connected_monotonic = time.monotonic()
+        self._packet_count = 0
 
     def close(self) -> None:
         try:
@@ -540,6 +545,7 @@ class MediaPacketReader:
             self._buffer.extend(chunk)
 
     def read_packet(self) -> dict[str, Any]:
+        read_started = time.monotonic()
         self._recv_exact(self.HEADER.size)
         header = bytes(self._buffer[: self.HEADER.size])
         (
@@ -565,6 +571,8 @@ class MediaPacketReader:
         self._recv_exact(packet_length)
         payload = bytes(self._buffer[self.HEADER.size : packet_length])
         del self._buffer[:packet_length]
+        received_monotonic = time.monotonic()
+        self._packet_count += 1
         return {
             "sequence": sequence,
             "pts_100ns": pts_100ns,
@@ -574,6 +582,11 @@ class MediaPacketReader:
             "flags": flags,
             "message_type": message_type,
             "payload": payload,
+            "_received_monotonic": received_monotonic,
+            "_read_ms": (received_monotonic - read_started) * 1000,
+            "_connected_ms": (received_monotonic - self._connected_monotonic) * 1000,
+            "_packet_count": self._packet_count,
+            "_buffered_bytes": len(self._buffer),
         }
 
 
@@ -843,7 +856,7 @@ class WindowsSidecarScreenManager:
         self,
         codec: str = "jpeg",
         bitrate: int = 4_000_000,
-        profile: int = 100,
+        profile: int = 66,
         binary: bool = False,
     ) -> WindowsSidecarStreamer:
         if self._streamer and (

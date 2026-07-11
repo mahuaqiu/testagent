@@ -56,7 +56,7 @@ DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
 DEFAULT_WS_STREAMING_FPS = 10
 DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
-DEFAULT_WS_STREAMING_PROFILE = 100  # H.264 profile: 66=Baseline, 77=Main, 100=High
+DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -1016,15 +1016,40 @@ async def screen_stream(
         # Windows H.264 推流使用推模式
         if platform == "windows" and codec == "h264" and streamer.uses_binary_media:
             logger.info("screen_stream: 使用 Windows RSM1 二进制媒体通道, conn_key=%s", conn_key)
+            import time as _stream_diag_time
+            _diag_started = _stream_diag_time.monotonic()
+            _diag_window_started = _diag_started
+            _diag_packets = 0
+            _diag_bytes = 0
+            _diag_max_send_ms = 0.0
+            _diag_last_sequence = None
             try:
                 while streamer.is_running():
                     packet = await streamer.get_media_packet_async()
                     if not packet:
                         continue
-                    await asyncio.wait_for(
-                        websocket.send_bytes(media_packet_to_websocket_frame(packet)),
-                        timeout=send_timeout,
-                    )
+                    _send_started = _stream_diag_time.monotonic()
+                    _frame = media_packet_to_websocket_frame(packet)
+                    await asyncio.wait_for(websocket.send_bytes(_frame), timeout=send_timeout)
+                    _sent_at = _stream_diag_time.monotonic()
+                    _send_ms = (_sent_at - _send_started) * 1000
+                    _diag_packets += 1
+                    _diag_bytes += len(_frame)
+                    _diag_max_send_ms = max(_diag_max_send_ms, _send_ms)
+                    _sequence = int(packet.get("sequence", -1))
+                    _flags = int(packet.get("flags", 0))
+                    _gap = 0 if _diag_last_sequence is None else _sequence - _diag_last_sequence
+                    _diag_last_sequence = _sequence
+                    if packet.get("_packet_count", 0) <= 15 or (_flags & 0x01):
+                        logger.info("[stream-diag] websocket packet conn_key=%s sequence=%d gap=%d pts_100ns=%s flags=%d bytes=%d reader_count=%s connected_ms=%.1f read_ms=%.1f buffered_bytes=%s send_ms=%.1f relay_ms=%.1f elapsed_ms=%.1f", conn_key, _sequence, _gap, packet.get("pts_100ns"), _flags, len(_frame), packet.get("_packet_count"), packet.get("_connected_ms", 0.0), packet.get("_read_ms", 0.0), packet.get("_buffered_bytes"), _send_ms, (_sent_at - packet.get("_received_monotonic", _sent_at)) * 1000, (_sent_at - _diag_started) * 1000)
+                    if _send_ms >= 50:
+                        logger.warning("[stream-diag] websocket slow send conn_key=%s sequence=%d send_ms=%.1f bytes=%d", conn_key, _sequence, _send_ms, len(_frame))
+                    if _sent_at - _diag_window_started >= 1.0:
+                        logger.info("[stream-diag] websocket summary conn_key=%s packets=%d bytes=%d last_sequence=%d max_send_ms=%.1f elapsed_ms=%.1f", conn_key, _diag_packets, _diag_bytes, _sequence, _diag_max_send_ms, (_sent_at - _diag_started) * 1000)
+                        _diag_window_started = _sent_at
+                        _diag_packets = 0
+                        _diag_bytes = 0
+                        _diag_max_send_ms = 0.0
             finally:
                 streamer.stop()
         elif platform == "windows" and codec == "h264" and streamer.codec == "h264":

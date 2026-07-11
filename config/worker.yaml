@@ -289,4 +289,4 @@ websocket_streaming:
                                   # codec 实际由 server.py 基于 WebSocket query 参数 codec 决定（实测 ?codec=h264）；
                                   # 此默认值仅影响无 query 时的兜底，不与 H.264 推流优化冲突
   streaming_bitrate: 4000000     # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
-  streaming_profile: 100         # H.264 profile: 66=Baseline, 77=Main, 100=High
+  streaming_profile: 66          # H.264 profile: 66=Baseline, 77=Main, 100=High

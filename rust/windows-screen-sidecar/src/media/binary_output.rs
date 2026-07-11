@@ -8,20 +8,28 @@ use std::time::Duration;
 
 use super::packet::{MediaPacket, FLAG_CONFIG, FLAG_KEYFRAME};
 
-const QUEUE_CAPACITY: usize = 32;
+const QUEUE_CAPACITY: usize = 8;
+#[cfg(test)]
+const REAL_IDR_MIN_BYTES: usize = 30_000;
+
+struct BinaryQueue {
+    packets: VecDeque<Vec<u8>>,
+    needs_keyframe: bool,
+}
 
 #[derive(Clone)]
 pub struct BinaryMediaOutputSender {
-    queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    queue: Arc<Mutex<BinaryQueue>>,
 }
 
 impl BinaryMediaOutputSender {
     pub fn send(&self, packet: Vec<u8>) {
         if let Ok(mut queue) = self.queue.lock() {
-            if queue.len() >= QUEUE_CAPACITY {
-                queue.pop_front();
+            if queue.packets.len() >= QUEUE_CAPACITY {
+                queue.packets.clear();
+                queue.needs_keyframe = true;
             }
-            queue.push_back(packet);
+            queue.packets.push_back(packet);
         }
     }
 }
@@ -45,7 +53,10 @@ impl BinaryMediaOutput {
             .map(|address| format!("tcp://{address}"))
             .map_err(|e| format!("读取二进制媒体端点失败: {e}"))?;
 
-        let queue = Arc::new(Mutex::new(VecDeque::with_capacity(QUEUE_CAPACITY)));
+        let queue = Arc::new(Mutex::new(BinaryQueue {
+            packets: VecDeque::with_capacity(QUEUE_CAPACITY),
+            needs_keyframe: false,
+        }));
         let sender = BinaryMediaOutputSender {
             queue: queue.clone(),
         };
@@ -84,7 +95,7 @@ impl Drop for BinaryMediaOutput {
 
 fn run_output_loop(
     listener: TcpListener,
-    queue: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    queue: Arc<Mutex<BinaryQueue>>,
     stop: Arc<AtomicBool>,
 ) {
     let mut client: Option<TcpStream> = None;
@@ -105,10 +116,21 @@ fn run_output_loop(
             }
         }
 
-        let packet = queue
+        let (packet, reset_gate) = queue
             .lock()
             .ok()
-            .and_then(|mut pending| client.as_ref().and_then(|_| pending.pop_front()));
+            .and_then(|mut pending| {
+                if client.is_none() {
+                    return None;
+                }
+                let reset_gate = pending.needs_keyframe;
+                pending.needs_keyframe = false;
+                Some((pending.packets.pop_front(), reset_gate))
+            })
+            .unwrap_or((None, false));
+        if reset_gate {
+            keyframe_gate = InitialKeyframeGate::default();
+        }
         let Some(packet) = packet else {
             thread::sleep(Duration::from_millis(2));
             continue;
@@ -153,7 +175,7 @@ impl InitialKeyframeGate {
 
         if !is_keyframe {
             if has_config {
-                self.pending_config = Some(packet.to_vec());
+                self.pending_config = config_packet(&decoded);
             }
             return Vec::new();
         }
@@ -172,6 +194,52 @@ impl InitialKeyframeGate {
     }
 }
 
+fn config_packet(packet: &MediaPacket) -> Option<Vec<u8>> {
+    let payload = extract_config_nals(&packet.payload)?;
+    let mut config = packet.clone();
+    config.flags = FLAG_CONFIG;
+    config.payload = payload;
+    config.encode().ok()
+}
+
+fn extract_config_nals(payload: &[u8]) -> Option<Vec<u8>> {
+    let mut config = Vec::new();
+    let mut offset = 0;
+    while let Some((start, nal_start)) = next_annex_b_nal(payload, offset) {
+        let nal_end = next_annex_b_start_code(payload, nal_start).unwrap_or(payload.len());
+        if nal_start < nal_end {
+            let nal_type = payload[nal_start] & 0x1f;
+            if nal_type == 7 || nal_type == 8 {
+                config.extend_from_slice(&payload[start..nal_end]);
+            }
+        }
+        offset = nal_end;
+    }
+    (!config.is_empty()).then_some(config)
+}
+
+fn next_annex_b_nal(payload: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let (start, start_code_len) = next_annex_b_start_code_with_len(payload, offset)?;
+    Some((start, start + start_code_len))
+}
+
+fn next_annex_b_start_code(payload: &[u8], offset: usize) -> Option<usize> {
+    next_annex_b_start_code_with_len(payload, offset).map(|(start, _)| start)
+}
+
+fn next_annex_b_start_code_with_len(payload: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let mut index = offset;
+    while index + 3 < payload.len() {
+        if payload[index..index + 4] == [0, 0, 0, 1] {
+            return Some((index, 4));
+        }
+        if payload[index..index + 3] == [0, 0, 1] {
+            return Some((index, 3));
+        }
+        index += 1;
+    }
+    None
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,17 +272,27 @@ mod tests {
         client
             .read_exact(&mut received)
             .expect("queued packet should be delivered after connect");
-        assert_eq!(received[44], b'i');
+        assert_eq!(&received[..4], b"RSM1");
     }
 
     fn test_packet(flags: u16, payload: u8) -> Vec<u8> {
-        let mut packet = vec![0_u8; 44];
-        packet[..4].copy_from_slice(b"RSM1");
-        packet[4] = 1;
-        packet[6..8].copy_from_slice(&flags.to_le_bytes());
-        packet[40..44].copy_from_slice(&1_u32.to_le_bytes());
-        packet.push(payload);
-        packet
+        let payload = if flags & FLAG_KEYFRAME != 0 {
+            let mut payload_data = Vec::new();
+            if flags & FLAG_CONFIG != 0 {
+                payload_data.extend_from_slice(&[0, 0, 0, 1, 7, b'c']);
+                payload_data.extend_from_slice(&[0, 0, 0, 1, 8, b'c']);
+            }
+            payload_data.extend_from_slice(&[0, 0, 0, 1, 5]);
+            payload_data.extend(std::iter::repeat(payload).take(REAL_IDR_MIN_BYTES));
+            payload_data
+        } else if flags & FLAG_CONFIG != 0 {
+            vec![0, 0, 0, 1, 7, payload, 0, 0, 0, 1, 8, payload]
+        } else {
+            vec![payload]
+        };
+        MediaPacket::new_nal(flags, 1, 0, 333_333, 1920, 1080, payload)
+            .encode()
+            .expect("test packet should encode")
     }
 
     #[test]
@@ -226,9 +304,34 @@ mod tests {
 
         let recovered = gate.accept(&test_packet(FLAG_KEYFRAME, b'i'));
         assert_eq!(recovered.len(), 2);
-        assert_eq!(recovered[0][44], b'c');
-        assert_eq!(recovered[1][44], b'i');
+        let config = MediaPacket::decode(&recovered[0]).expect("config packet should decode");
+        let keyframe = MediaPacket::decode(&recovered[1]).expect("keyframe packet should decode");
+        assert_eq!(config.flags, FLAG_CONFIG);
+        assert_eq!(config.payload, vec![0, 0, 0, 1, 7, b'c', 0, 0, 0, 1, 8, b'c']);
+        assert!(keyframe.flags & FLAG_KEYFRAME != 0);
+        assert_eq!(keyframe.payload[4], 5);
         assert_eq!(gate.accept(&test_packet(0, b'p')).len(), 1);
+    }
+
+    #[test]
+    fn small_keyframe_is_accepted_without_size_heuristic() {
+        let mut gate = InitialKeyframeGate::default();
+        let packet = MediaPacket::new_nal(
+            FLAG_KEYFRAME,
+            1,
+            0,
+            333_333,
+            1920,
+            1080,
+            vec![0, 0, 0, 1, 5, b'k'],
+        )
+.encode()
+.expect("small keyframe should encode");
+
+        let recovered = gate.accept(&packet);
+        assert_eq!(recovered.len(), 1);
+        let decoded = MediaPacket::decode(&recovered[0]).expect("keyframe should decode");
+        assert!(decoded.flags & FLAG_KEYFRAME != 0);
     }
 
     #[test]
@@ -239,6 +342,8 @@ mod tests {
         let recovered = gate.accept(&test_packet(FLAG_CONFIG | FLAG_KEYFRAME, b'i'));
 
         assert_eq!(recovered.len(), 1);
-        assert_eq!(recovered[0][44], b'i');
+        let keyframe = MediaPacket::decode(&recovered[0]).expect("keyframe packet should decode");
+        assert!(keyframe.flags & FLAG_KEYFRAME != 0);
+        assert!(keyframe.flags & FLAG_CONFIG != 0);
     }
 }

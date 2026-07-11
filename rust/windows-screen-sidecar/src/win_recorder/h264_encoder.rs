@@ -19,7 +19,7 @@ use crate::win_recorder::error::RecorderError;
 use crate::win_recorder::memory_byte_stream::{extract_nal_units, get_nal_type};
 use std::mem::ManuallyDrop;
 use std::ptr;
-use windows::core::GUID;
+use windows::core::{Interface, GUID};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::*;
@@ -99,10 +99,13 @@ pub struct H264Encoder {
     pps: Vec<u8>,
     encoder_input_id: u32,
     encoder_output_id: u32,
+    output_sample_diagnostics: usize,
     /// IDR 关键帧间隔（帧数），0 表示不强制 IDR
     idr_interval: u32,
     /// 编码器类型
     encoder_type: EncoderType,
+    /// 是否启用推流低延迟配置
+    low_latency: bool,
 }
 
 unsafe impl Send for H264Encoder {}
@@ -146,8 +149,10 @@ impl H264Encoder {
             pps: Vec::new(),
             encoder_input_id: 0,
             encoder_output_id: 0,
+            output_sample_diagnostics: 0,
             idr_interval: 30, // 默认每 30 帧产生一个 IDR 关键帧
             encoder_type: EncoderType::Unknown,
+            low_latency: false,
         })
     }
 
@@ -183,11 +188,7 @@ impl H264Encoder {
 
             self.initialized = true;
 
-            // 送入一帧黑帧，触发编码器生成 SPS/PPS（裸 MFT 在 ProcessInput
-            // 之后才会在输出属性中暴露 MPEG_SEQUENCE_HEADER）。
-            // 这帧的 IDR 也会被丢弃，因为 start() 之前还没人接收初始码流，
-            // 但 SPS/PPS 会保留下来，供后续 encode_frame 使用。
-            self.prime_encoder_with_black_frame()?;
+            // 不送入黑帧：调用方会在获得真实屏幕帧后，通过 prime_with_frame_data 预热 MFT。
 
             // 现在可以从输出属性中提取 SPS/PPS
             self.extract_sps_pps_from_attributes()?;
@@ -315,102 +316,32 @@ impl H264Encoder {
         }
     }
 
-    /// 送入多帧黑帧暖管 MFT，使编码器预先进入"满载平衡态"，并提取 SPS/PPS。
+    /// 使用真实屏幕帧预热 MFT，直到得到真实画面的关键帧。
     ///
-    /// 背景：裸 H.264 MFT 在收到第一帧之前不会在输出属性中暴露 SPS/PPS，
-    /// 且异步流水线存在暖管延迟——空 MFT 需连续送入约 13 帧才有第一帧输出
-    /// （实测探针：in_count=0..12 全 None，in_count=13 才出首帧，1.5s @10fps）。
-    ///
-    /// 旧实现送 1 帧黑帧后就 DRAIN+FLUSH 复位流，把暖管成果全冲掉，
-    /// 导致 capture_loop 第一帧进入的是"全新空 MFT"，须重新暖管 1.5s，
-    /// 这是首帧延迟 ~1.8s 的真实主因。
-    ///
-    /// 新实现：连续送 WARMUP_FRAMES 帧黑帧，边送边 process 取走已就绪输出
-    /// 并丢弃（含黑帧 IDR/P），从输出帧或属性中提取 SPS/PPS。不发 DRAIN、
-    /// 不发 FLUSH——暖管使 MFT 进入"满载平衡态"（输入输出 1:1 的稳态），
-    /// 后续 capture_loop 每帧进 1 帧，立即顶出 1 帧输出，无暖管开销。
-    ///
-    /// 残余：满载态下 MFT 管道内挂着 1 帧未就绪（最后那帧黑帧的输出），
-    /// capture_loop 第一帧真屏进 MFT 时会把它顶出。实测（2026-07-05 复测）证明
-    /// 顶出的不是预想的"1 帧黑屏 P"，而是黑帧 IDR（~6KB）——因为 prime 15 帧黑帧
-    /// 必然产生至少一个黑帧 IDR，且"取空到 dry"取不走管道里那帧未就绪输出。
-    /// 黑帧 IDR 若直接推给 jmuxer 会被锁成黑屏基线，直到真屏 IDR 才覆盖（实测画面
-    /// 真正出现要 2s，比旧版 1.8s 全黑暖管更糟——回归）。
-    ///
-    /// 因此暖管冒出的黑帧序列（IDR + 跟随的 P）不能推给客户端，由 capture_loop
-    /// 推流分支负责丢弃——丢到第一个真屏 IDR（size 远大于黑帧 IDR）才开始推送。
-    /// 详见 session.rs capture_loop 的 `push_skip_until_real_idr` 逻辑。这里 prime
-    /// 本身只负责暖管不冒，保留满载平衡态正确，注释纠正此前"1 帧黑屏 P 可忽略"
-    /// 的错误假设。
-    ///
-    /// SPS/PPS 来源优先级：①输出帧里带的参集（jmuxer 需要）→ 由调用方在
-    /// configure 后的 extract_sps_pps_from_attributes 兜底提取（attribute 在
-    /// ProcessInput 后即暴露，无需 DRAIN）。
-    unsafe fn prime_encoder_with_black_frame(&mut self) -> Result<(), RecorderError> {
-        // 暖管帧数：覆盖实测 13 帧暖管深度 + 余量，确保 MFT 进入满载平衡态。
-        // 送太多浪费启动时间（每帧含 NV12 转换 + BitBlt 黑帧生成），取 15 帧平衡。
-        const WARMUP_FRAMES: u32 = 15;
-
-        let black_nv12 = self.make_black_nv12()?;
-        // 每帧累加 frame_count 以保证 pts 单调（MFT 要求），结束时统一复位 frame_count=0。
-        for _ in 0..WARMUP_FRAMES {
-            // 每帧递增 frame_count 以保证时间戳严格递增（MFT 要求 pts 单调），
-            // prime 结束时下面统一复位 frame_count=0，capture_loop 从 0 重新计时。
-            // create_nv12_sample 用 self.frame_count * frame_duration 算 timestamp，
-            // 故此处手动累加而非在送帧后补加（与 encode_frame_data 末尾的自加语义一致）。
-            let input_sample = self.create_nv12_sample(&black_nv12)?;
-            self.frame_count += 1;
-            {
-                let encoder = self
-                    .h264_encoder
-                    .as_ref()
-                    .ok_or(RecorderError::NotRecording)?;
-                encoder
-                    .ProcessInput(self.encoder_input_id, &input_sample, 0)
-                    .map_err(|e| RecorderError::MFError(format!("暖管 ProcessInput 失败: {}", e)))?;
-            }
-            // 取走本轮已就绪的输出并丢弃；不需要从帧里提 SPS/PPS
-            // （attribute 在 ProcessInput 后即暴露，由外部 extract_sps_pps_from_attributes 负责）。
-            let _ = self.process_encoder_output();
+    /// 黑帧暖机留下的延迟输出全部丢弃；返回的关键帧属于真实屏幕，
+    /// 可由推流层作为首个可解码包发送，避免再等待下一个 GOP。
+    pub fn prime_with_frame_data(
+        &mut self,
+        bgra_data: &[u8],
+    ) -> Result<Option<Vec<EncodedFrame>>, RecorderError> {
+        if !self.initialized {
+            return Err(RecorderError::NotRecording);
         }
 
-        // 取空输出端所有已就绪帧到 dry，丢弃。不发 DRAIN/FLUSH，保留暖管态。
-        // 管道内挂着的最后 1 帧未就绪延迟帧不取（取不出），由 capture_loop 第一帧顶出。
-        let mut dry_count = 0u32;
-        while dry_count < 2 {
-            match self.process_encoder_output() {
-                Ok(frames) => {
-                    dry_count = if frames.is_empty() { dry_count + 1 } else { 0 };
-                }
-                Err(_) => {
-                    dry_count += 1;
-                }
+        const MAX_REAL_PRIME_FRAMES: usize = 20;
+        let mut real_keyframe = None;
+        for _ in 0..MAX_REAL_PRIME_FRAMES {
+            let frames = self.encode_frame_data(bgra_data)?;
+            let has_real_idr = frames
+                .iter()
+                .any(|frame| matches!(frame.frame_type, FrameType::IDR));
+            if has_real_idr {
+                real_keyframe = Some(frames);
+                break;
             }
         }
-
-        // 防御性复位 frame_count。prime 内的黑帧均以 frame_count=0 算时间戳（多帧时间戳全 0，
-        // 对 MFT 暖管无碍——MFT 按 arrival 顺序吞吐，相同 timestamp 不影响暖管与 GOP）。
-        // capture_loop 第一帧真屏也从 frame_count=0 起，timestamp=0，与黑帧时间戳重合但
-        // 黑帧已被丢弃且未外送，无害。
-        self.frame_count = 0;
-
-        Ok(())
+        Ok(real_keyframe)
     }
-
-    /// 生成一帧全黑 NV12 数据（Y 平面全 0 = 黑色，UV 平面填 128 = NV12 中性 UV 值）。
-    /// 逻辑与原 prime_encoder_with_black_frame 内联黑帧生成一致，抽出为辅助方法供冲刷循环复用。
-    fn make_black_nv12(&self) -> Result<Vec<u8>, RecorderError> {
-        let w = self.params.width as usize;
-        let h = self.params.height as usize;
-        let y_size = w * h;
-        let uv_size = w * h / 2;
-        let mut black_nv12 = vec![0u8; y_size + uv_size];
-        for i in y_size..y_size + uv_size {
-            black_nv12[i] = 128;
-        }
-        Ok(black_nv12)
-    }
-
     /// 将实际尺寸的 BGRA 数据补齐到对齐尺寸（不足的行/列填黑色）。
     fn pad_bgra_to_aligned(&self, bgra_data: &[u8]) -> Vec<u8> {
         let in_w = self.input_width as usize;
@@ -488,10 +419,69 @@ impl H264Encoder {
             CoCreateInstance(&CLSID_MSH264_ENCODER_MFT, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| RecorderError::MFError(format!("创建 H264 编码 MFT 失败: {}", e)))?;
 
+        if self.low_latency {
+            self.configure_low_latency(&encoder);
+        }
         // 检测编码器类型
         self.encoder_type = self.detect_encoder_type(&encoder);
 
         Ok(encoder)
+    }
+
+    /// 配置推流编码器的低延迟模式。
+    ///
+    /// 不同 Windows 版本/硬件 MFT 支持的属性不同，因此每项都采用 best effort：
+    /// 属性不支持时回退到 MFT 默认行为，不影响编码器启动。
+    unsafe fn configure_low_latency(&self, encoder: &IMFTransform) {
+        match encoder.cast::<IMFAttributes>() {
+            Ok(attributes) => match attributes.SetUINT32(&MF_LOW_LATENCY, 1) {
+                Ok(()) => eprintln!("[H264Encoder] low-latency IMFAttributes MF_LOW_LATENCY=true"),
+                Err(e) => eprintln!("[H264Encoder] low-latency MF_LOW_LATENCY 设置失败: {}", e),
+            },
+            Err(e) => eprintln!("[H264Encoder] low-latency IMFAttributes cast 失败: {}", e),
+        }
+
+        match encoder.cast::<ICodecAPI>() {
+            Ok(codec_api) => {
+                Self::set_low_latency_codec_value(
+                    &codec_api,
+                    &CODECAPI_AVEncCommonRealTime,
+                    true,
+                    "CODECAPI_AVEncCommonRealTime",
+                );
+                Self::set_low_latency_codec_value(
+                    &codec_api,
+                    &CODECAPI_AVLowLatencyMode,
+                    true,
+                    "CODECAPI_AVLowLatencyMode",
+                );
+                Self::set_low_latency_codec_value(
+                    &codec_api,
+                    &CODECAPI_AVEncMPVDefaultBPictureCount,
+                    0u32,
+                    "CODECAPI_AVEncMPVDefaultBPictureCount",
+                );
+            }
+            Err(e) => eprintln!("[H264Encoder] low-latency ICodecAPI cast 失败: {}", e),
+        }
+    }
+
+    unsafe fn set_low_latency_codec_value<T>(
+        codec_api: &ICodecAPI,
+        property: &GUID,
+        value: T,
+        name: &str,
+    ) where
+        windows::core::VARIANT: From<T>,
+    {
+        let variant = windows::core::VARIANT::from(value);
+        match codec_api.SetValue(
+            property as *const GUID,
+            &variant as *const windows::core::VARIANT,
+        ) {
+            Ok(()) => eprintln!("[H264Encoder] low-latency {} 设置成功", name),
+            Err(e) => eprintln!("[H264Encoder] low-latency {} 设置失败: {}", name, e),
+        }
     }
 
     /// 检测编码器类型（硬件/软件）
@@ -647,7 +637,7 @@ impl H264Encoder {
                 RecorderError::MFError(format!("H264 编码器 BEGIN_STREAMING 失败: {}", e))
             })?;
 
-                Ok(())
+        Ok(())
     }
 
     /// 创建 H264 输出媒体类型
@@ -794,9 +784,9 @@ impl H264Encoder {
         // H.264 MFT 默认设置 MFT_OUTPUT_STREAM_PROVIDES_SAMPLES，
         // 此时调用方必须把 pSample 置为 NULL，由编码器分配输出 sample；
         // 否则编码器不会写入任何数据，表现为 ProcessOutput 返回 NEED_MORE_INPUT。
-        let stream_info = encoder.GetOutputStreamInfo(self.encoder_output_id).map_err(|e| {
-            RecorderError::MFError(format!("GetOutputStreamInfo 失败: {}", e))
-        })?;
+        let stream_info = encoder
+            .GetOutputStreamInfo(self.encoder_output_id)
+            .map_err(|e| RecorderError::MFError(format!("GetOutputStreamInfo 失败: {}", e)))?;
         let provides_samples =
             (stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
 
@@ -843,13 +833,20 @@ impl H264Encoder {
                     // 输出 sample 可能在 pSample 中（无论是否预分配）
                     let out_sample = p_sample.as_ref();
                     if let Some(sample) = out_sample {
+                        let output_sample_time = sample.GetSampleTime().unwrap_or(-1);
+                        let output_sample_duration = sample.GetSampleDuration().unwrap_or(-1);
                         let frame_data = self.extract_sample_data(sample)?;
                         if !frame_data.is_empty() {
+                            let mut nal_types = Vec::new();
+                            let mut has_idr = false;
                             for nal_data in extract_nal_units(&frame_data) {
                                 let mut annex_b = vec![0x00, 0x00, 0x00, 0x01];
                                 annex_b.extend_from_slice(&nal_data);
 
                                 let frame_type = Self::detect_frame_type(&annex_b);
+                                let nal_type = get_nal_type(&annex_b).unwrap_or(0);
+                                nal_types.push(nal_type);
+                                has_idr |= matches!(frame_type, FrameType::IDR);
 
                                 match frame_type {
                                     FrameType::SPS => {
@@ -870,6 +867,26 @@ impl H264Encoder {
                                     data: annex_b,
                                 });
                             }
+                            if self.output_sample_diagnostics < 20 || has_idr {
+                                let input_sample_time =
+                                    self.frame_count as i64 * self.frame_duration;
+                                let output_delay_ms = if output_sample_time >= 0 {
+                                    (input_sample_time - output_sample_time) / 10_000
+                                } else {
+                                    -1
+                                };
+                                eprintln!(
+                                    "[H264Encoder] sample-diag input_frame={} input_time_100ns={} output_time_100ns={} output_duration_100ns={} output_delay_ms={} nal_types={:?}",
+                                    self.frame_count,
+                                    input_sample_time,
+                                    output_sample_time,
+                                    output_sample_duration,
+                                    output_delay_ms,
+                                    nal_types
+                                );
+                            }
+                            self.output_sample_diagnostics =
+                                self.output_sample_diagnostics.saturating_add(1);
                         }
                     }
                     // 释放 sample
@@ -1006,8 +1023,9 @@ impl H264Encoder {
         }
 
         // 检查是否是 ANNEX-B 格式（以 0x00000001 或 0x000001 开头）
-        let is_annex_b = (data.len() >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
-            || (data.len() >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1);
+        let is_annex_b =
+            (data.len() >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1)
+                || (data.len() >= 3 && data[0] == 0 && data[1] == 0 && data[2] == 1);
 
         if is_annex_b {
             self.parse_annex_b_header(data);
@@ -1046,7 +1064,9 @@ impl H264Encoder {
             while end + 2 <= data.len() {
                 // 检查是否是起始码模式 (0x000001 或 0x00000001)
                 if data[end] == 0x00 && data[end + 1] == 0x00 {
-                    if (data[end + 2] == 0x01) || (end + 3 <= data.len() && data[end + 2] == 0x00 && data[end + 3] == 0x01) {
+                    if (data[end + 2] == 0x01)
+                        || (end + 3 <= data.len() && data[end + 2] == 0x00 && data[end + 3] == 0x01)
+                    {
                         break;
                     }
                 }
@@ -1056,7 +1076,8 @@ impl H264Encoder {
             let nal_data = &data[offset..end];
 
             match nal_type {
-                7 => { // SPS
+                7 => {
+                    // SPS
                     if self.sps.is_empty() {
                         let mut sps = vec![0x00, 0x00, 0x00, 0x01];
                         sps.extend_from_slice(nal_data);
@@ -1064,7 +1085,8 @@ impl H264Encoder {
                         eprintln!("[H264Encoder] 从 ANNEX-B 提取 SPS: {} 字节", nal_data.len());
                     }
                 }
-                8 => { // PPS
+                8 => {
+                    // PPS
                     if self.pps.is_empty() {
                         let mut pps = vec![0x00, 0x00, 0x00, 0x01];
                         pps.extend_from_slice(nal_data);
@@ -1080,12 +1102,16 @@ impl H264Encoder {
 
         // 调试输出
         if !self.sps.is_empty() {
-            eprintln!("[H264Encoder] 最终 SPS: {:?}",
-                &self.sps[..self.sps.len().min(10)]);
+            eprintln!(
+                "[H264Encoder] 最终 SPS: {:?}",
+                &self.sps[..self.sps.len().min(10)]
+            );
         }
         if !self.pps.is_empty() {
-            eprintln!("[H264Encoder] 最终 PPS: {:?}",
-                &self.pps[..self.pps.len().min(10)]);
+            eprintln!(
+                "[H264Encoder] 最终 PPS: {:?}",
+                &self.pps[..self.pps.len().min(10)]
+            );
         }
     }
 
@@ -1143,11 +1169,11 @@ impl H264Encoder {
     fn detect_frame_type(data: &[u8]) -> FrameType {
         if let Some(nal_type) = get_nal_type(data) {
             match nal_type {
-                5 => FrameType::IDR,       // IDR 关键帧
-                7 => FrameType::SPS,       // Sequence Parameter Set
-                8 => FrameType::PPS,       // Picture Parameter Set
-                6 => FrameType::PFrame,   // SEI (Supplemental Enhancement Information)
-                9 => FrameType::PFrame,   // AUD (Access Unit Delimiter) - 帧分隔符，当作 P 帧处理
+                5 => FrameType::IDR,        // IDR 关键帧
+                7 => FrameType::SPS,        // Sequence Parameter Set
+                8 => FrameType::PPS,        // Picture Parameter Set
+                6 => FrameType::PFrame,     // SEI (Supplemental Enhancement Information)
+                9 => FrameType::PFrame,     // AUD (Access Unit Delimiter) - 帧分隔符，当作 P 帧处理
                 1..=4 => FrameType::PFrame, // P/B 帧
                 _ => FrameType::Unknown,
             }
@@ -1171,6 +1197,29 @@ pub struct H264StartInfo {
 impl H264Encoder {
     /// 创建 H264 编码器
     pub fn new(fps: u32, bitrate: u32, monitor: u32, profile: u32) -> Result<Self, RecorderError> {
+        Self::new_with_latency_mode(fps, bitrate, monitor, profile, false)
+    }
+
+    /// 创建推流专用编码器。
+    ///
+    /// 推流需要关闭编码器 lookahead/B 帧；录制器继续使用默认模式，避免改变
+    /// 录制文件的码率控制和兼容性。
+    pub fn new_low_latency(
+        fps: u32,
+        bitrate: u32,
+        monitor: u32,
+        profile: u32,
+    ) -> Result<Self, RecorderError> {
+        Self::new_with_latency_mode(fps, bitrate, monitor, profile, true)
+    }
+
+    fn new_with_latency_mode(
+        fps: u32,
+        bitrate: u32,
+        monitor: u32,
+        profile: u32,
+        low_latency: bool,
+    ) -> Result<Self, RecorderError> {
         use crate::win_recorder::d3d11::D3D11TextureManager;
 
         let (width, height) = D3D11TextureManager::detect_monitor(monitor)?;
@@ -1186,7 +1235,9 @@ impl H264Encoder {
             bitrate,
             profile,
         };
-        Self::from_params(params)
+        let mut encoder = Self::from_params(params)?;
+        encoder.low_latency = low_latency;
+        Ok(encoder)
     }
 
     /// 启动编码器，返回初始化信息（SPS/PPS）
@@ -1219,15 +1270,23 @@ impl H264Encoder {
         }
 
         // 1. 先探测当前这组 frames 里有没有 IDR 关键帧
-        let has_idr = frames.iter().any(|f| matches!(f.frame_type, FrameType::IDR));
+        let has_idr = frames
+            .iter()
+            .any(|f| matches!(f.frame_type, FrameType::IDR));
 
         // 2. 根据探测结果决定整包的最高优先级前缀
         let final_prefix = if has_idr {
             0x02 // 只要有 IDR，一律视为关键帧包
         } else {
             // 检查是否有 SPS/PPS，否则为普通 P 帧
-            let has_sps_pps = frames.iter().any(|f| matches!(f.frame_type, FrameType::SPS | FrameType::PPS));
-            if has_sps_pps { 0x01 } else { 0x03 }
+            let has_sps_pps = frames
+                .iter()
+                .any(|f| matches!(f.frame_type, FrameType::SPS | FrameType::PPS));
+            if has_sps_pps {
+                0x01
+            } else {
+                0x03
+            }
         };
 
         // 3. 只写 1 个字节的前缀
