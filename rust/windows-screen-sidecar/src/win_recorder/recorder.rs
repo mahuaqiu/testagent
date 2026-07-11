@@ -2,7 +2,7 @@
 use crate::win_recorder::d3d11::D3D11TextureManager;
 use crate::win_recorder::error::RecorderError;
 use crate::win_recorder::logical_time::{logical_time_for_frame_index, ClockTime};
-use crate::win_recorder::mf_writer::MFSinkWriter;
+use crate::win_recorder::mf_writer::{log_process_memory, MFSinkWriter};
 use crate::win_recorder::watermark::WatermarkRenderer;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -30,13 +30,24 @@ pub struct WinRecorder {
 fn current_local_clock_time() -> ClockTime {
     unsafe {
         let st = GetLocalTime();
-        ClockTime::new(st.wHour as u8, st.wMinute as u8, st.wSecond as u8, st.wMilliseconds)
+        ClockTime::new(
+            st.wHour as u8,
+            st.wMinute as u8,
+            st.wSecond as u8,
+            st.wMilliseconds,
+        )
     }
 }
 
 impl WinRecorder {
     /// 创建录屏器
-    pub fn new(output_path: String, fps: u32, audio: bool, monitor: u32, watermark: bool) -> Result<Self, RecorderError> {
+    pub fn new(
+        output_path: String,
+        fps: u32,
+        audio: bool,
+        monitor: u32,
+        watermark: bool,
+    ) -> Result<Self, RecorderError> {
         // 检测显示器尺寸
         let (width, height) = D3D11TextureManager::detect_monitor(monitor)?;
 
@@ -69,12 +80,8 @@ impl WinRecorder {
         }
 
         // 先创建 SinkWriter（内部会对齐分辨率）
-        let temp_texture_manager = D3D11TextureManager::new(self.width, self.height)?;
-        let device = temp_texture_manager.device().clone();
-
         let mut sink_writer = MFSinkWriter::new(
             &self.output_path,
-            &device,
             self.width,
             self.height,
             self.fps,
@@ -127,7 +134,9 @@ impl WinRecorder {
         if self.watermark {
             if let Some(renderer) = &mut self.watermark_renderer {
                 let frame_index = sink_writer.lock().frame_count();
-                let start_time = self.recording_start_time.unwrap_or_else(current_local_clock_time);
+                let start_time = self
+                    .recording_start_time
+                    .unwrap_or_else(current_local_clock_time);
                 let time_str = logical_time_for_frame_index(start_time, frame_index, self.fps);
                 if let Err(e) = renderer.render(
                     texture_manager.context(),
@@ -172,6 +181,7 @@ impl WinRecorder {
         // 关闭 Media Foundation
         unsafe {
             let _ = MFShutdown();
+        log_process_memory("after_recorder_resources_dropped");
         }
 
         Ok(())

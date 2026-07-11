@@ -20,7 +20,27 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
     let uv_size = (width * height / 2) as usize;
     let mut nv12 = vec![0u8; y_size + uv_size];
 
+    bgra_to_nv12_into(bgra_data, width, height, (width * 4) as usize, &mut nv12);
+    nv12
+}
+
+/// 将带行跨度的 BGRA 数据直接转换到调用方提供的 NV12 缓冲区。
+pub fn bgra_to_nv12_into(
+    bgra_data: &[u8],
+    width: u32,
+    height: u32,
+    src_stride: usize,
+    nv12: &mut [u8],
+) {
+    let y_size = (width * height) as usize;
+    let required_bgra_size = src_stride * height as usize;
+    let required_nv12_size = y_size + (width * height / 2) as usize;
+    assert!(bgra_data.len() >= required_bgra_size);
+    assert!(src_stride >= width as usize * 4);
+    assert!(nv12.len() >= required_nv12_size);
+
     let width = width as usize;
+    let height = height as usize;
     let height = height as usize;
 
     // 1. 转换 Y 平面 (BGRA -> Y)
@@ -28,11 +48,11 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
     // 简化版本: Y = (306*R + 601*G + 117*B) >> 10
     for y in 0..height {
         for x in 0..width {
-            let bgra_idx = (y * width + x) * 4;
+            let bgra_idx = y * src_stride + x * 4;
             let b = bgra_data[bgra_idx] as u32;
             let g = bgra_data[bgra_idx + 1] as u32;
             let r = bgra_data[bgra_idx + 2] as u32;
-            
+
             // BT.601 亮度公式（full range）
             // Y_full = 0.299*R + 0.587*G + 0.114*B
             // 简化版本: Y_full = (306*R + 601*G + 117*B) >> 10 → 0-255
@@ -40,7 +60,7 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             // Y_limited = Y_full * 219/255 + 16 ≈ Y_full * 219/256 + 16
             let y_full = (r * 306 + g * 601 + b * 117) >> 10;
             let y_val = ((((y_full as u32) * 219) >> 8) + 16) as u8;
-            
+
             let y_idx = y * width + x;
             nv12[y_idx] = y_val;
         }
@@ -53,18 +73,27 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
     for y in 0..height / 2 {
         for x in 0..width / 2 {
             // 取 2x2 块的平均
-            let bgra_idx00 = ((y * 2) * width + (x * 2)) * 4;
-            let bgra_idx01 = ((y * 2) * width + (x * 2 + 1)) * 4;
-            let bgra_idx10 = ((y * 2 + 1) * width + (x * 2)) * 4;
-            let bgra_idx11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
+            let bgra_idx00 = (y * 2) * src_stride + (x * 2) * 4;
+            let bgra_idx01 = (y * 2) * src_stride + (x * 2 + 1) * 4;
+            let bgra_idx10 = (y * 2 + 1) * src_stride + (x * 2) * 4;
+            let bgra_idx11 = (y * 2 + 1) * src_stride + (x * 2 + 1) * 4;
 
             // 平均 R, G, B（注意：BGRA 格式中 bgra[0]=B, bgra[1]=G, bgra[2]=R）
-            let r = ((bgra_data[bgra_idx00 + 2] as u32 + bgra_data[bgra_idx01 + 2] as u32
-                   + bgra_data[bgra_idx10 + 2] as u32 + bgra_data[bgra_idx11 + 2] as u32) / 4) as i32;
-            let g = ((bgra_data[bgra_idx00 + 1] as u32 + bgra_data[bgra_idx01 + 1] as u32
-                   + bgra_data[bgra_idx10 + 1] as u32 + bgra_data[bgra_idx11 + 1] as u32) / 4) as i32;
-            let b = ((bgra_data[bgra_idx00] as u32 + bgra_data[bgra_idx01] as u32
-                   + bgra_data[bgra_idx10] as u32 + bgra_data[bgra_idx11] as u32) / 4) as i32;
+            let r = ((bgra_data[bgra_idx00 + 2] as u32
+                + bgra_data[bgra_idx01 + 2] as u32
+                + bgra_data[bgra_idx10 + 2] as u32
+                + bgra_data[bgra_idx11 + 2] as u32)
+                / 4) as i32;
+            let g = ((bgra_data[bgra_idx00 + 1] as u32
+                + bgra_data[bgra_idx01 + 1] as u32
+                + bgra_data[bgra_idx10 + 1] as u32
+                + bgra_data[bgra_idx11 + 1] as u32)
+                / 4) as i32;
+            let b = ((bgra_data[bgra_idx00] as u32
+                + bgra_data[bgra_idx01] as u32
+                + bgra_data[bgra_idx10] as u32
+                + bgra_data[bgra_idx11] as u32)
+                / 4) as i32;
 
             // BT.601 色度公式（full range）
             // U = -0.147*R - 0.289*G + 0.436*B
@@ -77,12 +106,11 @@ pub fn bgra_to_nv12(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let v_val = v_val.clamp(0, 255) as u8;
 
             let uv_idx = y_size + (y * width / 2 + x) * 2;
-            nv12[uv_idx] = u_val;         // U
-            nv12[uv_idx + 1] = v_val;     // V
+            nv12[uv_idx] = u_val; // U
+            nv12[uv_idx + 1] = v_val; // V
         }
     }
 
-    nv12
 }
 
 /// 将 BGRA 数据转换为 IYUV (YUV420P) 格式
@@ -133,16 +161,25 @@ pub fn bgra_to_iyuv(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let b10 = ((y * 2 + 1) * width + (x * 2)) * 4;
             let b11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
 
-            let r = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32
-                   + bgra_data[b10 + 2] as u32 + bgra_data[b11 + 2] as u32) / 4) as i32;
-            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32
-                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
-            let b_val = ((bgra_data[b00] as u32 + bgra_data[b01] as u32
-                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
+            let r = ((bgra_data[b00 + 2] as u32
+                + bgra_data[b01 + 2] as u32
+                + bgra_data[b10 + 2] as u32
+                + bgra_data[b11 + 2] as u32)
+                / 4) as i32;
+            let g = ((bgra_data[b00 + 1] as u32
+                + bgra_data[b01 + 1] as u32
+                + bgra_data[b10 + 1] as u32
+                + bgra_data[b11 + 1] as u32)
+                / 4) as i32;
+            let b_val = ((bgra_data[b00] as u32
+                + bgra_data[b01] as u32
+                + bgra_data[b10] as u32
+                + bgra_data[b11] as u32)
+                / 4) as i32;
 
             // BT.601 色度公式
             let u_val = (((-r * 147 - g * 289 + b_val * 436) >> 10) + 128) as u8;
-            
+
             iyuv[u_offset] = u_val;
             u_offset += 1;
         }
@@ -157,16 +194,25 @@ pub fn bgra_to_iyuv(bgra_data: &[u8], width: u32, height: u32) -> Vec<u8> {
             let b10 = ((y * 2 + 1) * width + (x * 2)) * 4;
             let b11 = ((y * 2 + 1) * width + (x * 2 + 1)) * 4;
 
-            let r = ((bgra_data[b00 + 2] as u32 + bgra_data[b01 + 2] as u32
-                   + bgra_data[b10 + 2] as u32 + bgra_data[b11 + 2] as u32) / 4) as i32;
-            let g = ((bgra_data[b00 + 1] as u32 + bgra_data[b01 + 1] as u32
-                   + bgra_data[b10 + 1] as u32 + bgra_data[b11 + 1] as u32) / 4) as i32;
-            let b_val = ((bgra_data[b00] as u32 + bgra_data[b01] as u32
-                   + bgra_data[b10] as u32 + bgra_data[b11] as u32) / 4) as i32;
+            let r = ((bgra_data[b00 + 2] as u32
+                + bgra_data[b01 + 2] as u32
+                + bgra_data[b10 + 2] as u32
+                + bgra_data[b11 + 2] as u32)
+                / 4) as i32;
+            let g = ((bgra_data[b00 + 1] as u32
+                + bgra_data[b01 + 1] as u32
+                + bgra_data[b10 + 1] as u32
+                + bgra_data[b11 + 1] as u32)
+                / 4) as i32;
+            let b_val = ((bgra_data[b00] as u32
+                + bgra_data[b01] as u32
+                + bgra_data[b10] as u32
+                + bgra_data[b11] as u32)
+                / 4) as i32;
 
             // BT.601 色度公式
             let v_val = (((r * 615 - g * 515 - b_val * 100) >> 10) + 128) as u8;
-            
+
             iyuv[v_offset] = v_val;
             v_offset += 1;
         }
@@ -183,7 +229,7 @@ mod tests {
     fn test_bgra_to_nv12_size() {
         let bgra = vec![0u8; 1920 * 1080 * 4];
         let nv12 = bgra_to_nv12(&bgra, 1920, 1080);
-        
+
         // NV12: Y 平面 + UV 平面
         let expected_size = 1920 * 1080 + 1920 * 1080 / 2;
         assert_eq!(nv12.len(), expected_size);
@@ -193,7 +239,7 @@ mod tests {
     fn test_bgra_to_nv12_small() {
         let bgra = vec![0u8; 16 * 16 * 4];
         let nv12 = bgra_to_nv12(&bgra, 16, 16);
-        
+
         let expected_size = 16 * 16 + 16 * 16 / 2;
         assert_eq!(nv12.len(), expected_size);
     }

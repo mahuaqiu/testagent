@@ -1,8 +1,32 @@
 use crate::win_recorder::error::RecorderError;
 use crate::win_recorder::logical_time::sample_timing_for_frame_index;
 use windows::core::PCWSTR;
-use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::Threading::GetCurrentProcess;
+
+/// 输出当前 sidecar 进程的 Windows 工作集和 Private Bytes。
+pub fn log_process_memory(stage: &str) {
+    unsafe {
+        let mut counters = PROCESS_MEMORY_COUNTERS::default();
+        if GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut counters,
+            std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        )
+        .is_ok()
+        {
+            let working_set_mb = counters.WorkingSetSize as f64 / 1024.0 / 1024.0;
+            let private_mb = counters.PagefileUsage as f64 / 1024.0 / 1024.0;
+            eprintln!(
+                "[recording-diag] memory stage={} working_set_mb={:.1} private_mb={:.1}",
+                stage, working_set_mb, private_mb
+            );
+        } else {
+            eprintln!("[recording-diag] memory stage={} unavailable", stage);
+        }
+    }
+}
 
 /// Media Foundation SinkWriter 封装
 ///
@@ -24,18 +48,16 @@ impl MFSinkWriter {
     ///
     /// # 参数
     /// - output_path: 输出文件路径
-    /// - device: D3D11 设备（当前版本不使用，但保留接口）
     /// - width: 视频宽度
     /// - height: 视频高度
     /// - fps: 帧率
     /// - audio: 是否包含音频（当前版本不支持）
     ///
     /// # 说明
-    /// 输入类型为 MFVideoFormat_RGB32 (BGRA)，输出类型为 MFVideoFormat_H264
+    /// 输入类型为 MFVideoFormat_NV12，输出类型为 MFVideoFormat_H264
     /// 分辨率会自动对齐到 16 倍数（H264 编码器要求）
     pub fn new(
         output_path: &str,
-        _device: &ID3D11Device,
         width: u32,
         height: u32,
         fps: u32,
@@ -59,17 +81,36 @@ impl MFSinkWriter {
             // 设置输出文件路径
             let path_wide: Vec<u16> = output_path.encode_utf16().chain(Some(0)).collect();
 
+            // 优先选择硬件视频变换，避免默认软件 H.264 MFT 在首帧时申请数百 MB 缓存。
+            // 不设置 MF_SINK_WRITER_DISABLE_THROTTLING，避免异步样本无限制积压。
+            let mut sink_attributes = None;
+            MFCreateAttributes(&mut sink_attributes, 4)
+                .map_err(|e| RecorderError::MFError(format!("创建 SinkWriter 属性失败: {}", e)))?;
+            let sink_attributes = sink_attributes.ok_or_else(|| {
+                RecorderError::MFError("创建 SinkWriter 属性返回空对象".into())
+            })?;
+            sink_attributes
+                .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
+                .map_err(|e| RecorderError::MFError(format!("设置硬件变换属性失败: {}", e)))?;
+            sink_attributes
+                .SetUINT32(&MF_LOW_LATENCY, 1)
+                .map_err(|e| RecorderError::MFError(format!("设置录制低延迟属性失败: {}", e)))?;
+            eprintln!(
+                "[recording-diag] sink attributes hardware_transforms=true low_latency=true throttling=default"
+            );
+
             // 使用 MFCreateSinkWriterFromURL 自动创建 MP4 Sink
             let sink_writer = MFCreateSinkWriterFromURL(
                 PCWSTR(path_wide.as_ptr()),
                 None,
-                None::<&IMFAttributes>,
+                Some(&sink_attributes),
             )
             .map_err(|e| RecorderError::MFError(format!("创建 SinkWriter 失败: {}", e)))?;
 
             // 创建输出媒体类型（H264）- 完整配置
-            let output_type = MFCreateMediaType()
-                .map_err(|e| RecorderError::MFError(format!("创建 Output MediaType 失败: {}", e)))?;
+            let output_type = MFCreateMediaType().map_err(|e| {
+                RecorderError::MFError(format!("创建 Output MediaType 失败: {}", e))
+            })?;
 
             output_type
                 .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -86,7 +127,10 @@ impl MFSinkWriter {
 
             // 设置帧大小（对齐后的分辨率）
             output_type
-                .SetUINT64(&MF_MT_FRAME_SIZE, ((aligned_width as u64) << 32) | (aligned_height as u64))
+                .SetUINT64(
+                    &MF_MT_FRAME_SIZE,
+                    ((aligned_width as u64) << 32) | (aligned_height as u64),
+                )
                 .map_err(|e| RecorderError::MFError(format!("设置输出帧大小失败: {}", e)))?;
 
             // 设置帧率（分子/分母格式）
@@ -116,7 +160,7 @@ impl MFSinkWriter {
                 .AddStream(&output_type)
                 .map_err(|e| RecorderError::MFError(format!("添加流失败: {}", e)))?;
 
-            // 设置输入类型（RGB32）- 使用对齐后的分辨率
+            // 设置输入类型（NV12）- 使用对齐后的分辨率
             let input_type = MFCreateMediaType()
                 .map_err(|e| RecorderError::MFError(format!("创建 Input MediaType 失败: {}", e)))?;
 
@@ -125,7 +169,7 @@ impl MFSinkWriter {
                 .map_err(|e| RecorderError::MFError(format!("设置输入主类型失败: {}", e)))?;
 
             input_type
-                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
+                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)
                 .map_err(|e| RecorderError::MFError(format!("设置输入子类型失败: {}", e)))?;
 
             // 设置交错模式
@@ -135,7 +179,10 @@ impl MFSinkWriter {
 
             // 设置帧大小（对齐后的分辨率）
             input_type
-                .SetUINT64(&MF_MT_FRAME_SIZE, ((aligned_width as u64) << 32) | (aligned_height as u64))
+                .SetUINT64(
+                    &MF_MT_FRAME_SIZE,
+                    ((aligned_width as u64) << 32) | (aligned_height as u64),
+                )
                 .map_err(|e| RecorderError::MFError(format!("设置输入帧大小失败: {}", e)))?;
 
             // 设置帧率
@@ -153,9 +200,9 @@ impl MFSinkWriter {
                 .SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)
                 .map_err(|e| RecorderError::MFError(format!("设置样本独立属性失败: {}", e)))?;
 
-            // 设置默认 stride（BGRA = width * 4，正数表示从上到下）
+            // 设置默认 stride（NV12 的 Y 平面为每像素 1 字节）
             // stride 以 32 位有符号整数形式存储在 UINT32 中
-            let stride = (aligned_width * 4) as i32 as u32;
+            let stride = aligned_width as i32 as u32;
             input_type
                 .SetUINT32(&MF_MT_DEFAULT_STRIDE, stride)
                 .map_err(|e| RecorderError::MFError(format!("设置默认 stride 失败: {}", e)))?;
@@ -164,6 +211,12 @@ impl MFSinkWriter {
             sink_writer
                 .SetInputMediaType(stream_index, &input_type, None)
                 .map_err(|e| RecorderError::MFError(format!("设置输入类型失败: {}", e)))?;
+
+            eprintln!(
+                "[recording-diag] writer initialized width={} height={} input=NV12 input_buffer_bytes={}",
+                aligned_width, aligned_height, aligned_width * aligned_height * 3 / 2
+            );
+            log_process_memory("writer_initialized");
 
             Ok(Self {
                 sink_writer,
@@ -200,7 +253,6 @@ impl MFSinkWriter {
             sample
                 .SetSampleDuration(duration)
                 .map_err(|e| RecorderError::MFError(format!("设置样本持续时间失败: {}", e)))?;
-
             self.sink_writer
                 .WriteSample(self.stream_index, sample)
                 .map_err(|e| RecorderError::MFError(format!("写入样本失败: {}", e)))?;
@@ -212,11 +264,13 @@ impl MFSinkWriter {
 
     /// 结束录制
     pub fn finalize(&mut self) -> Result<(), RecorderError> {
+        log_process_memory("before_finalize");
         unsafe {
             self.sink_writer
                 .Finalize()
                 .map_err(|e| RecorderError::MFError(format!("Finalize 失败: {}", e)))?;
         }
+        log_process_memory("after_finalize");
         Ok(())
     }
 

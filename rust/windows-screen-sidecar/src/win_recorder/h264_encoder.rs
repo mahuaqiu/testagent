@@ -99,7 +99,6 @@ pub struct H264Encoder {
     pps: Vec<u8>,
     encoder_input_id: u32,
     encoder_output_id: u32,
-    output_sample_diagnostics: usize,
     /// IDR 关键帧间隔（帧数），0 表示不强制 IDR
     idr_interval: u32,
     /// 编码器类型
@@ -149,7 +148,6 @@ impl H264Encoder {
             pps: Vec::new(),
             encoder_input_id: 0,
             encoder_output_id: 0,
-            output_sample_diagnostics: 0,
             idr_interval: 30, // 默认每 30 帧产生一个 IDR 关键帧
             encoder_type: EncoderType::Unknown,
             low_latency: false,
@@ -833,20 +831,13 @@ impl H264Encoder {
                     // 输出 sample 可能在 pSample 中（无论是否预分配）
                     let out_sample = p_sample.as_ref();
                     if let Some(sample) = out_sample {
-                        let output_sample_time = sample.GetSampleTime().unwrap_or(-1);
-                        let output_sample_duration = sample.GetSampleDuration().unwrap_or(-1);
                         let frame_data = self.extract_sample_data(sample)?;
                         if !frame_data.is_empty() {
-                            let mut nal_types = Vec::new();
-                            let mut has_idr = false;
                             for nal_data in extract_nal_units(&frame_data) {
                                 let mut annex_b = vec![0x00, 0x00, 0x00, 0x01];
                                 annex_b.extend_from_slice(&nal_data);
 
                                 let frame_type = Self::detect_frame_type(&annex_b);
-                                let nal_type = get_nal_type(&annex_b).unwrap_or(0);
-                                nal_types.push(nal_type);
-                                has_idr |= matches!(frame_type, FrameType::IDR);
 
                                 match frame_type {
                                     FrameType::SPS => {
@@ -867,26 +858,6 @@ impl H264Encoder {
                                     data: annex_b,
                                 });
                             }
-                            if self.output_sample_diagnostics < 20 || has_idr {
-                                let input_sample_time =
-                                    self.frame_count as i64 * self.frame_duration;
-                                let output_delay_ms = if output_sample_time >= 0 {
-                                    (input_sample_time - output_sample_time) / 10_000
-                                } else {
-                                    -1
-                                };
-                                eprintln!(
-                                    "[H264Encoder] sample-diag input_frame={} input_time_100ns={} output_time_100ns={} output_duration_100ns={} output_delay_ms={} nal_types={:?}",
-                                    self.frame_count,
-                                    input_sample_time,
-                                    output_sample_time,
-                                    output_sample_duration,
-                                    output_delay_ms,
-                                    nal_types
-                                );
-                            }
-                            self.output_sample_diagnostics =
-                                self.output_sample_diagnostics.saturating_add(1);
                         }
                     }
                     // 释放 sample
@@ -1057,7 +1028,6 @@ impl H264Encoder {
 
             // 获取 NAL type
             let nal_type = data[offset] & 0x1F;
-            eprintln!("[H264Encoder] ANNEX-B NAL type: {}", nal_type);
 
             // 找到 NAL 单元的结束位置（下一个起始码或数据末尾）
             let mut end = offset + 1;
@@ -1082,7 +1052,6 @@ impl H264Encoder {
                         let mut sps = vec![0x00, 0x00, 0x00, 0x01];
                         sps.extend_from_slice(nal_data);
                         self.sps = sps;
-                        eprintln!("[H264Encoder] 从 ANNEX-B 提取 SPS: {} 字节", nal_data.len());
                     }
                 }
                 8 => {
@@ -1091,7 +1060,6 @@ impl H264Encoder {
                         let mut pps = vec![0x00, 0x00, 0x00, 0x01];
                         pps.extend_from_slice(nal_data);
                         self.pps = pps;
-                        eprintln!("[H264Encoder] 从 ANNEX-B 提取 PPS: {} 字节", nal_data.len());
                     }
                 }
                 _ => {}
@@ -1099,18 +1067,11 @@ impl H264Encoder {
 
             offset = end;
         }
-
-        // 调试输出
-        if !self.sps.is_empty() {
+        if !self.sps.is_empty() && !self.pps.is_empty() {
             eprintln!(
-                "[H264Encoder] 最终 SPS: {:?}",
-                &self.sps[..self.sps.len().min(10)]
-            );
-        }
-        if !self.pps.is_empty() {
-            eprintln!(
-                "[H264Encoder] 最终 PPS: {:?}",
-                &self.pps[..self.pps.len().min(10)]
+                "[H264Encoder] SPS/PPS extracted: sps_bytes={} pps_bytes={}",
+                self.sps.len(),
+                self.pps.len()
             );
         }
     }
@@ -1122,20 +1083,17 @@ impl H264Encoder {
         // 读取 SPS 长度
         if offset + 2 <= data.len() {
             let sps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
-            eprintln!("[H264Encoder] 解析到 SPS 长度: {}", sps_len);
             offset += 2;
 
             if sps_len > 0 && offset + sps_len <= data.len() {
                 let sps_nal = &data[offset..offset + sps_len];
                 if !sps_nal.is_empty() {
                     let nal_type = sps_nal[0] & 0x1F;
-                    eprintln!("[H264Encoder] SPS NAL type: {}", nal_type);
 
                     if nal_type == 7 && self.sps.is_empty() {
                         let mut sps = vec![0x00, 0x00, 0x00, 0x01];
                         sps.extend_from_slice(sps_nal);
                         self.sps = sps;
-                        eprintln!("[H264Encoder] 从长度前缀格式提取 SPS: {} 字节", sps_len);
                     }
                 }
                 offset += sps_len;
@@ -1145,20 +1103,17 @@ impl H264Encoder {
         // 读取 PPS
         if offset + 2 <= data.len() {
             let pps_len = ((data[offset] as usize) << 8) | (data[offset + 1] as usize);
-            eprintln!("[H264Encoder] 解析到 PPS 长度: {}", pps_len);
             offset += 2;
 
             if pps_len > 0 && offset + pps_len <= data.len() {
                 let pps_nal = &data[offset..offset + pps_len];
                 if !pps_nal.is_empty() {
                     let nal_type = pps_nal[0] & 0x1F;
-                    eprintln!("[H264Encoder] PPS NAL type: {}", nal_type);
 
                     if nal_type == 8 && self.pps.is_empty() {
                         let mut pps = vec![0x00, 0x00, 0x00, 0x01];
                         pps.extend_from_slice(pps_nal);
                         self.pps = pps;
-                        eprintln!("[H264Encoder] 从长度前缀格式提取 PPS: {} 字节", pps_len);
                     }
                 }
             }

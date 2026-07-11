@@ -10,13 +10,22 @@ pub struct ClockTime {
 
 impl ClockTime {
     pub fn new(hour: u8, minute: u8, second: u8, millisecond: u16) -> Self {
-        Self { hour, minute, second, millisecond }
+        Self {
+            hour,
+            minute,
+            second,
+            millisecond,
+        }
     }
 }
 
 impl fmt::Display for ClockTime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02}:{:02}:{:02}.{:03}", self.hour, self.minute, self.second, self.millisecond)
+        write!(
+            f,
+            "{:02}:{:02}:{:02}.{:03}",
+            self.hour, self.minute, self.second, self.millisecond
+        )
     }
 }
 
@@ -32,11 +41,20 @@ pub fn advance_clock_time(base: ClockTime, elapsed_ms: u128) -> ClockTime {
     let minute = ((total_ms % 3_600_000) / 60_000) as u8;
     let second = ((total_ms % 60_000) / 1_000) as u8;
     let millisecond = (total_ms % 1_000) as u16;
-    ClockTime { hour, minute, second, millisecond }
+    ClockTime {
+        hour,
+        minute,
+        second,
+        millisecond,
+    }
 }
 
 pub fn logical_time_string(base: ClockTime, elapsed_100ns: i64) -> String {
-    let elapsed_ms = if elapsed_100ns <= 0 { 0 } else { (elapsed_100ns as u128) / 10_000 };
+    let elapsed_ms = if elapsed_100ns <= 0 {
+        0
+    } else {
+        (elapsed_100ns as u128) / 10_000
+    };
     advance_clock_time(base, elapsed_ms).to_string()
 }
 
@@ -59,7 +77,10 @@ pub fn sample_timing_for_frame_index(frame_index: u64, fps: u32) -> (i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{advance_clock_time, frame_index_to_pts_100ns, logical_time_for_frame_index, logical_time_string, sample_timing_for_frame_index, ClockTime};
+    use super::{
+        advance_clock_time, frame_index_to_pts_100ns, logical_time_for_frame_index,
+        logical_time_string, sample_timing_for_frame_index, ClockTime,
+    };
 
     #[test]
     fn logical_pts_increases_by_frame_duration() {

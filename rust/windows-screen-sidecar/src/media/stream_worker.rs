@@ -163,15 +163,9 @@ impl StreamWorkerHandle {
                     stats.encoded_frames = stats.encoded_frames.saturating_add(1);
 
                     let encoded_bytes = frames.iter().map(|item| item.data.len()).sum::<usize>();
-                    let has_idr = frames.iter().any(|item| matches!(item.frame_type, FrameType::IDR));
-                    let has_config = frames.iter().any(|item| matches!(item.frame_type, FrameType::SPS | FrameType::PPS));
                     diagnostic_packets = diagnostic_packets.saturating_add(1);
                     diagnostic_bytes = diagnostic_bytes.saturating_add(encoded_bytes);
-                    if stats.encoded_frames <= 15 || has_idr {
-                        let capture_age_ms = crate::capture::current_timestamp_ms().saturating_sub((frame.capture_pts_100ns.max(0) / 10_000) as u128);
-                        eprintln!("[stream-diag] encoder packet frame_seq={} tick={} packet_seq={} elapsed_ms={} encode_ms={} capture_age_ms={} bytes={} idr={} config={} duplicated_ticks={} dropped_late_ticks={}", frame.seq, tick_index, packet_sequence, stream_started.elapsed().as_millis(), stats.last_encode_ms, capture_age_ms, encoded_bytes, has_idr, has_config, stats.duplicated_ticks, stats.dropped_late_ticks);
-                    }
-                    if diagnostic_started.elapsed() >= Duration::from_secs(1) {
+                    if diagnostic_started.elapsed() >= Duration::from_secs(5) {
                         eprintln!("[stream-diag] encoder summary elapsed_ms={} packets={} bytes={} last_frame_seq={} next_packet_seq={} encode_ms={} duplicated_ticks={} dropped_late_ticks={}", stream_started.elapsed().as_millis(), diagnostic_packets, diagnostic_bytes, frame.seq, packet_sequence, stats.last_encode_ms, stats.duplicated_ticks, stats.dropped_late_ticks);
                         diagnostic_started = Instant::now();
                         diagnostic_packets = 0;

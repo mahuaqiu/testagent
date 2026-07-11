@@ -1,9 +1,11 @@
+use crate::win_recorder::bgra_to_nv12::bgra_to_nv12_into;
 use crate::win_recorder::error::RecorderError;
 use std::ptr;
+use std::slice;
 use windows::Win32::Graphics::Direct3D::*;
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Media::MediaFoundation::*;
 
 /// D3D11 纹理管理器
@@ -48,7 +50,7 @@ impl D3D11TextureManager {
             D3D11CreateDevice(
                 None, // 默认适配器
                 D3D_DRIVER_TYPE_HARDWARE,
-                None, // 软件模块
+                None,                              // 软件模块
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT, // 支持视频
                 Some(&feature_levels),
                 D3D11_SDK_VERSION,
@@ -170,9 +172,7 @@ impl D3D11TextureManager {
                     0,
                     Some(&mut mapped_resource),
                 )
-                .map_err(|e| {
-                    RecorderError::D3D11TextureError(format!("Map failed: {}", e))
-                })?;
+                .map_err(|e| RecorderError::D3D11TextureError(format!("Map failed: {}", e)))?;
 
             let dst_pitch = mapped_resource.RowPitch as usize;
 
@@ -211,26 +211,12 @@ impl D3D11TextureManager {
     /// 这是最高效的路径，避免了 staging→GPU→staging 的冗余拷贝
     pub fn create_sample_from_staging(&self) -> Result<IMFSample, RecorderError> {
         unsafe {
-            // 创建 Sample
             let sample = MFCreateSample()
                 .map_err(|e| RecorderError::MFError(format!("创建 IMFSample 失败: {}", e)))?;
-
-            // 计算缓冲区大小
-            let buffer_size = (self.width * self.height * 4) as u32;
-
-            // 创建内存缓冲区
+            let buffer_size = (self.width * self.height * 3 / 2) as u32;
             let buffer = MFCreateMemoryBuffer(buffer_size)
                 .map_err(|e| RecorderError::MFError(format!("创建 Memory Buffer 失败: {}", e)))?;
 
-            // 锁定缓冲区以写入数据
-            let mut data_ptr: *mut u8 = ptr::null_mut();
-            let mut max_length = 0u32;
-            let mut current_length = 0u32;
-            buffer
-                .Lock(&mut data_ptr, Some(&mut max_length), Some(&mut current_length))
-                .map_err(|e| RecorderError::MFError(format!("锁定缓冲区失败: {}", e)))?;
-
-            // 直接映射 staging 纹理读取数据（使用 MAP_READ）
             let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
             self.context
                 .Map(
@@ -242,39 +228,42 @@ impl D3D11TextureManager {
                 )
                 .map_err(|e| RecorderError::MFError(format!("映射 Staging 纹理失败: {}", e)))?;
 
-            // 从 Staging 纹理拷贝数据到缓冲区（使用实际的 RowPitch）
             let src_pitch = mapped_resource.RowPitch as usize;
-            let dst_pitch = (self.width * 4) as usize;
+            let source_size = src_pitch * self.height as usize;
+            let source = slice::from_raw_parts(mapped_resource.pData as *const u8, source_size);
 
-            for row in 0..self.height as usize {
-                let src_offset = row * src_pitch;
-                let dst_offset = row * dst_pitch;
-                let copy_len = src_pitch.min(dst_pitch);
-                ptr::copy_nonoverlapping(
-                    mapped_resource.pData.add(src_offset) as *const u8,
-                    data_ptr.add(dst_offset),
-                    copy_len,
-                );
+            let mut data_ptr: *mut u8 = ptr::null_mut();
+            let mut max_length = 0u32;
+            let mut current_length = 0u32;
+            if let Err(error) = buffer.Lock(
+                &mut data_ptr,
+                Some(&mut max_length),
+                Some(&mut current_length),
+            ) {
+                self.context.Unmap(&self.staging_texture, 0);
+                return Err(RecorderError::MFError(format!("锁定缓冲区失败: {}", error)));
             }
 
-            // 解除映射
+            let destination = slice::from_raw_parts_mut(data_ptr, buffer_size as usize);
+            bgra_to_nv12_into(
+                source,
+                self.width,
+                self.height,
+                src_pitch,
+                destination,
+            );
             self.context.Unmap(&self.staging_texture, 0);
 
-            // 设置当前长度
-            buffer
-                .SetCurrentLength(buffer_size)
+            let length_result = buffer.SetCurrentLength(buffer_size);
+            let unlock_result = buffer.Unlock();
+            length_result
                 .map_err(|e| RecorderError::MFError(format!("设置缓冲区长度失败: {}", e)))?;
-
-            // 解锁缓冲区
-            buffer
-                .Unlock()
+            unlock_result
                 .map_err(|e| RecorderError::MFError(format!("解锁缓冲区失败: {}", e)))?;
 
-            // 添加 Buffer 到 Sample
             sample
                 .AddBuffer(&buffer)
                 .map_err(|e| RecorderError::MFError(format!("添加 Buffer 到 Sample 失败: {}", e)))?;
-
             Ok(sample)
         }
     }
@@ -351,7 +340,10 @@ impl D3D11TextureManager {
                         .find(|d| d.DesktopCoordinates.left == 0)
                         .ok_or(RecorderError::MonitorNotFound { monitor })?;
                     let rect = primary.DesktopCoordinates;
-                    Ok(((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
+                    Ok((
+                        (rect.right - rect.left) as u32,
+                        (rect.bottom - rect.top) as u32,
+                    ))
                 }
                 2 => {
                     // 副屏幕：另一个显示器
@@ -360,7 +352,10 @@ impl D3D11TextureManager {
                         .find(|d| d.DesktopCoordinates.left != 0)
                         .ok_or(RecorderError::MonitorNotFound { monitor })?;
                     let rect = secondary.DesktopCoordinates;
-                    Ok(((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
+                    Ok((
+                        (rect.right - rect.left) as u32,
+                        (rect.bottom - rect.top) as u32,
+                    ))
                 }
                 _ => Err(RecorderError::InvalidParam("monitor must be 1 or 2".into())),
             }

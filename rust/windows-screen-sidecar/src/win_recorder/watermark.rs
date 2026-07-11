@@ -154,19 +154,21 @@ impl WatermarkRenderer {
             };
 
             let mut ppv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hbitmap = match CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut ppv_bits, None, 0) {
+            let hbitmap = match CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut ppv_bits, None, 0)
+            {
                 Ok(h) => h,
                 Err(e) => {
                     let _ = DeleteDC(hdc);
-                    return Err(RecorderError::D3D11TextureError(
-                        format!("CreateDIBSection 失败: {}", e),
-                    ));
+                    return Err(RecorderError::D3D11TextureError(format!(
+                        "CreateDIBSection 失败: {}",
+                        e
+                    )));
                 }
             };
 
             // 创建字体 - 使用微软雅黑（直接返回，不是 Result）
             let font = CreateFontW(
-                self.cached_font_height, // 高度
+                self.cached_font_height,  // 高度
                 0,                        // 宽度（自动）
                 0,                        // 文字倾斜
                 0,                        // 基线倾斜
@@ -245,22 +247,16 @@ impl WatermarkRenderer {
             };
 
             let mut ppv_bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hbitmap = CreateDIBSection(
-                hdc,
-                &bmi,
-                DIB_RGB_COLORS,
-                &mut ppv_bits,
-                None,
-                0,
-            );
+            let hbitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut ppv_bits, None, 0);
 
             let hbitmap = match hbitmap {
                 Ok(h) => h,
                 Err(e) => {
                     let _ = DeleteDC(hdc);
-                    return Err(RecorderError::D3D11TextureError(
-                        format!("CreateDIBSection 失败: {}", e),
-                    ));
+                    return Err(RecorderError::D3D11TextureError(format!(
+                        "CreateDIBSection 失败: {}",
+                        e
+                    )));
                 }
             };
 
@@ -280,18 +276,18 @@ impl WatermarkRenderer {
 
             // 创建字体 - 使用微软雅黑
             let font = CreateFontW(
-                font_height,         // 高度
-                0,                   // 宽度（自动）
-                0,                   // 文字倾斜
-                0,                   // 基线倾斜
-                FW_BOLD.0 as i32,    // 粗体
-                0,                   // 斜体
-                0,                   // 下划线
-                0,                   // 删除线
-                DEFAULT_CHARSET.0 as u32,   // 字符集
+                font_height,              // 高度
+                0,                        // 宽度（自动）
+                0,                        // 文字倾斜
+                0,                        // 基线倾斜
+                FW_BOLD.0 as i32,         // 粗体
+                0,                        // 斜体
+                0,                        // 下划线
+                0,                        // 删除线
+                DEFAULT_CHARSET.0 as u32, // 字符集
                 OUT_DEFAULT_PRECIS.0 as u32,
                 CLIP_DEFAULT_PRECIS.0 as u32,
-                CLEARTYPE_QUALITY.0 as u32, // ClearType 渲染
+                CLEARTYPE_QUALITY.0 as u32,               // ClearType 渲染
                 (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32, // 微软雅黑不是等宽字体
                 windows::core::PCWSTR(windows::core::w!("Microsoft YaHei").as_ptr()),
             );
@@ -306,30 +302,17 @@ impl WatermarkRenderer {
             // 测量文字尺寸
             let time_wide: Vec<u16> = time_str.encode_utf16().collect();
             let mut size = SIZE::default();
-            let _ = GetTextExtentPoint32W(
-                hdc,
-                &time_wide,
-                &mut size,
-            );
+            let _ = GetTextExtentPoint32W(hdc, &time_wide, &mut size);
 
             // 计算文字居中偏移
             let text_x = ((dib_width as i32 - size.cx) / 2).max(0);
             let text_y = ((dib_height as i32 - size.cy) / 2).max(0);
 
             // 绘制文字
-            let _ = TextOutW(
-                hdc,
-                text_x,
-                text_y,
-                &time_wide,
-            );
+            let _ = TextOutW(hdc, text_x, text_y, &time_wide);
 
             // 读取渲染结果
-            let dib_data = std::slice::from_raw_parts(
-                ppv_bits as *const u8,
-                total_bytes,
-            )
-            .to_vec();
+            let dib_data = std::slice::from_raw_parts(ppv_bits as *const u8, total_bytes).to_vec();
 
             // 恢复并清理 GDI 对象
             let _ = SelectObject(hdc, old_font);
@@ -407,7 +390,7 @@ impl WatermarkRenderer {
                 let src_offset = (row * dib_width * 4 + col * 4) as usize;
                 // 检查是否有像素（任何非零值表示有文字）
                 let _src_a = dib_data[src_offset + 3]; // alpha
-                let src_b = dib_data[src_offset];     // B
+                let src_b = dib_data[src_offset]; // B
                 let src_g = dib_data[src_offset + 1]; // G
                 let src_r = dib_data[src_offset + 2]; // R
 
@@ -453,16 +436,18 @@ impl WatermarkRenderer {
         self.lazy_init_gdi()?;
 
         // 使用调用方提供的逻辑时间字符串渲染文字
-        let gdi_result = unsafe { render_text_with_cached_gdi(
-            time_str,
-            font_height,
-            bg_width,
-            bg_height,
-            self.cached_hdc_handle,
-            self.cached_hbitmap_handle,
-            self.cached_font_handle,
-            self.cached_dib_bits,
-        ) }?;
+        let gdi_result = unsafe {
+            render_text_with_cached_gdi(
+                time_str,
+                font_height,
+                bg_width,
+                bg_height,
+                self.cached_hdc_handle,
+                self.cached_hbitmap_handle,
+                self.cached_font_handle,
+                self.cached_dib_bits,
+            )
+        }?;
 
         let (dib_data, dib_width, dib_height) = match gdi_result {
             Some(data) => data,
