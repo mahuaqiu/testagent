@@ -1040,12 +1040,12 @@ async def screen_stream(
                     _flags = int(packet.get("flags", 0))
                     _gap = 0 if _diag_last_sequence is None else _sequence - _diag_last_sequence
                     _diag_last_sequence = _sequence
-                    if packet.get("_packet_count", 0) <= 15 or (_flags & 0x01):
-                        logger.info("[stream-diag] websocket packet conn_key=%s sequence=%d gap=%d pts_100ns=%s flags=%d bytes=%d reader_count=%s connected_ms=%.1f read_ms=%.1f buffered_bytes=%s send_ms=%.1f relay_ms=%.1f elapsed_ms=%.1f", conn_key, _sequence, _gap, packet.get("pts_100ns"), _flags, len(_frame), packet.get("_packet_count"), packet.get("_connected_ms", 0.0), packet.get("_read_ms", 0.0), packet.get("_buffered_bytes"), _send_ms, (_sent_at - packet.get("_received_monotonic", _sent_at)) * 1000, (_sent_at - _diag_started) * 1000)
+                    if _gap != 1:
+                        logger.debug("[stream-diag] websocket packet conn_key=%s sequence=%d gap=%d pts_100ns=%s flags=%d bytes=%d reader_count=%s connected_ms=%.1f read_ms=%.1f buffered_bytes=%s send_ms=%.1f relay_ms=%.1f elapsed_ms=%.1f", conn_key, _sequence, _gap, packet.get("pts_100ns"), _flags, len(_frame), packet.get("_packet_count"), packet.get("_connected_ms", 0.0), packet.get("_read_ms", 0.0), packet.get("_buffered_bytes"), _send_ms, (_sent_at - packet.get("_received_monotonic", _sent_at)) * 1000, (_sent_at - _diag_started) * 1000)
                     if _send_ms >= 50:
                         logger.warning("[stream-diag] websocket slow send conn_key=%s sequence=%d send_ms=%.1f bytes=%d", conn_key, _sequence, _send_ms, len(_frame))
-                    if _sent_at - _diag_window_started >= 1.0:
-                        logger.info("[stream-diag] websocket summary conn_key=%s packets=%d bytes=%d last_sequence=%d max_send_ms=%.1f elapsed_ms=%.1f", conn_key, _diag_packets, _diag_bytes, _sequence, _diag_max_send_ms, (_sent_at - _diag_started) * 1000)
+                    if _sent_at - _diag_window_started >= 5.0:
+                        logger.debug("[stream-diag] websocket summary conn_key=%s packets=%d bytes=%d last_sequence=%d max_send_ms=%.1f elapsed_ms=%.1f", conn_key, _diag_packets, _diag_bytes, _sequence, _diag_max_send_ms, (_sent_at - _diag_started) * 1000)
                         _diag_window_started = _sent_at
                         _diag_packets = 0
                         _diag_bytes = 0
