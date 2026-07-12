@@ -249,7 +249,7 @@ def main():
     parser.add_argument("--host", default="192.168.0.102", help="Worker 主机地址")
     parser.add_argument("--port", type=int, default=8088, help="Worker 端口")
     parser.add_argument("--platform", default="windows", choices=["windows", "web"], help="测试平台")
-    parser.add_argument("--recording-duration", type=int, default=120, help="录制时长（秒）")
+    parser.add_argument("--recording-duration", type=int, default=10, help="录制时长（秒）")
     parser.add_argument("--skip-screenshot", action="store_true", help="跳过截图测试")
     parser.add_argument("--skip-recording", action="store_true", help="跳过录制测试")
     parser.add_argument("--window-class", type=str, default=None, help="窗口��名（用于窗口级截图测试）")
