@@ -5,7 +5,7 @@ openapi: "3.0.0"
 info:
   title: "Test Worker API"
   description: "多端自动化测试执行基建 API"
-  version: "3.0.0"
+  version: "4.0.0"
 
 servers:
   - url: "http://{host}:{port}"
@@ -75,7 +75,15 @@ paths:
   /task/execute_async:
     post:
       summary: "异步执行任务"
-      description: "异步执行自动化测试任务，立即返回 task_id，任务在后台执行"
+      description: "异步提交自动化测试任务，立即返回 task_id；使用 Idempotency-Key 保证网络重试不会重复创建任务"
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: "同一次逻辑提交及其网络重试必须复用同一个幂等键；不同主动调用必须使用不同键"
       requestBody:
         required: true
         content:
@@ -102,14 +110,18 @@ paths:
           content:
             application/json:
               example:
-                detail: "Device/Platform is busy"
+                detail:
+                  code: "DEVICE_BUSY"
+                  message: "Device/Platform is busy"
+                  retryable: true
+                  details: {}
         "503":
           description: "Worker 未初始化"
 
   /task/{task_id}:
     get:
       summary: "查询任务结果"
-      description: "根据任务 ID 查询执行结果。一次性查询：查询后任务从内存中销毁，再次查询返回 404"
+      description: "根据任务 ID 查询任务快照，可重复轮询；任务在保留期到期前不会因查询被删除"
       parameters:
         - name: task_id
           in: path
@@ -127,7 +139,7 @@ paths:
                   value:
                     task_id: "task_20260317_120000_abc123"
                     status: "running"
-                completed:
+                terminal:
                   summary: "执行完成"
                   value:
                     task_id: "task_20260317_120000_abc123"
@@ -144,13 +156,17 @@ paths:
           content:
             application/json:
               example:
-                detail: "Task not found"
+                detail:
+                  code: "TASK_NOT_FOUND"
+                  message: "Task not found"
+                  retryable: false
+                  details: {}
         "503":
           description: "Worker 未初始化"
 
     delete:
       summary: "取消任务"
-      description: "取消正在执行的任务。取消逻辑：如果只有一个 action，执行完再取消；有多个 action，当前 action 执行完后停止。"
+      description: "请求取消任务；活动任务返回 cancelling，资源释放后通过 GET 观察到 cancelled，终态任务重复取消时返回当前终态"
       parameters:
         - name: task_id
           in: path
@@ -163,17 +179,63 @@ paths:
           content:
             application/json:
               example:
-                success: true
-                message: "Task cancelled"
+                task_id: "task_20260317_120000_abc123"
+                status: "cancelling"
         "404":
           description: "任务不存在"
           content:
             application/json:
               example:
-                detail: "Task not found"
+                detail:
+                  code: "TASK_NOT_FOUND"
+                  message: "Task not found"
+                  retryable: false
+                  details: {}
         "503":
           description: "Worker 未初始化"
 
+
+  /ws/screen/{platform}/{device_id}:
+    get:
+      summary: "实时屏幕 WebSocket 推流"
+      description: |
+        通过 WebSocket 推送设备屏幕帧。该路由实际使用 WebSocket 握手，OpenAPI 仅用于描述连接参数。
+        codec 支持 jpeg、h264、mjpeg；Windows 的 h264 优先使用 RSM1 二进制媒体通道，
+        iOS 的 mjpeg 使用设备 MJPEG 透传，Windows 不支持 mjpeg，iOS/Android 不支持 h264 时回退为 jpeg。
+        首帧门控保证新连接先收到解码所需的 SPS/PPS 和可信真实 IDR，丢弃暖机黑帧、暖机 P 帧及不可独立解码的 P 帧。
+      x-websocket: true
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [ios, android, windows, mac, web]
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: monitor
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: "桌面端显示器索引；移动端忽略"
+        - name: codec
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [jpeg, h264, mjpeg]
+            default: jpeg
+      responses:
+        "101":
+          description: "WebSocket 升级成功"
+        "1008":
+          description: "参数、平台、设备或连接数不满足要求"
   /devices/refresh:
     post:
       summary: "刷新设备列表"
@@ -749,6 +811,23 @@ components:
         value: "加载完成"
         timeout: 10000
 
+    WorkerError:
+      type: object
+      required: [code, message, retryable, details]
+      properties:
+        code:
+          type: string
+          description: "稳定错误码，例如 DEVICE_BUSY、IDEMPOTENCY_CONFLICT、TASK_NOT_FOUND"
+        message:
+          type: string
+          description: "面向调用方的错误信息"
+        retryable:
+          type: boolean
+          description: "Worker 是否建议重试；业务错误不会由 testcase 自动重放动作"
+        details:
+          type: object
+          additionalProperties: true
+          description: "错误上下文，例如 busy_task_id、task_id 或 idempotency_key"
     TaskResult:
       type: object
       description: "任务执行结果。同步执行时不包含 task_id 字段"
@@ -758,7 +837,7 @@ components:
           description: "任务 ID（仅异步执行返回）"
         status:
           type: string
-          enum: [pending, running, success, failed, timeout, cancelled]
+          enum: [pending, running, success, failed, timeout, cancelled, interrupted]
           description: "任务状态"
         platform:
           type: string
@@ -792,6 +871,9 @@ components:
         error_screenshot:
           type: string
           description: "失败截图（base64 编码）"
+        request_id:
+          type: string
+          description: "请求追踪 ID"
 
     ActionResult:
       type: object
