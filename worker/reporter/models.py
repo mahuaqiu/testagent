@@ -45,6 +45,36 @@ class iOSDeviceInfo:
 
 
 @dataclass
+class HarmonyDeviceInfo:
+    """鸿蒙 HDC 设备信息。"""
+
+    udid: str
+    name: str
+    model: str
+    sys_version: str
+    sdk_version: str
+    display_size: tuple[int, int]
+    status: str
+    device_category: str
+    connection_type: str = "unknown"
+    connection_status: str = "ready"
+    capabilities: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为平台上报格式。"""
+        return {
+            "platform": (
+                "harmony_mobile"
+                if self.device_category == "mobile"
+                else "harmony_pc"
+                if self.device_category == "pc"
+                else "unknown"
+            ),
+            **asdict(self),
+        }
+
+
+@dataclass
 class DesktopInfo:
     """桌面平台信息。"""
 
@@ -85,7 +115,7 @@ class WorkerReport:
     supported_platforms: List[str]
     status: str  # online / busy / offline
     port: int
-    devices: List[Union[AndroidDeviceInfo, iOSDeviceInfo, DesktopInfo]]
+    devices: List[Union[AndroidDeviceInfo, iOSDeviceInfo, HarmonyDeviceInfo, DesktopInfo]]
     capabilities: WorkerCapabilities
     reported_at: datetime = field(default_factory=datetime.now)
 
@@ -112,7 +142,7 @@ class DeviceChangeEvent:
 
     event_type: str  # add / remove
     platform: str  # android / ios
-    device: Union[AndroidDeviceInfo, iOSDeviceInfo]
+    device: Union[AndroidDeviceInfo, iOSDeviceInfo, HarmonyDeviceInfo]
     timestamp: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> Dict:

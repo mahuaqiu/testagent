@@ -1,10 +1,18 @@
 # 鸿蒙 PC、鸿蒙移动设备及平台接入实施计划
 
-> 状态：待评审，暂不实施  
+> 状态：代码实现已完成，待鸿蒙真机验收
 > 创建日期：2026-07-11  
 > 涉及工程：`D:\code\autotest`、`D:\code\zq-platform`  
 > 参考工程：`D:\code\hmdriver2-master\hmdriver2-master`  
 > SDK：`D:\code\commandline-tools-windows-x64-6.1.0.850\command-line-tools`
+
+## 当前实施状态
+
+- 已完成 `harmony_mobile`、`harmony_pc` 两种正式设备类型的 Worker 和平台侧接入。
+- 已完成 HDC 路径解析、Ready target 过滤、错误处理、有限重试、UDID 校验、设备监控、状态恢复、注册上报、资源池和基础调试链路。
+- 鸿蒙移动和鸿蒙 PC 已分别使用 action 白名单；当前只声明 HDC 和 OCR/图像识别能够支撑的点击、双击、滑动/拖拽、输入、按键、截图、等待及应用启停等能力。
+- 录屏、实时流、sidecar、鼠标右键/移动/滚轮、窗口控制、多点触控和未经真机验证的组合键暂不声明支持。
+- 当前无可用鸿蒙真机，阶段 0、鸿蒙移动真机测试、鸿蒙 PC 真机测试和平台联调中的真机部分保留待验收；无设备单元测试已执行。
 
 ## 1. 背景
 

@@ -420,7 +420,7 @@ class HostDiscoverer:
         os_type = cls.get_os_type()
 
         if os_type == "windows":
-            return ["web", "windows", "android", "ios", "harmony"]
+            return ["web", "windows", "android", "ios", "harmony_mobile", "harmony_pc"]
         elif os_type == "macos":
             return ["mac"]
         else:

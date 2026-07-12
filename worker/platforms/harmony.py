@@ -8,6 +8,7 @@ import logging
 import time
 import tempfile
 import os
+import io
 from typing import Any, Optional
 
 from worker.actions import ActionRegistry
@@ -32,7 +33,26 @@ class HarmonyPlatformManager(PlatformManager):
     使用 HDC 直连控制鸿蒙设备。
     """
 
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "unlock_screen"}
+    # 鸿蒙没有 sidecar，因此录屏、实时窗口流和宿主机命令不加入白名单。
+    MOBILE_ACTIONS: set[str] = {
+        "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "start_app", "stop_app", "unlock_screen",
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
+        "ocr_double_click", "ocr_exist", "ocr_get_position",
+        "image_click", "image_wait", "image_assert", "image_double_click",
+        "image_exist", "image_get_position", "image_click_near_text",
+        "ocr_click_same_row_text", "ocr_click_same_row_image",
+        "ocr_check_same_row_text", "ocr_check_same_row_image",
+    }
+    PC_ACTIONS: set[str] = {
+        "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "start_app", "stop_app",
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_double_click",
+        "ocr_exist", "ocr_get_position", "image_click", "image_wait", "image_assert",
+        "image_double_click", "image_exist", "image_get_position", "image_click_near_text",
+        "ocr_click_same_row_text", "ocr_click_same_row_image",
+        "ocr_check_same_row_text", "ocr_check_same_row_image",
+    }
 
     # 鸿蒙按键映射（KeyCode 参考鸿蒙 KeyEvent）
     KEY_MAP = {
@@ -56,7 +76,13 @@ class HarmonyPlatformManager(PlatformManager):
         "DPAD_CENTER": 2016,
     }
 
-    def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
+    def __init__(
+        self,
+        config: PlatformConfig,
+        ocr_client=None,
+        unlock_config=None,
+        device_type: str = "harmony_mobile",
+    ):
         """
         初始化鸿蒙平台管理器。
 
@@ -70,11 +96,18 @@ class HarmonyPlatformManager(PlatformManager):
         self._hdc_path: Optional[str] = None
         self._current_device: Optional[str] = None
         self._unlock_config = unlock_config or {}  # 解锁配置
+        self._device_type = device_type
 
     @property
     def platform(self) -> str:
         """平台名称。"""
-        return "harmony"
+        return self._device_type
+
+    def get_supported_actions(self) -> set[str]:
+        """返回当前鸿蒙设备形态真实支持的动作。"""
+        if self._device_type == "harmony_mobile":
+            return set(self.MOBILE_ACTIONS)
+        return set(self.PC_ACTIONS)
 
     def start(self) -> None:
         """
@@ -86,7 +119,7 @@ class HarmonyPlatformManager(PlatformManager):
             return
 
         # 查找 HDC 工具路径
-        self._hdc_path = _find_hdc_path()
+        self._hdc_path = _find_hdc_path(self.config.hdc_path)
 
         if self._hdc_path is None:
             logger.warning("HDC 工具未找到，鸿蒙平台可能不可用")
@@ -277,9 +310,20 @@ class HarmonyPlatformManager(PlatformManager):
         with tempfile.NamedTemporaryFile(suffix=".jpeg", delete=False) as f:
             temp_path = f.name
         try:
-            client.screenshot(temp_path)
+            if not client.screenshot(temp_path, self.config.screenshot_method):
+                raise HarmonyError("HDC 截图失败")
             with open(temp_path, "rb") as f:
-                return f.read()
+                data = f.read()
+            if not data:
+                raise HarmonyError("HDC 截图为空")
+            try:
+                from PIL import Image
+
+                with Image.open(io.BytesIO(data)) as image:
+                    image.verify()
+            except Exception as exc:
+                raise HarmonyError(f"HDC 截图格式无效: {exc}") from exc
+            return data
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -312,7 +356,21 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        client.tap(x, y)
+        success = client.long_tap(x, y, duration) if duration > 0 else client.tap(x, y)
+        if not success:
+            raise HarmonyError(f"HDC 点击失败: ({x}, {y})")
+
+    def double_click(self, x: int, y: int, context=None) -> None:
+        """执行双击。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if not client.double_tap(x, y):
+            raise HarmonyError(f"HDC 双击失败: ({x}, {y})")
+
+    def right_click(self, x: int, y: int, context=None) -> None:
+        """鸿蒙 HDC 当前没有稳定的右键命令映射。"""
+        raise NotImplementedError("Harmony HDC 暂不支持右键点击")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
         """
@@ -333,7 +391,8 @@ class HarmonyPlatformManager(PlatformManager):
         distance = abs(end_x - start_x) + abs(end_y - start_y)
         speed = int(distance * 1000 / duration) if duration > 0 else 1000
         speed = max(200, min(speed, 40000))
-        client.swipe(start_x, start_y, end_x, end_y, speed)
+        if not client.swipe(start_x, start_y, end_x, end_y, speed):
+            raise HarmonyError("HDC 滑动失败")
 
     def move(self, x: int, y: int, context=None) -> None:
         """
@@ -344,7 +403,7 @@ class HarmonyPlatformManager(PlatformManager):
             y: Y 坐标
             context: 执行上下文（可选）
         """
-        pass
+        raise NotImplementedError("Harmony HDC 暂不支持鼠标移动")
 
     def input_text(self, text: str, context=None) -> None:
         """
@@ -359,7 +418,8 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        client.input_text(text)
+        if not client.input_text(text):
+            raise HarmonyError("HDC 文本输入失败")
 
     def press(self, key: str, context=None) -> None:
         """
@@ -377,10 +437,14 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("No device context")
         key_upper = key.upper() if key else ""
         key_code = self.KEY_MAP.get(key_upper)
+        if "+" in key:
+            raise NotImplementedError("Harmony HDC 暂不支持组合键")
         if key_code:
-            client.send_key(key_code)
+            if not client.send_key(key_code):
+                raise HarmonyError(f"HDC 按键失败: {key}")
         elif key and key.isdigit():
-            client.send_key(int(key))
+            if not client.send_key(int(key)):
+                raise HarmonyError(f"HDC 按键失败: {key}")
         else:
             supported = ", ".join(sorted(self.KEY_MAP.keys()))
             raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
@@ -442,8 +506,9 @@ class HarmonyPlatformManager(PlatformManager):
                 time.sleep(0.5)
 
             # 启动应用（默认 EntryAbility）
-            ability = "EntryAbility"
-            client.start_app(package, ability)
+            ability = (action.params or {}).get("ability", "EntryAbility")
+            if not client.start_app(package, ability):
+                raise HarmonyError(f"HDC 启动应用失败: {package}/{ability}")
 
             return ActionResult(action.number, "start_app", ActionStatus.SUCCESS, output=f"App started: {package}")
         except Exception as e:
@@ -466,7 +531,8 @@ class HarmonyPlatformManager(PlatformManager):
             return ActionResult(action.number, "stop_app", ActionStatus.FAILED, error="Missing package name")
 
         try:
-            client.stop_app(package)
+            if not client.stop_app(package):
+                raise HarmonyError(f"HDC 停止应用失败: {package}")
             return ActionResult(action.number, "stop_app", ActionStatus.SUCCESS, output=f"App stopped: {package}")
         except Exception as e:
             logger.error(f"stop_app failed: {e}")

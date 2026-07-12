@@ -205,5 +205,7 @@ class TaskStore:
         """
         # 移动端按设备区分，桌面端/Web 按平台区分
         if device_id:
+            if platform in ("harmony_mobile", "harmony_pc"):
+                return f"device:{platform}:{device_id}"
             return f"device:{device_id}"
         return f"platform:{platform}"

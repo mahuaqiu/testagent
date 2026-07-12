@@ -13,6 +13,7 @@ import uuid
 import re
 import json
 import shutil
+import shlex
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
 
@@ -34,6 +35,21 @@ class CommandResult:
     output: str
     error: str
     exit_code: int
+
+
+@dataclass
+class HdcTarget:
+    """HDC target 连接信息。"""
+
+    udid: str
+    connection_type: str = "unknown"
+    status: str = "unknown"
+    detail: str = ""
+
+    @property
+    def is_ready(self) -> bool:
+        """判断 target 是否处于可执行状态。"""
+        return self.status.lower() == "ready"
 
 
 class HarmonyError(Exception):
@@ -60,7 +76,10 @@ class HdcCommandError(HarmonyError):
 
 
 def _execute_hdc_command(
-    hdc_path: str, args: List[str], timeout: int = 30
+    hdc_path: str,
+    args: List[str],
+    timeout: int = 30,
+    retries: int = 1,
 ) -> CommandResult:
     """
     执行 HDC 命令。
@@ -76,37 +95,53 @@ def _execute_hdc_command(
     cmdline = [hdc_path] + args
     logger.debug(f"执行 HDC 命令: {' '.join(cmdline)}")
 
-    try:
-        process = popen_cmd(
-            cmdline,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-        )
-        output, error = process.communicate(timeout=timeout)
-        output = output.decode("utf-8", errors="ignore")
-        error = error.decode("utf-8", errors="ignore")
-        exit_code = process.returncode
-
-        # HDC 命令失败标识 - 只记录警告，不改变返回值
-        if "error:" in output.lower() or "[fail]" in output.lower():
-            logger.warning(f"HDC 命令可能失败: {output.strip()}")
-
-        return CommandResult(output, error, exit_code)
-
-    except subprocess.TimeoutExpired:
-        process.kill()
+    last_result = CommandResult("", "命令未执行", -1)
+    for attempt in range(max(1, retries + 1)):
+        process = None
         try:
-            output, error = process.communicate()
-        except Exception:
-            output, error = b"", b""
-        return CommandResult("", "命令执行超时", -1)
+            process = popen_cmd(
+                cmdline,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+            )
+            output, error = process.communicate(timeout=timeout)
+            last_result = CommandResult(
+                output.decode("utf-8", errors="ignore"),
+                error.decode("utf-8", errors="ignore"),
+                process.returncode,
+            )
+            combined = f"{last_result.output}\n{last_result.error}".lower()
+            transient = any(
+                marker in combined
+                for marker in (
+                    "timeout",
+                    "temporarily",
+                    "connection reset",
+                    "service unavailable",
+                )
+            )
+            if last_result.exit_code == 0 or not transient or attempt >= retries:
+                return last_result
+        except subprocess.TimeoutExpired:
+            if process is not None:
+                process.kill()
+                try:
+                    process.communicate()
+                except Exception:
+                    pass
+            last_result = CommandResult("", "命令执行超时", -1)
+            if attempt >= retries:
+                return last_result
+        except Exception as exc:
+            last_result = CommandResult("", str(exc), -1)
+            if attempt >= retries:
+                return last_result
+        time.sleep(0.2 * (attempt + 1))
+    return last_result
 
-    except Exception as e:
-        return CommandResult("", str(e), -1)
 
-
-def _find_hdc_path() -> Optional[str]:
+def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
     """
     查找 HDC 工具路径。
 
@@ -117,13 +152,51 @@ def _find_hdc_path() -> Optional[str]:
     Returns:
         Optional[str]: HDC 工具路径，未找到则返回 None
     """
-    # 优先查找 tools/hdc 目录
+    def resolve_candidate(candidate: str) -> Optional[str]:
+        """解析 hdc.exe、SDK 根目录或 command-line-tools 根目录。"""
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(get_base_dir(), candidate)
+        if os.path.isfile(candidate):
+            return candidate
+        if not os.path.isdir(candidate):
+            return None
+
+        candidates = (
+            os.path.join(candidate, "hdc.exe"),
+            os.path.join(candidate, "toolchains", "hdc.exe"),
+            os.path.join(candidate, "sdk", "default", "openharmony", "toolchains", "hdc.exe"),
+        )
+        return next((path for path in candidates if os.path.isfile(path)), None)
+
+    if configured_path:
+        resolved = resolve_candidate(configured_path)
+        if resolved:
+            logger.info(f"使用配置中的 HDC: {resolved}")
+            return resolved
+        logger.warning(f"配置的 HDC 不存在或无法识别: {configured_path}")
+
+    # 优先查找仓库内置 HDC。
     base_dir = get_base_dir()
     tools_hdc_path = os.path.join(base_dir, "tools", "hdc", "hdc.exe")
 
     if os.path.isfile(tools_hdc_path):
         logger.info(f"使用 tools 目录中的 HDC: {tools_hdc_path}")
         return tools_hdc_path
+
+    # 支持通过 SDK 根目录环境变量使用 DevEco/OpenHarmony SDK 自带 HDC。
+    # 环境变量既可以直接指向 hdc.exe，也可以指向 SDK 根目录。
+    sdk_env_names = ("HDC_PATH", "OHOS_SDK_HOME", "HARMONY_SDK_HOME", "DEVECO_SDK_HOME")
+    sdk_suffix = os.path.join("sdk", "default", "openharmony", "toolchains", "hdc.exe")
+    for env_name in sdk_env_names:
+        env_value = os.environ.get(env_name)
+        if not env_value:
+            continue
+        env_candidate = resolve_candidate(env_value)
+        if env_candidate is None:
+            env_candidate = env_value if env_value.lower().endswith("hdc.exe") else os.path.join(env_value, sdk_suffix)
+        if os.path.isfile(env_candidate):
+            logger.info(f"使用 SDK 环境变量 {env_name} 中的 HDC: {env_candidate}")
+            return env_candidate
 
     # 查找系统 PATH 中的 hdc
     # Windows 使用 where 命令，Linux/Mac 使用 which 命令
@@ -149,6 +222,56 @@ def _find_hdc_path() -> Optional[str]:
     return None
 
 
+def _has_error_text(result: CommandResult, include_device_states: bool = True) -> bool:
+    """识别退出码为 0 但实际失败的 HDC 输出。"""
+    combined = f"{result.output}\n{result.error}".lower()
+    markers = ["error:", "[fail]", "failed"]
+    if include_device_states:
+        markers.extend(("unauthorized", "offline"))
+    return any(marker in combined for marker in markers)
+
+
+def _quote_remote_shell_argument(value: str) -> str:
+    """使用 POSIX shell 单引号安全引用远端参数。"""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def parse_target_lines(output: str) -> List[HdcTarget]:
+    """解析 hdc list targets -v 输出。"""
+    targets: list[HdcTarget] = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("[") or "empty" in line.lower():
+            continue
+        columns = re.split(r"\s+", line)
+        if len(columns) < 2 or columns[0].lower() in {"serial", "target"}:
+            continue
+        targets.append(
+            HdcTarget(
+                udid=columns[0],
+                connection_type=columns[1],
+                status=columns[2] if len(columns) > 2 else "Ready",
+                detail=line,
+            )
+        )
+    return targets
+
+
+def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
+    """列出 Ready 状态的 HDC target。"""
+    hdc_path = _find_hdc_path(hdc_path)
+    if hdc_path is None:
+        raise HdcCommandError("未找到 HDC 工具")
+    result = _execute_hdc_command(
+        hdc_path,
+        ["list", "targets", "-v"],
+        retries=2,
+    )
+    if result.exit_code != 0 or _has_error_text(result, include_device_states=False):
+        raise HdcCommandError(f"HDC 列出设备失败: {result.error or result.output}")
+    return [target for target in parse_target_lines(result.output) if target.is_ready]
+
+
 def list_devices(hdc_path: Optional[str] = None) -> List[str]:
     """
     列出所有在线的鸿蒙设备。
@@ -162,26 +285,7 @@ def list_devices(hdc_path: Optional[str] = None) -> List[str]:
     Raises:
         HdcCommandError: HDC 命令执行失败
     """
-    if hdc_path is None:
-        hdc_path = _find_hdc_path()
-
-    if hdc_path is None:
-        raise HdcCommandError("未找到 HDC 工具")
-
-    result = _execute_hdc_command(hdc_path, ["list", "targets"])
-
-    if result.exit_code != 0:
-        raise HdcCommandError(f"HDC 列出设备失败: {result.error}")
-
-    devices = []
-    if result.output:
-        lines = result.output.strip().split("\n")
-        for line in lines:
-            line = line.strip()
-            if line and "Empty" not in line:
-                devices.append(line)
-
-    return devices
+    return [target.udid for target in list_target_info(hdc_path)]
 
 
 # ============================================================================
@@ -261,7 +365,7 @@ class HarmonyHdcWrapper:
         """
         # 添加设备 ID 参数
         full_args = ["-t", self.serial] + args
-        return _execute_hdc_command(self.hdc_path, full_args, timeout)
+        return _execute_hdc_command(self.hdc_path, full_args, timeout, retries=1)
 
     def _check_result(self, result: CommandResult, operation: str) -> bool:
         """
@@ -274,8 +378,8 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        if result.exit_code != 0 or "fail" in result.output.lower():
-            logger.error(f"{operation}失败: {result.output}")
+        if result.exit_code != 0 or _has_error_text(result):
+            logger.error(f"{operation}失败: {result.output or result.error}")
             return False
         return True
 
@@ -307,11 +411,12 @@ class HarmonyHdcWrapper:
         Note:
             命令会自动用双引号包裹，确保正确执行。
         """
-        # 确保命令用双引号包裹
+        # HDC 在 Windows 下需要把完整 shell 命令作为一个参数传递。
+        # 同时转义命令内部的双引号，避免设备端命令被截断。
         if not cmd:
             return CommandResult("", "Empty command", -1)
         if not (cmd.startswith('"') and cmd.endswith('"')):
-            cmd = f'"{cmd}"'
+            cmd = f'"{cmd.replace(chr(34), chr(92) + chr(34))}"'
 
         result = self._execute(["shell", cmd], timeout)
 
@@ -392,7 +497,11 @@ class HarmonyHdcWrapper:
                 logger.error(f"拉取文件失败: {result.error}")
                 return False
 
-            return os.path.exists(local_path)
+            if _has_error_text(result, include_device_states=False):
+                logger.error(f"拉取文件失败: {result.error or result.output}")
+                return False
+
+            return os.path.isfile(local_path) and os.path.getsize(local_path) > 0
 
         except Exception as e:
             logger.error(f"拉取文件失败: {e}")
@@ -416,7 +525,7 @@ class HarmonyHdcWrapper:
 
             result = self._execute(["file", "send", local_path, remote_path])
 
-            if result.exit_code != 0:
+            if result.exit_code != 0 or _has_error_text(result, include_device_states=False):
                 logger.error(f"推送文件失败: {result.error}")
                 return False
 
@@ -527,7 +636,8 @@ class HarmonyHdcWrapper:
             return False
 
         # 使用 input text 命令输入文本
-        result = self.shell(f"uitest uiInput inputText {x} {y} '{text}'")
+        quoted_text = _quote_remote_shell_argument(text)
+        result = self.shell(f"uitest uiInput inputText {x} {y} {quoted_text}")
         return self._check_result(result, "输入文本")
 
     def input_text(self, text: str) -> bool:
@@ -549,11 +659,32 @@ class HarmonyHdcWrapper:
             # 设置剪贴板内容（通过 param 或直接 shell 命令）
             # 鸿蒙暂时使用 uitest uiInput inputText 在坐标 (0, 0) 输入
             # 这需要在输入框已聚焦的情况下使用
-            result = self.shell(f"uitest uiInput inputText 0 0 '{text}'")
+            quoted_text = _quote_remote_shell_argument(text)
+            result = self.shell(f"uitest uiInput inputText 0 0 {quoted_text}")
             return self._check_result(result, "输入文本")
         except Exception as e:
             logger.error(f"输入文本失败: {e}")
             return False
+
+    def device_category(self) -> str:
+        """根据系统属性判断设备形态，无法确认时返回 unknown。"""
+        values = []
+        for key in (
+            "const.product.type",
+            "const.product.device_type",
+            "const.product.form",
+            "const.product.family",
+        ):
+            result = self.shell(f"param get {key}")
+            if result.exit_code == 0 and result.output.strip():
+                values.append(result.output.strip().lower())
+
+        text = " ".join(values)
+        if any(marker in text for marker in ("phone", "tablet", "watch", "wearable", "mobile")):
+            return "mobile"
+        if any(marker in text for marker in ("pc", "desktop", "laptop", "notebook", "computer", "2in1")):
+            return "pc"
+        return "unknown"
 
     # ========================================================================
     # 按键操作

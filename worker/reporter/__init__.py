@@ -4,6 +4,7 @@
 
 from worker.reporter.models import (
     AndroidDeviceInfo,
+    HarmonyDeviceInfo,
     iOSDeviceInfo,
     DesktopInfo,
     WorkerCapabilities,
@@ -16,6 +17,7 @@ from worker.reporter.client import Reporter
 
 __all__ = [
     "AndroidDeviceInfo",
+    "HarmonyDeviceInfo",
     "iOSDeviceInfo",
     "DesktopInfo",
     "WorkerCapabilities",

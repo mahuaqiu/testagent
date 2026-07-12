@@ -258,7 +258,7 @@ class UnlockScreenAction(ActionExecutor):
             coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_ANDROID_KEYPAD))
             logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
             return coords
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             keypad = unlock_config.get("harmony_keypad", {})
             coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_HARMONY_KEYPAD))
             logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
@@ -296,7 +296,7 @@ class UnlockScreenAction(ActionExecutor):
                 except Exception as e:
                     logger.warning(f"Failed to get Android screen size: {e}")
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 try:
@@ -348,7 +348,7 @@ class UnlockScreenAction(ActionExecutor):
             # Android 不需要缩放
             return 1
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             # Harmony 不需要缩放
             return 1
 
@@ -373,15 +373,17 @@ class UnlockScreenAction(ActionExecutor):
                 return not info.get("screenOn", True)
             return True
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             # Harmony: 通过 HDC 检测屏幕状态
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 try:
                     result = hdc.shell("dumpsys display | grep 'mScreenState'")
-                    if "ON" in result:
+                    output = result.output if hasattr(result, "output") else str(result)
+                    output = output.upper()
+                    if "ON" in output:
                         return False  # 已解锁
-                    elif "OFF" in result:
+                    elif "OFF" in output:
                         return True  # 已锁屏
                 except Exception as e:
                     logger.warning(f"Failed to check Harmony lock status: {e}")
@@ -401,7 +403,7 @@ class UnlockScreenAction(ActionExecutor):
                 return info.get("screenOn", True)
             return True
 
-        if platform_type == "harmony":
+        if platform_type == "harmony_mobile":
             # Harmony: 通过截图亮度判断（与 iOS 相同）
             try:
                 screenshot_bytes = platform.take_screenshot(context)
@@ -474,7 +476,7 @@ class UnlockScreenAction(ActionExecutor):
                 device.screen_on()
                 logger.info("Android screen awakened")
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 hdc.shell("input keyevent POWER")
@@ -509,7 +511,7 @@ class UnlockScreenAction(ActionExecutor):
             return method
 
         # Harmony 默认使用 swipe
-        if platform.platform == "harmony":
+        if platform.platform == "harmony_mobile":
             return "swipe_up"
 
         # Android 默认使用 swipe
@@ -539,7 +541,7 @@ class UnlockScreenAction(ActionExecutor):
                 device.unlock()
                 logger.info("Android unlock via swipe")
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 # Harmony: 向上滑动解锁
@@ -564,7 +566,7 @@ class UnlockScreenAction(ActionExecutor):
                 # Android: 直接使用物理坐标
                 device.click(x, y)
 
-        elif platform_type == "harmony":
+        elif platform_type == "harmony_mobile":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 # Harmony: 直接使用物理坐标

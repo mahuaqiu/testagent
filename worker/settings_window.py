@@ -212,9 +212,13 @@ class SettingsWindow(QDialog):
         self.discover_ios_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
         discover_row.addWidget(self.discover_ios_checkbox)
 
-        self.discover_harmony_checkbox = QCheckBox("Harmony")
-        self.discover_harmony_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
-        discover_row.addWidget(self.discover_harmony_checkbox)
+        self.discover_harmony_mobile_checkbox = QCheckBox("鸿蒙移动")
+        self.discover_harmony_mobile_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        discover_row.addWidget(self.discover_harmony_mobile_checkbox)
+
+        self.discover_harmony_pc_checkbox = QCheckBox("鸿蒙 PC")
+        self.discover_harmony_pc_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        discover_row.addWidget(self.discover_harmony_pc_checkbox)
 
         discover_row.addStretch()
         grid.addLayout(discover_row, row, 0, 1, 3)
@@ -361,8 +365,11 @@ class SettingsWindow(QDialog):
         discover_ios = worker.get("discover_ios_devices", False)
         self.discover_ios_checkbox.setChecked(discover_ios)
 
-        discover_harmony = worker.get("discover_harmony_devices", False)
-        self.discover_harmony_checkbox.setChecked(discover_harmony)
+        legacy_harmony = worker.get("discover_harmony_devices", False)
+        discover_harmony_mobile = worker.get("discover_harmony_mobile_devices", legacy_harmony)
+        discover_harmony_pc = worker.get("discover_harmony_pc_devices", legacy_harmony)
+        self.discover_harmony_mobile_checkbox.setChecked(discover_harmony_mobile)
+        self.discover_harmony_pc_checkbox.setChecked(discover_harmony_pc)
 
     def _validate(self) -> bool:
         """验证输入。"""
@@ -449,7 +456,9 @@ class SettingsWindow(QDialog):
             original_content = self._update_yaml_value(original_content, "level", self.log_level_combo.currentText())
             original_content = self._update_yaml_value(original_content, "discover_android_devices", "true" if self.discover_android_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_ios_devices", "true" if self.discover_ios_checkbox.isChecked() else "false")
-            original_content = self._update_yaml_value(original_content, "discover_harmony_devices", "true" if self.discover_harmony_checkbox.isChecked() else "false")
+            original_content = self._update_yaml_value(original_content, "discover_harmony_mobile_devices", "true" if self.discover_harmony_mobile_checkbox.isChecked() else "false")
+            original_content = self._update_yaml_value(original_content, "discover_harmony_pc_devices", "true" if self.discover_harmony_pc_checkbox.isChecked() else "false")
+            original_content = self._update_yaml_value(original_content, "discover_harmony_devices", "true" if (self.discover_harmony_mobile_checkbox.isChecked() or self.discover_harmony_pc_checkbox.isChecked()) else "false")
 
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
@@ -468,7 +477,12 @@ class SettingsWindow(QDialog):
             self._config["worker"]["namespace"] = self.namespace_input.text().strip()
             self._config["worker"]["discover_android_devices"] = self.discover_android_checkbox.isChecked()
             self._config["worker"]["discover_ios_devices"] = self.discover_ios_checkbox.isChecked()
-            self._config["worker"]["discover_harmony_devices"] = self.discover_harmony_checkbox.isChecked()
+            self._config["worker"]["discover_harmony_mobile_devices"] = self.discover_harmony_mobile_checkbox.isChecked()
+            self._config["worker"]["discover_harmony_pc_devices"] = self.discover_harmony_pc_checkbox.isChecked()
+            self._config["worker"]["discover_harmony_devices"] = (
+                self.discover_harmony_mobile_checkbox.isChecked()
+                or self.discover_harmony_pc_checkbox.isChecked()
+            )
 
             self._config.setdefault("external_services", {})
             self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()
@@ -507,12 +521,24 @@ class SettingsWindow(QDialog):
         pattern = rf'^(\s+){key}:\s*([^\s#]+)(\s*(#.*)?)$'
 
         lines = content.split('\n')
+        updated = False
         for i, line in enumerate(lines):
             match = re.match(pattern, line)
             if match:
                 indent = match.group(1)
                 comment_part = match.group(3) or ""
                 lines[i] = f"{indent}{key}: {value}{comment_part}"
+                updated = True
                 break
+
+        # 老版本配置没有新鸿蒙字段时，插入到 worker 配置块中。
+        if not updated and key in {
+            "discover_harmony_mobile_devices",
+            "discover_harmony_pc_devices",
+        }:
+            for i, line in enumerate(lines):
+                if re.match(r"^worker:\s*$", line):
+                    lines.insert(i + 1, f"  {key}: {value}")
+                    break
 
         return '\n'.join(lines)

@@ -9,7 +9,8 @@ worker:
   namespace: meeting_public         # Namespace for categorizing Workers
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
-  discover_harmony_devices: false   # Enable HarmonyOS device discovery
+  discover_harmony_mobile_devices: false  # 是否发现鸿蒙移动设备
+  discover_harmony_pc_devices: false      # 是否发现鸿蒙 PC 设备
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
   service_retry_interval: 10        # Retry interval (seconds)
@@ -86,9 +87,16 @@ platforms:
     session_timeout: 300
     screenshot_dir: data/screenshots
 
-  harmony:
+  harmony_mobile:
     enabled: null                   # Only on Windows
-    hdc_path: tools/hdc/hdc.exe     # HDC tool path
+    hdc_path: D:/code/commandline-tools-windows-x64-6.1.0.850/command-line-tools  # HDC SDK root
+    screenshot_method: snapshot_display  # Screenshot method
+    session_timeout: 300
+    screenshot_dir: data/screenshots
+
+  harmony_pc:
+    enabled: null                   # Only on Windows
+    hdc_path: D:/code/commandline-tools-windows-x64-6.1.0.850/command-line-tools  # HDC SDK root
     screenshot_method: snapshot_display  # Screenshot method
     session_timeout: 300
     screenshot_dir: data/screenshots

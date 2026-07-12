@@ -44,7 +44,8 @@ Var PlatformApiInput
 Var OcrServiceInput
 Var DiscoverAndroid
 Var DiscoverIos
-Var DiscoverHarmony
+Var DiscoverHarmonyMobile
+Var DiscoverHarmonyPc
 Var IsUpgrade
 
 ; Page order
@@ -357,8 +358,10 @@ Function ConfigPageCreate
   Pop $DiscoverAndroid
   ${NSD_CreateCheckbox} 100 178 60 12u "iOS"
   Pop $DiscoverIos
-  ${NSD_CreateCheckbox} 165 178 80 12u "Harmony"
-  Pop $DiscoverHarmony
+  ${NSD_CreateCheckbox} 165 178 90 12u "Harmony Mobile"
+  Pop $DiscoverHarmonyMobile
+  ${NSD_CreateCheckbox} 260 178 80 12u "Harmony PC"
+  Pop $DiscoverHarmonyPc
 
   nsDialogs::Show
 
@@ -375,7 +378,8 @@ Function ConfigPageLeave
   ${NSD_GetText} $OcrServiceInput $OcrServiceInput
   ${NSD_GetState} $DiscoverAndroid $DiscoverAndroid
   ${NSD_GetState} $DiscoverIos $DiscoverIos
-  ${NSD_GetState} $DiscoverHarmony $DiscoverHarmony
+  ${NSD_GetState} $DiscoverHarmonyMobile $DiscoverHarmonyMobile
+  ${NSD_GetState} $DiscoverHarmonyPc $DiscoverHarmonyPc
 FunctionEnd
 
 ; Config file replacement
@@ -431,13 +435,21 @@ Function ReplaceConfigFile
     Pop $0
   skip_ios:
 
-  ; Device discovery - Harmony
-  StrCmp $DiscoverHarmony ${BST_CHECKED} 0 skip_harmony
+  ; Device discovery - Harmony Mobile
+  StrCmp $DiscoverHarmonyMobile ${BST_CHECKED} 0 skip_harmony_mobile
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_devices: false', 'discover_harmony_devices: true' | Set-Content '$9'$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_mobile_devices: false', 'discover_harmony_mobile_devices: true' | Set-Content '$9'$\""
     nsExec::Exec $1
     Pop $0
-  skip_harmony:
+  skip_harmony_mobile:
+
+  ; Device discovery - Harmony PC
+  StrCmp $DiscoverHarmonyPc ${BST_CHECKED} 0 skip_harmony_pc
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_pc_devices: false', 'discover_harmony_pc_devices: true' | Set-Content '$9'$\""
+    nsExec::Exec $1
+    Pop $0
+  skip_harmony_pc:
 
   Goto done
 

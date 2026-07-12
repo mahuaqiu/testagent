@@ -32,7 +32,7 @@ from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.mac import MacPlatformManager
 from worker.platforms.web import WebPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
-from worker.reporter import DesktopInfo, Reporter, WorkerCapabilities, WorkerReport
+from worker.reporter import DesktopInfo, HarmonyDeviceInfo, Reporter, WorkerCapabilities, WorkerReport
 from worker.task import ActionStatus, Task, TaskResult, TaskStatus
 from worker.task.store import TaskEntry, TaskStore
 from worker.tools import get_all_script_versions
@@ -124,9 +124,14 @@ class TaskScheduler:
             return self.platform_locks[platform]
         elif device_id:
             with self._lock:
-                if device_id not in self.device_locks:
-                    self.device_locks[device_id] = threading.Lock()
-                return self.device_locks[device_id]
+                lock_key = (
+                    f"{platform}:{device_id}"
+                    if platform in ("harmony_mobile", "harmony_pc")
+                    else device_id
+                )
+                if lock_key not in self.device_locks:
+                    self.device_locks[lock_key] = threading.Lock()
+                return self.device_locks[lock_key]
         else:
             raise ValueError(f"device_id is required for platform: {platform}")
 
@@ -168,7 +173,8 @@ class Worker:
         self.platform_managers: dict[str, PlatformManager] = {}
         self.android_manager: AndroidPlatformManager | None = None
         self.ios_manager: iOSPlatformManager | None = None
-        self.harmony_manager: HarmonyPlatformManager | None = None
+        self.harmony_mobile_manager: HarmonyPlatformManager | None = None
+        self.harmony_pc_manager: HarmonyPlatformManager | None = None
 
         # 任务调度器
         self.scheduler = TaskScheduler()
@@ -219,13 +225,15 @@ class Worker:
         self._init_platform_managers()
 
         # 4. 启动移动端平台管理器（必须在设备发现之前，否则 GoIOSClient 未初始化）
-        for platform in ("android", "ios", "harmony"):
+        for platform in ("android", "ios", "harmony_mobile", "harmony_pc"):
             # 根据开关跳过
             if platform == "android" and not self.config.discover_android_devices:
                 continue
             if platform == "ios" and not self.config.discover_ios_devices:
                 continue
-            if platform == "harmony" and not self.config.discover_harmony_devices:
+            if platform == "harmony_mobile" and not self.config.discover_harmony_mobile_devices:
+                continue
+            if platform == "harmony_pc" and not self.config.discover_harmony_pc_devices:
                 continue
 
             manager = self.platform_managers.get(platform)
@@ -345,8 +353,11 @@ class Worker:
             if platform == "ios" and not self.config.discover_ios_devices:
                 logger.info("iOS platform skipped: discover_ios_devices=false")
                 continue
-            if platform == "harmony" and not self.config.discover_harmony_devices:
-                logger.info("Harmony platform skipped: discover_harmony_devices=false")
+            if platform == "harmony_mobile" and not self.config.discover_harmony_mobile_devices:
+                logger.info("Harmony mobile platform skipped: discover_harmony_mobile_devices=false")
+                continue
+            if platform == "harmony_pc" and not self.config.discover_harmony_pc_devices:
+                logger.info("Harmony PC platform skipped: discover_harmony_pc_devices=false")
                 continue
 
             platform_config = PlatformConfig.from_dict(
@@ -362,9 +373,17 @@ class Worker:
                 elif platform == "ios":
                     manager = iOSPlatformManager(platform_config, self.ocr_client, unlock_config)
                     self.ios_manager = manager
-                elif platform == "harmony":
-                    manager = HarmonyPlatformManager(platform_config, self.ocr_client, unlock_config)
-                    self.harmony_manager = manager
+                elif platform in ("harmony_mobile", "harmony_pc"):
+                    manager = HarmonyPlatformManager(
+                        platform_config,
+                        self.ocr_client,
+                        unlock_config,
+                        device_type=platform,
+                    )
+                    if platform == "harmony_mobile":
+                        self.harmony_mobile_manager = manager
+                    else:
+                        self.harmony_pc_manager = manager
                 elif platform == "windows":
                     manager = WindowsPlatformManager(platform_config, self.ocr_client)
                 elif platform == "mac":
@@ -385,12 +404,18 @@ class Worker:
         self.device_monitor.set_platform_managers(
             android_manager=self.android_manager,
             ios_manager=self.ios_manager,
-            harmony_manager=self.harmony_manager
+            harmony_mobile_manager=self.harmony_mobile_manager,
+            harmony_pc_manager=self.harmony_pc_manager,
         )
         self.device_monitor.on_device_change = self._on_device_change
 
         # 设置帧捕获失败回调（仅移动端）
-        if self.config.discover_android_devices or self.config.discover_ios_devices or self.config.discover_harmony_devices:
+        if (
+            self.config.discover_android_devices
+            or self.config.discover_ios_devices
+            or self.config.discover_harmony_mobile_devices
+            or self.config.discover_harmony_pc_devices
+        ):
             from worker.screen.manager import set_capture_failed_callback
             set_capture_failed_callback(self._on_capture_failed)
 
@@ -413,6 +438,25 @@ class Worker:
             devices.append(device)
         for device in self.ios_devices:
             devices.append(device)
+
+        # 鸿蒙设备由 DeviceMonitor 维护，保留形态、连接信息和能力后再上报。
+        if self.device_monitor:
+            harmony_devices = self.device_monitor.get_all_devices()
+            for platform, category in (("harmony_mobile", "mobile"), ("harmony_pc", "pc")):
+                for device in harmony_devices.get(platform, []):
+                    devices.append(HarmonyDeviceInfo(
+                        udid=device.get("udid", ""),
+                        name=device.get("name", ""),
+                        model=device.get("model", ""),
+                        sys_version=device.get("sys_version", ""),
+                        sdk_version=device.get("sdk_version", ""),
+                        display_size=tuple(device.get("display_size", (0, 0))),
+                        status="online",
+                        device_category=device.get("device_category", category),
+                        connection_type=device.get("connection_type", "unknown"),
+                        connection_status=device.get("connection_status", "ready"),
+                        capabilities=list(device.get("capabilities", [])),
+                    ))
 
         # 桌面信息
         if self.host_info:
@@ -463,10 +507,14 @@ class Worker:
             # 使用 set 去重，防止重复上报
             android_udids = list(set([d["udid"] for d in devices.get("android", [])]))
             ios_udids = list(set([d["udid"] for d in devices.get("ios", [])]))
+            harmony_mobile_udids = list(set([d["udid"] for d in devices.get("harmony_mobile", [])]))
+            harmony_pc_udids = list(set([d["udid"] for d in devices.get("harmony_pc", [])]))
         else:
             # DeviceMonitor 未启动时，使用启动时发现的设备列表
             android_udids = [d.udid for d in self.android_devices]
             ios_udids = [d.udid for d in self.ios_devices]
+            harmony_mobile_udids = []
+            harmony_pc_udids = []
 
         # 获取本机 IP
         ip = HostDiscoverer.get_preferred_ip(self.config.ip)
@@ -488,6 +536,11 @@ class Worker:
         # 3. iOS 设备
         if ios_udids:
             devices_payload["ios"] = ios_udids
+
+        if harmony_mobile_udids:
+            devices_payload["harmony_mobile"] = harmony_mobile_udids
+        if harmony_pc_udids:
+            devices_payload["harmony_pc"] = harmony_pc_udids
 
         # 调用新的注册接口
         self.reporter.register_env(
@@ -629,12 +682,14 @@ class Worker:
                 "mac": [],
                 "android": devices.get("android", []),
                 "ios": devices.get("ios", []),
-                "harmony": devices.get("harmony", []),
+                "harmony_mobile": devices.get("harmony_mobile", []),
+                "harmony_pc": devices.get("harmony_pc", []),
             },
             "faulty_devices": {
                 "android": devices.get("faulty_android", []),
                 "ios": devices.get("faulty_ios", []),
-                "harmony": devices.get("faulty_harmony", []),
+                "harmony_mobile": devices.get("faulty_harmony_mobile", []),
+                "harmony_pc": devices.get("faulty_harmony_pc", []),
             },
             "namespace": self.reporter.namespace if self.reporter else "",
             "config_version": self.config.config_version,
@@ -665,6 +720,14 @@ class Worker:
         # 3. iOS 设备（返回 UDID 列表）
         if self.ios_devices:
             devices["ios"] = [d.udid for d in self.ios_devices]
+
+        # 4. 鸿蒙设备（优先使用监控器中的 Ready 设备）
+        if self.device_monitor:
+            monitored = self.device_monitor.get_all_devices()
+            for platform in ("harmony_mobile", "harmony_pc"):
+                udids = [d["udid"] for d in monitored.get(platform, []) if d.get("udid")]
+                if udids:
+                    devices[platform] = udids
 
         # 4. 获取本机 IP（使用配置的 IP 或自动获取）
         ip = HostDiscoverer.get_preferred_ip(self.config.ip)
@@ -704,7 +767,7 @@ class Worker:
             )
 
         # 2. device_id 验证（移动端必填）
-        if task.platform in ["android", "ios"]:
+        if task.platform in ["android", "ios", "harmony_mobile", "harmony_pc"]:
             if not task.device_id:
                 return TaskResult(
                     task_id=task.task_id,
@@ -717,8 +780,12 @@ class Worker:
             # 验证设备是否连接
             if task.platform == "android":
                 device_ids = [d.udid for d in self.android_devices]
-            else:
+            elif task.platform == "ios":
                 device_ids = [d.udid for d in self.ios_devices]
+            elif self.device_monitor:
+                device_ids = self.device_monitor.get_online_devices(task.platform)
+            else:
+                device_ids = []
 
             if task.device_id not in device_ids:
                 return TaskResult(
@@ -947,7 +1014,7 @@ class Worker:
         # 移动端 start_app/stop_app 需要确保设备服务可用，即使 needs_context=False
         # 因为这些动作依赖 _current_device 和 client 来执行命令
         needs_device_service = (
-            platform in ("ios", "android")
+            platform in ("ios", "android", "harmony_mobile", "harmony_pc")
             and task.device_id
             and any(a.action_type in ("start_app", "stop_app") for a in task.actions)
         )
@@ -990,7 +1057,7 @@ class Worker:
             if needs_context or needs_device_service:
                 try:
                     # 移动端：确保设备服务可用（启动 WDA/u2）
-                    if platform in ("ios", "android") and task.device_id:
+                    if platform in ("ios", "android", "harmony_mobile", "harmony_pc") and task.device_id:
                         status, message = manager.ensure_device_service(task.device_id)
                         if status != "online":
                             return TaskResult(
@@ -1390,7 +1457,7 @@ class Worker:
             context = None
             try:
                 # 移动端：确保设备服务可用（启动 WDA/u2）
-                if platform in ("ios", "android") and task.device_id:
+                if platform in ("ios", "android", "harmony_mobile", "harmony_pc") and task.device_id:
                     status, message = manager.ensure_device_service(task.device_id)
                     if status != "online":
                         entry.status = TaskStatus.FAILED
