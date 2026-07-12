@@ -573,6 +573,13 @@ class MediaPacketReader:
         del self._buffer[:packet_length]
         received_monotonic = time.monotonic()
         self._packet_count += 1
+        self.last_diagnostics = {
+            "_received_monotonic": received_monotonic,
+            "_read_ms": (received_monotonic - read_started) * 1000,
+            "_connected_ms": (received_monotonic - self._connected_monotonic) * 1000,
+            "_packet_count": self._packet_count,
+            "_buffered_bytes": len(self._buffer),
+        }
         return {
             "sequence": sequence,
             "pts_100ns": pts_100ns,
@@ -582,11 +589,6 @@ class MediaPacketReader:
             "flags": flags,
             "message_type": message_type,
             "payload": payload,
-            "_received_monotonic": received_monotonic,
-            "_read_ms": (received_monotonic - read_started) * 1000,
-            "_connected_ms": (received_monotonic - self._connected_monotonic) * 1000,
-            "_packet_count": self._packet_count,
-            "_buffered_bytes": len(self._buffer),
         }
 
 
@@ -610,6 +612,59 @@ def media_packet_to_websocket_frame(packet: dict[str, Any]) -> bytes:
         prefix = b"\x03"
     return prefix + payload
 
+
+def media_packet_to_websocket_frames(packet: dict[str, Any]) -> list[bytes]:
+    """将一个 RSM1 媒体包展开为一个或多个现有 WebSocket 帧。
+
+    编码器通常会把 SPS、PPS 和 IDR 合并到同一个 RSM1 包中，
+    但旧 WebSocket 协议要求配置帧先于关键帧发送。这里仅拆分转发帧，
+    不改变 WebSocket 帧格式或 sidecar 的 RSM1 协议。
+    """
+    flags = int(packet.get("flags", 0))
+    payload = packet.get("payload", b"")
+    if not isinstance(payload, bytes):
+        raise TypeError("媒体 packet payload 必须是 bytes")
+
+    has_config = bool(flags & 0x02)
+    has_keyframe = bool(flags & 0x01)
+    if not (has_config and has_keyframe):
+        return [media_packet_to_websocket_frame(packet)]
+
+    config_payload, keyframe_payload = _split_h264_config_payload(payload)
+    if not config_payload or not keyframe_payload:
+        return [media_packet_to_websocket_frame(packet)]
+
+    return [b"\x01" + config_payload, b"\x02" + keyframe_payload]
+
+
+def _split_h264_config_payload(payload: bytes) -> tuple[bytes, bytes]:
+    """拆分 Annex-B payload 中的 SPS/PPS 与其它 NAL。"""
+    nals: list[tuple[bytes, int]] = []
+    index = 0
+    while index < len(payload):
+        short_start = payload.find(b"\x00\x00\x01", index)
+        long_start = payload.find(b"\x00\x00\x00\x01", index)
+        if long_start >= 0 and (short_start < 0 or long_start <= short_start):
+            start = long_start
+            start_code_length = 4
+        else:
+            start = short_start
+            start_code_length = 3
+        if start < 0:
+            break
+        nal_start = start + start_code_length
+        next_short = payload.find(b"\x00\x00\x01", nal_start)
+        next_long = payload.find(b"\x00\x00\x00\x01", nal_start)
+        candidates = [candidate for candidate in (next_short, next_long) if candidate >= 0]
+        next_start = min(candidates) if candidates else len(payload)
+        if nal_start < next_start:
+            nal = payload[start:next_start]
+            nals.append((nal, payload[nal_start] & 0x1F))
+        index = next_start
+
+    config = b"".join(nal for nal, nal_type in nals if nal_type in (7, 8))
+    keyframe = b"".join(nal for nal, nal_type in nals if nal_type not in (7, 8))
+    return config, keyframe
 
 class WindowsSidecarScreenManager:
     """Windows 屏幕管理器的新实现，直接连接 Rust sidecar。"""

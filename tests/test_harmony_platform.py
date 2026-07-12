@@ -10,8 +10,8 @@ from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.harmony_hdc import CommandResult, HdcCommandError, HarmonyHdcWrapper
 from worker.config import PlatformConfig, WorkerConfig
 from worker.task import Action, ActionStatus, Task, TaskStatus
-from worker.task.store import TaskEntry, TaskStore
-from worker.worker import TaskScheduler, Worker
+from worker.scheduling.scheduler import ResourceScheduler
+from worker.worker import Worker
 from worker.actions.unlock import UnlockScreenAction
 
 
@@ -210,36 +210,17 @@ def test_harmony_task_rejects_unknown_device_id() -> None:
 
 
 def test_harmony_scheduler_isolates_platform_and_device() -> None:
-    scheduler = TaskScheduler()
+    scheduler = ResourceScheduler()
 
-    assert scheduler.acquire("harmony_mobile", "same-udid", blocking=False)
+    mobile = scheduler.try_acquire("harmony_mobile", "same-udid", "mobile-task")
+    assert mobile is not None
     assert scheduler.is_busy("harmony_mobile", "same-udid")
-    assert not scheduler.acquire("harmony_mobile", "same-udid", blocking=False)
-    assert scheduler.acquire("harmony_mobile", "other-udid", blocking=False)
-    assert scheduler.acquire("harmony_pc", "same-udid", blocking=False)
+    assert scheduler.try_acquire("harmony_mobile", "same-udid", "other-task") is None
+    pc = scheduler.try_acquire("harmony_pc", "same-udid", "pc-task")
+    assert pc is not None
 
-    scheduler.release("harmony_mobile", "same-udid")
-    scheduler.release("harmony_mobile", "other-udid")
-    scheduler.release("harmony_pc", "same-udid")
-
-
-def test_harmony_task_store_isolates_platform_and_device() -> None:
-    store = TaskStore()
-    mobile_task = Task.create(
-        platform="harmony_mobile", actions=[], device_id="same-udid"
-    )
-    pc_task = Task.create(
-        platform="harmony_pc", actions=[], device_id="same-udid"
-    )
-
-    store.store(TaskEntry(mobile_task.task_id, mobile_task, TaskStatus.RUNNING))
-    store.store(TaskEntry(pc_task.task_id, pc_task, TaskStatus.RUNNING))
-
-    assert store.is_busy("harmony_mobile", "same-udid")
-    assert store.is_busy("harmony_pc", "same-udid")
-    assert store.get_busy_task_id("harmony_mobile", "same-udid") == mobile_task.task_id
-    assert store.get_busy_task_id("harmony_pc", "same-udid") == pc_task.task_id
-
+    scheduler.release_lease(mobile)
+    scheduler.release_lease(pc)
 
 def test_harmony_unlock_uses_mobile_branch() -> None:
     action = UnlockScreenAction()

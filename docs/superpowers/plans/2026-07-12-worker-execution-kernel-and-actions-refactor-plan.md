@@ -1,7 +1,7 @@
 # Worker 执行内核与 Action 统一整改实施计划
 
 > 日期：2026-07-12  
-> 状态：评审稿  
+> 状态：已实施（2026-07-12）  
 > 涉及工程：`D:\code\autotest`、`D:\code\zq-platform`（仅平台后端）
 
 ## 一、目标与范围
@@ -1032,4 +1032,19 @@ API Token 的具体生成和平台下发方式需在实施前确认。若当前�
 4. 附件单文件和单任务上限是否适合现有最长录屏；文中数值为初始建议。
 5. `interrupted` 在各平台业务中的默认处理；本计划建议由平台按动作幂等性决定是否重试，不自动重放。
 6. 是否允许未配置 API Token 的兼容启动；建议仅开发环境允许，生产拒绝启动或拒绝高风险接口。
+## 十七、首期实施结果
 
+本计划首期已在 Worker 工程落地，现状如下：
+
+- 已完成 `WorkerRuntime`、`TaskService`、`ResourceScheduler`、`DeviceRegistry`、`ArtifactService` 和 SQLite Repository 的组装。
+- 已完成同步/异步任务统一入口、幂等提交、可重复查询、取消请求、重启恢复和资源租约释放。
+- 已删除 `worker/task/store.py` 及 Worker 内旧异步线程执行分支；旧 `TaskScheduler` 生产引用已清理。
+- 已将 Android/iOS/Harmony 发现和监控快照接入 `DeviceRegistry`，设备查询和任务校验优先读取事实注册表。
+- 已将动作截图、失败截图和录屏结果登记为附件引用，同时保留 Base64 字段兼容既有平台。
+- 已将 `cmd_exec background` 纳入可回收进程集合，录屏相对路径禁止路径穿越。
+- 已将推流诊断字段从媒体协议返回值隔离到 Reader 内部，未改变 RSM1 或 WebSocket 帧协议。
+- 已更新 `D:\code\autotest\AGENTS.md` 和 `D:\code\zq-platform\AGENTS.md` 的协作约束。
+
+首期明确不动的范围仍保持不变：平台动作底层实现、OCR 服务、用例工程、推流协议、`win-control`、Worker 安装升级流程和平台前端页面。
+
+验证结果：Worker 全量测试 `71 passed, 1 skipped`；架构、附件、设备和 Action 定向测试 `12 passed`。

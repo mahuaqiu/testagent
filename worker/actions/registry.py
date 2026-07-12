@@ -34,6 +34,9 @@ class ActionRegistry:
         if not action.name:
             raise ValueError("Action must have a name")
 
+        if action.name in cls._actions and cls._actions[action.name] is not action:
+            raise ValueError(f'Action already registered: {action.name}')
+
         cls._actions[action.name] = action
         logger.debug(f"Registered action: {action.name}")
 

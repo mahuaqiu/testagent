@@ -255,6 +255,27 @@ class TestMediaPacketReader:
 
         assert media_packet_to_websocket_frame({"flags": 0x03, "payload": b"idr"}) == b"\x02idr"
 
+    def test_media_packet_with_config_and_keyframe_sends_config_first(self):
+        from worker.screen.windows_sidecar import media_packet_to_websocket_frames
+
+        payload = (
+            b"\x00\x00\x00\x01\x67config"
+            b"\x00\x00\x00\x01\x68params"
+            b"\x00\x00\x00\x01\x65idr"
+        )
+
+        assert media_packet_to_websocket_frames({"flags": 0x03, "payload": payload}) == [
+            b"\x01\x00\x00\x00\x01\x67config\x00\x00\x00\x01\x68params",
+            b"\x02\x00\x00\x00\x01\x65idr",
+        ]
+
+    def test_media_packet_with_config_flag_but_invalid_annex_b_falls_back(self):
+        from worker.screen.windows_sidecar import media_packet_to_websocket_frames
+
+        assert media_packet_to_websocket_frames({"flags": 0x03, "payload": b"idr"}) == [
+            b"\x02idr"
+        ]
+
     def test_handle_command_fps(self):
         """测试处理 FPS 控制命令"""
         from worker.screen.windows_sidecar import PushFrameReader, WindowsSidecarClient

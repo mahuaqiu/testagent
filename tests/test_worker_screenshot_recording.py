@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """Worker 截图和录制测试脚本。
 
 用法:
@@ -125,7 +125,7 @@ def save_recording(result: dict, prefix: str = "recording") -> str:
     return None
 
 
-def test_screenshot(host: str, port: int, platform: str) -> str:
+def run_screenshot(host: str, port: int, platform: str) -> str:
     """测试截图功能。"""
     print("\n" + "="*60)
     print("测试 1: 截图")
@@ -143,7 +143,7 @@ def test_screenshot(host: str, port: int, platform: str) -> str:
     return filename
 
 
-def test_recording(host: str, port: int, platform: str, duration_seconds: int = 20) -> str:
+def run_recording(host: str, port: int, platform: str, duration_seconds: int = 20) -> str:
     """测试录制功能（录制中截图2次）。"""
     print("\n" + "="*60)
     print(f"测试 2: 录制 ({duration_seconds} 秒，录制中截图2次)")
@@ -206,7 +206,7 @@ def test_recording(host: str, port: int, platform: str, duration_seconds: int = 
     return filename
 
 
-def test_screenshot_after_recording(host: str, port: int, platform: str) -> str:
+def run_screenshot_after_recording(host: str, port: int, platform: str) -> str:
     """测试录制后的截图（验证资源释放）。"""
     print("\n" + "="*60)
     print("测试 3: 录制后截图（验证资源释放）")
@@ -225,7 +225,7 @@ def test_screenshot_after_recording(host: str, port: int, platform: str) -> str:
     return filename
 
 
-def test_screenshot_window_class(host: str, port: int, class_name: str) -> str:
+def run_screenshot_window_class(host: str, port: int, class_name: str) -> str:
     """测试窗口级截图（通过 class 名称）。"""
     print("\n" + "="*60)
     print(f"测试窗口级截图: class={class_name}")
@@ -278,7 +278,7 @@ def main():
     # 测试 1: 截图
     if not args.skip_screenshot:
         try:
-            results["screenshot"] = test_screenshot(args.host, args.port, args.platform)
+            results["screenshot"] = run_screenshot(args.host, args.port, args.platform)
         except Exception as e:
             print(f"截图测试失败: {e}")
             import traceback
@@ -289,7 +289,7 @@ def main():
     # 测试 2: 录制
     if not args.skip_recording:
         try:
-            results["recording"] = test_recording(args.host, args.port, args.platform, args.recording_duration)
+            results["recording"] = run_recording(args.host, args.port, args.platform, args.recording_duration)
         except Exception as e:
             print(f"录制测试失败: {e}")
             import traceback
@@ -300,7 +300,7 @@ def main():
     # 测试 3: 录制后截图
     if not args.skip_screenshot and not args.skip_recording:
         try:
-            results["screenshot_after"] = test_screenshot_after_recording(args.host, args.port, args.platform)
+            results["screenshot_after"] = run_screenshot_after_recording(args.host, args.port, args.platform)
         except Exception as e:
             print(f"录制后截图测试失败: {e}")
             import traceback
@@ -309,7 +309,7 @@ def main():
     # 测试 4: 窗口级截图（通过 class）
     if args.window_class:
         try:
-            results["window_screenshot"] = test_screenshot_window_class(args.host, args.port, args.window_class)
+            results["window_screenshot"] = run_screenshot_window_class(args.host, args.port, args.window_class)
         except Exception as e:
             print(f"窗口级截图测试失败: {e}")
             import traceback

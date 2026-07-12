@@ -17,6 +17,7 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class ActionStatus(str, Enum):
@@ -50,6 +51,7 @@ class ActionResult:
     ocr_info: Optional[list[dict[str, Any]]] = None  # OCR 识别信息列表
     # 点击类动作时间戳
     timestamp: Optional[float] = None  # 点击动作执行时的时间戳（Unix timestamp）
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
@@ -69,6 +71,7 @@ class ActionResult:
             stderr=data.get("stderr"),
             ocr_info=data.get("ocr_info"),
             timestamp=data.get("timestamp"),
+            artifacts=data.get("artifacts", []),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -97,6 +100,8 @@ class ActionResult:
             result["ocr_info"] = self.ocr_info
         if self.timestamp is not None:
             result["timestamp"] = self.timestamp
+        if self.artifacts:
+            result["artifacts"] = self.artifacts
         # context 不需要序列化到结果中
         return result
 
@@ -119,6 +124,7 @@ class TaskResult:
     error: Optional[str] = None
     error_screenshot: Optional[str] = None  # 失败截图（base64 编码）
     metadata: Dict[str, Any] = field(default_factory=dict)
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -140,6 +146,7 @@ class TaskResult:
             error=data.get("error"),
             error_screenshot=data.get("error_screenshot"),
             metadata=data.get("metadata", {}),
+            artifacts=data.get("artifacts", []),
         )
 
     def to_dict(self, include_task_id: bool = True) -> Dict[str, Any]:
@@ -155,6 +162,8 @@ class TaskResult:
             "actions": [a.to_dict() for a in self.actions],
             "metadata": self.metadata,
         }
+        if self.artifacts:
+            result["artifacts"] = self.artifacts
 
         # task_id 可选输出
         if include_task_id and self.task_id:

@@ -79,7 +79,7 @@ class iOSPlatformManager(PlatformManager):
         "POWER": "WDA 不支持 POWER 按键，请使用 HOME 键唤醒屏幕或 unlock_screen 动作",
     }
 
-    def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
+    def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None, busy_checker=None):
         super().__init__(config, ocr_client)
         # go-ios 配置
         self.go_ios_path = config.go_ios_path or "tools/go-ios/ios.exe"
@@ -100,6 +100,7 @@ class iOSPlatformManager(PlatformManager):
         self._device_product_types: dict[str, str] = {}  # udid -> product_type（用于判断按键支持）
         self._current_device: str | None = None
         self._unlock_config = unlock_config or {}
+        self._busy_checker = busy_checker or (lambda _device_id: False)
 
         # Agent 进程引用（用于异常时重启）
         self._agent_process: subprocess.Popen | None = None
@@ -871,7 +872,7 @@ class iOSPlatformManager(PlatformManager):
             except Exception as e:
                 # ⚠️ 关键修复：检查设备是否正在执行任务
                 # 如果设备忙碌，不要杀掉端口转发进程，避免中断正在执行的任务
-                if self.is_device_busy(udid):
+                if self._busy_checker(udid):
                     logger.warning(f"MJPEG port {mjpeg_port} not accessible but device is busy, skipping kill to avoid interrupting task: {e}")
                     # 返回已有的进程引用，让任务继续执行
                     wda_info = self._device_wda.get(udid, {})

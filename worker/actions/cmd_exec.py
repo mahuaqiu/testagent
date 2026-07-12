@@ -26,6 +26,8 @@ class CmdExecAction(BaseActionExecutor):
     name = "cmd_exec"
     requires_context = False  # 不需要浏览器/设备上下文
     requires_ocr = False
+    _background_processes: set[subprocess.Popen] = set()
+    _background_lock = threading.RLock()
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         cmd = action.value
@@ -49,27 +51,18 @@ class CmdExecAction(BaseActionExecutor):
         return self._execute_sync(cmd, action)
 
     def _execute_background(self, cmd: str, action: Action) -> ActionResult:
-        """后台异步执行命令，不等待结果直接返回成功。"""
-
-        def _run():
-            timeout_sec = (action.timeout or 30000) / 1000
-            try:
-                result = run_cmd_with_process_tree_timeout(cmd, shell=True, timeout=timeout_sec)
-                status = "success" if result.returncode == 0 else "failed"
-                logger.info(f"[background] Command finished: exit_code={result.returncode}, status={status}")
-                if result.stdout:
-                    stdout_preview = result.stdout[-500:] if len(result.stdout) > 500 else result.stdout
-                    logger.info(f"[background] Script output: {stdout_preview}")
-                if result.stderr and result.returncode != 0:
-                    stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
-                    logger.error(f"[background] Script error: {stderr_preview}")
-            except subprocess.TimeoutExpired:
-                logger.warning(f"[background] Command timeout after {action.timeout or 30000}ms")
-            except Exception as e:
-                logger.error(f"[background] Command execution failed: {e}")
-
-        thread = threading.Thread(target=_run, daemon=True, name="cmd_exec_background")
-        thread.start()
+        """启动可由 Worker 生命周期统一回收的后台进程。"""
+        with self._background_lock:
+            self._background_processes = {
+                process for process in self._background_processes if process.poll() is None
+            }
+            process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._background_processes.add(process)
 
         logger.info(f"Executing command in background: {cmd}")
 
@@ -79,6 +72,19 @@ class CmdExecAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output="command started in background",
         )
+
+    @classmethod
+    def shutdown_background_processes(cls) -> None:
+        """停止仍在运行的后台命令。"""
+        with cls._background_lock:
+            processes = list(cls._background_processes)
+            cls._background_processes.clear()
+        for process in processes:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
 
     def _execute_sync(self, cmd: str, action: Action) -> ActionResult:
         """同步执行命令，等待结果返回。"""

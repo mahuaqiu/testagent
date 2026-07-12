@@ -298,3 +298,9 @@ platforms:
 4. **直连模式**：Android 使用 uiautomator2 直连，iOS 使用 tidevice3 + WDA 直连，无需外部 Appium Server
 5. **WDA 安装包**：iOS 自动化需要提供 `wda/WebDriverAgent.ipa` 文件
 6. **无状态设计**：Worker 不维护会话状态，每次任务独立执行
+## Worker 执行内核约束（2026-07-12）
+- Worker 任务统一经过 `WorkerRuntime`、`TaskService` 和 `ResourceScheduler`。
+- `DeviceRegistry` 是设备事实状态读取入口，`DeviceMonitor` 负责发现和状态更新。
+- `ArtifactService` 负责截图、录屏和失败附件的安全落盘及元数据。
+- `GET /task/{task_id}` 可重复查询，`DELETE` 只请求取消；不得恢复旧的一次性删除语义。
+- 首期不修改平台动作底层实现、OCR 服务、用例工程、推流协议、win-control、安装升级流程和平台前端。

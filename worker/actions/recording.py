@@ -1,4 +1,4 @@
-﻿"""录屏动作处理器。"""
+"""录屏动作处理器。"""
 
 import logging
 import os
@@ -59,7 +59,15 @@ class StartRecordingAction(ActionExecutor):
                 output_path = os.path.join(filename, f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4")
         else:
             # 相对��径，视为文件名
-            output_path = os.path.join(output_dir, filename)
+            relative_path = os.path.normpath(filename)
+            if relative_path == ".." or relative_path.startswith(".." + os.sep):
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error="recording path must stay inside the configured output directory",
+                )
+            output_path = os.path.join(output_dir, relative_path)
 
         # 确保输出文件的目录存在
         output_file_dir = os.path.dirname(output_path)

@@ -22,6 +22,7 @@ from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
 from worker.config import PlatformConfig, WorkerConfig
 from worker.device_monitor import DeviceMonitor
+from worker.devices.models import DeviceRecord
 from worker.discovery.android import AndroidDeviceInfo, AndroidDiscoverer
 from worker.discovery.host import HostDiscoverer, HostInfo
 from worker.discovery.ios import iOSDeviceInfo, iOSDiscoverer
@@ -33,9 +34,9 @@ from worker.platforms.mac import MacPlatformManager
 from worker.platforms.web import WebPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
 from worker.reporter import DesktopInfo, HarmonyDeviceInfo, Reporter, WorkerCapabilities, WorkerReport
-from worker.task import ActionStatus, Task, TaskResult, TaskStatus
-from worker.task.store import TaskEntry, TaskStore
+from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
 from worker.tools import get_all_script_versions
+from worker.runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -47,93 +48,6 @@ class WorkerStatus:
     status: str  # online / busy / offline
     started_at: datetime
     supported_platforms: list[str]
-
-
-class TaskScheduler:
-    """
-    任务调度器。
-
-    管理任务并发执行：
-    - Windows/Mac/Web：全局单任务
-    - Android/iOS：按设备并行
-    """
-
-    def __init__(self):
-        # 平台全局锁
-        self.platform_locks = {
-            "windows": threading.Lock(),
-            "mac": threading.Lock(),
-            "web": threading.Lock(),
-        }
-        # 设备锁（动态创建）
-        self.device_locks: dict[str, threading.Lock] = {}
-        self._lock = threading.Lock()
-
-    def acquire(self, platform: str, device_id: str | None = None, blocking: bool = True, timeout: float = -1) -> bool:
-        """
-        获取执行锁。
-
-        Args:
-            platform: 平台名称
-            device_id: 设备 ID
-            blocking: 是否阻塞等待
-            timeout: 超时时间
-
-        Returns:
-            bool: 是否成功获取
-        """
-        lock = self._get_lock(platform, device_id)
-        # blocking=False 时忽略 timeout 参数，直接非阻塞获取
-        if not blocking:
-            return lock.acquire(blocking=False)
-        # 不传 timeout 才是 threading.Lock 的无限等待方式
-        if timeout <= 0:
-            return lock.acquire(blocking=True)
-        return lock.acquire(blocking=True, timeout=timeout)
-
-    def release(self, platform: str, device_id: str | None = None) -> None:
-        """释放执行锁。"""
-        lock = self._get_lock(platform, device_id)
-        try:
-            lock.release()
-        except RuntimeError:
-            pass  # 锁已被释放
-
-    def is_busy(self, platform: str, device_id: str | None = None) -> bool:
-        """
-        检查设备是否忙碌。
-
-        Args:
-            platform: 平台名称
-            device_id: 设备 ID
-
-        Returns:
-            bool: 是否正在被占用
-        """
-        lock = self._get_lock(platform, device_id)
-        # 尝试非阻塞获取锁，如果成功获取说明不忙碌，立即释放
-        acquired = lock.acquire(blocking=False)
-        if acquired:
-            lock.release()
-            return False
-        return True
-
-    def _get_lock(self, platform: str, device_id: str | None) -> threading.Lock:
-        """获取对应的锁。"""
-        if platform in self.platform_locks:
-            return self.platform_locks[platform]
-        elif device_id:
-            with self._lock:
-                lock_key = (
-                    f"{platform}:{device_id}"
-                    if platform in ("harmony_mobile", "harmony_pc")
-                    else device_id
-                )
-                if lock_key not in self.device_locks:
-                    self.device_locks[lock_key] = threading.Lock()
-                return self.device_locks[lock_key]
-        else:
-            raise ValueError(f"device_id is required for platform: {platform}")
 
 
 class Worker:
@@ -177,10 +91,12 @@ class Worker:
         self.harmony_pc_manager: HarmonyPlatformManager | None = None
 
         # 任务调度器
-        self.scheduler = TaskScheduler()
+        self.runtime = WorkerRuntime(self._execute_task_callback)
+        self.scheduler = self.runtime.scheduler
+        self.device_registry = self.runtime.device_registry
+        self.artifact_service = self.runtime.artifact_service
 
         # 任务存储（异步任务管理）
-        self.task_store = TaskStore()
 
         # 上报客户端
         self.reporter: Reporter | None = None
@@ -257,6 +173,7 @@ class Worker:
         if self.device_monitor:
             self.device_monitor.start()
 
+        self.runtime.start()
         self._status = "online"
         self._started = True
         self._started_at = datetime.now()
@@ -269,6 +186,12 @@ class Worker:
             return
 
         logger.info(f"Stopping Worker {self.worker_id}...")
+
+        # 鍏堝仠姝换鍔℃湇鍔★紝纭繚鎵ц涓殑浠诲姟閲婃斁璧勬簮绉熺害
+        self.runtime.stop()
+
+        from worker.actions.cmd_exec import CmdExecAction
+        CmdExecAction.shutdown_background_processes()
 
         # 关闭所有 ScreenManager
         from worker.screen.manager import close_all_screen_managers
@@ -309,6 +232,63 @@ class Worker:
         logger.info(f"Host: {self.host_info.hostname} ({self.host_info.os_type})")
         logger.info(f"Supported platforms: {self.supported_platforms}")
 
+    def _sync_device_registry(self, monitor_devices: dict[str, Any] | None = None) -> None:
+        """将发现器和监控器快照同步为统一设备事实。"""
+        records: dict[str, list[DeviceRecord]] = {
+            "android": [],
+            "ios": [],
+            "harmony_mobile": [],
+            "harmony_pc": [],
+        }
+        for device in self.android_devices:
+            records["android"].append(DeviceRecord(
+                device_id=device.udid, platform="android", name=device.name,
+                model=device.model, os_version=device.os_version,
+                connection_status="connected", metadata=device.to_dict(),
+            ))
+        for device in self.ios_devices:
+            records["ios"].append(DeviceRecord(
+                device_id=device.udid, platform="ios", name=device.name,
+                model=device.model, os_version=device.os_version,
+                connection_status="connected", metadata=device.to_dict(),
+            ))
+        snapshot = monitor_devices
+        if snapshot is None and self.device_monitor:
+            snapshot = self.device_monitor.get_all_devices()
+        if snapshot:
+            for platform in ("android", "ios", "harmony_mobile", "harmony_pc"):
+                by_id = {record.device_id: record for record in records[platform]}
+                for item in snapshot.get(platform, []):
+                    device_id = item.get("udid") or item.get("device_id")
+                    if not device_id:
+                        continue
+                    current = by_id.get(device_id)
+                    if current is None:
+                        current = DeviceRecord(device_id=device_id, platform=platform)
+                        by_id[device_id] = current
+                    current.name = item.get("name") or current.name
+                    current.model = item.get("model") or current.model
+                    current.os_version = item.get("os_version") or item.get("sys_version") or current.os_version
+                    current.connection_status = item.get("connection_status", current.connection_status)
+                    current.service_status = item.get("service_status", current.service_status)
+                    current.health_status = item.get("health_status", current.health_status)
+                    current.capabilities = list(item.get("capabilities", current.capabilities))
+                    current.metadata.update(item)
+                records[platform] = list(by_id.values())
+
+        for platform, values in records.items():
+            if values:
+                self.device_registry.replace_platform(platform, values)
+            if snapshot:
+                faulty = snapshot.get(f"faulty_{platform}", [])
+                for item in faulty:
+                    device_id = item.get("udid") or item.get("device_id")
+                    if device_id:
+                        self.device_registry.update_status(
+                            platform, device_id, connection_status="disconnected",
+                            health_status="unhealthy",
+                        )
+
     def _discover_mobile_devices(self) -> None:
         """发现移动设备。"""
         # Android 设备
@@ -316,6 +296,7 @@ class Worker:
             if AndroidDiscoverer.check_adb_available():
                 self.android_devices = AndroidDiscoverer.discover()
                 logger.info(f"Found {len(self.android_devices)} Android devices")
+                self._sync_device_registry()
             else:
                 logger.warning("ADB not available, skipping Android device discovery")
         else:
@@ -326,6 +307,7 @@ class Worker:
             if iOSDiscoverer.check_tidevice_available():
                 self.ios_devices = iOSDiscoverer.discover()
                 logger.info(f"Found {len(self.ios_devices)} iOS devices")
+                self._sync_device_registry()
             else:
                 logger.warning("libimobiledevice not available, skipping iOS device discovery")
         else:
@@ -371,7 +353,12 @@ class Worker:
                     manager = AndroidPlatformManager(platform_config, self.ocr_client, unlock_config)
                     self.android_manager = manager
                 elif platform == "ios":
-                    manager = iOSPlatformManager(platform_config, self.ocr_client, unlock_config)
+                    manager = iOSPlatformManager(
+                        platform_config,
+                        self.ocr_client,
+                        unlock_config,
+                        busy_checker=lambda device_id: self.scheduler.is_busy("ios", device_id),
+                    )
                     self.ios_manager = manager
                 elif platform in ("harmony_mobile", "harmony_pc"):
                     manager = HarmonyPlatformManager(
@@ -392,8 +379,6 @@ class Worker:
                     continue
 
                 self.platform_managers[platform] = manager
-                # 设置 TaskScheduler 引用，用于检查设备忙碌状态
-                manager.set_scheduler(self.scheduler)
                 logger.info(f"Platform manager initialized: {platform}")
 
             except Exception as e:
@@ -613,6 +598,7 @@ class Worker:
     def _on_device_change(self, devices: dict) -> None:
         """设备状态变更回调。"""
         logger.info(f"Device status changed: {devices}")
+        self._sync_device_registry(devices)
         # 设备变化时重新上报
         self._report_devices()
 
@@ -664,7 +650,7 @@ class Worker:
 
     def get_worker_devices(self) -> dict[str, Any]:
         """获取 Worker 状态和设备信息。"""
-        devices = self.device_monitor.get_all_devices() if self.device_monitor else {}
+        devices = self.device_registry.grouped()
 
         # 使用配置的 IP 或自动获取
         ip = HostDiscoverer.get_preferred_ip(self.config.ip)
@@ -680,8 +666,8 @@ class Worker:
                 "windows": [],
                 "web": [],
                 "mac": [],
-                "android": devices.get("android", []),
-                "ios": devices.get("ios", []),
+                "android": [d for d in devices.get("android", []) if d.get("connection_status") != "disconnected"],
+                "ios": [d for d in devices.get("ios", []) if d.get("connection_status") != "disconnected"],
                 "harmony_mobile": devices.get("harmony_mobile", []),
                 "harmony_pc": devices.get("harmony_pc", []),
             },
@@ -778,10 +764,9 @@ class Worker:
                 )
 
             # 验证设备是否连接
-            if task.platform == "android":
-                device_ids = [d.udid for d in self.android_devices]
-            elif task.platform == "ios":
-                device_ids = [d.udid for d in self.ios_devices]
+            registry = getattr(self, "device_registry", None)
+            if registry is not None:
+                device_ids = [d.device_id for d in registry.list(task.platform) if d.connection_status != "disconnected"]
             elif self.device_monitor:
                 device_ids = self.device_monitor.get_online_devices(task.platform)
             else:
@@ -976,7 +961,12 @@ class Worker:
         except Exception as e:
             logger.warning(f"Failed to clear web data: {e}")
 
-    def execute_task(self, task: Task) -> TaskResult:
+    def _execute_task(
+        self,
+        task: Task,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> TaskResult:
         """
         执行任务。
 
@@ -1035,17 +1025,6 @@ class Worker:
                     error=f"Line {line_no}: Failed to start platform: {e}",
                 )
 
-        # 获取执行锁
-        acquired = self.scheduler.acquire(platform, task.device_id, blocking=False)
-        if not acquired:
-            return TaskResult(
-                task_id=task.task_id,
-                request_id=request_id,
-                status=TaskStatus.FAILED,
-                platform=platform,
-                error="Device is busy, please retry later",
-            )
-
         context = None
         try:
             self._status = "busy"
@@ -1084,7 +1063,7 @@ class Worker:
                     )
 
             # 执行动作列表
-            result = self._execute_actions(manager, context, task)
+            result = self._execute_actions(manager, context, task, cancel_event=cancel_event)
 
             return result
 
@@ -1112,7 +1091,31 @@ class Worker:
                 except Exception as e:
                     logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
 
-            self.scheduler.release(platform, task.device_id)
+
+    def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:
+        """登记动作产生的截图和录屏文件。"""
+        references: list[dict[str, Any]] = []
+        if result.screenshot:
+            try:
+                data = base64.b64decode(result.screenshot, validate=True)
+                reference = self.artifact_service.save_bytes(
+                    task.task_id, data, artifact_type="screenshot",
+                    mime_type="image/jpeg", extension="jpg", action_number=result.number,
+                )
+                references.append(reference.to_dict())
+            except Exception as exc:
+                logger.warning(f"Failed to persist action screenshot: {exc}")
+        if result.action_type == "stop_recording" and result.output and os.path.isfile(result.output):
+            try:
+                reference = self.artifact_service.save_file(
+                    task.task_id, result.output, artifact_type="recording",
+                    mime_type="video/mp4", extension="mp4", action_number=result.number,
+                )
+                references.append(reference.to_dict())
+            except Exception as exc:
+                logger.warning(f"Failed to persist recording artifact: {exc}")
+        result.artifacts.extend(references)
+        return references
 
     def _execute_actions(
         self,
@@ -1171,9 +1174,16 @@ class Worker:
                     actions=actions_results,
                     error=f"Task timeout after {timeout_ms}ms",
                 )
-            result = manager.execute_action(context, action)
+            if action.action_type == 'wait':
+                wait_seconds = action.time if action.time is not None else ((action.wait or int(action.value or 1000)) / 1000)
+                if cancel_event is not None and cancel_event.wait(wait_seconds):
+                    return TaskResult(task_id=task.task_id, request_id=request_id, status=TaskStatus.CANCELLED, platform=task.platform, started_at=started_at, finished_at=datetime.now(), actions=actions_results, error='Task cancelled by user')
+                result = ActionResult(number=i, action_type=action.action_type, status=ActionStatus.SUCCESS, output=f'Waited {wait_seconds}s')
+            else:
+                result = manager.execute_action(context, action)
             result.number = i
             result.request_id = request_id  # 填充 request_id
+            self._attach_action_artifacts(task, result)
             actions_results.append(result)
 
             if deadline is not None and time.monotonic() >= deadline:
@@ -1219,7 +1229,9 @@ class Worker:
                 next_action = task.actions[i + 1]
                 next_is_wait = next_action.action_type == "wait"
                 if not current_is_wait and not next_is_wait:
-                    time.sleep(self.config.action_step_delay)
+                    if cancel_event is not None:
+                        if cancel_event.wait(self.config.action_step_delay):
+                            return TaskResult(task_id=task.task_id, request_id=request_id, status=TaskStatus.CANCELLED, platform=task.platform, started_at=started_at, finished_at=datetime.now(), actions=actions_results, error="Task cancelled by user")
 
             # 如果动作失败且未配置继续，停止执行
             if result.status != ActionStatus.SUCCESS and not task.metadata.get("continue_on_error"):
@@ -1230,11 +1242,17 @@ class Worker:
 
                 # 获取失败截图
                 error_screenshot = None
+                error_artifacts: list[dict[str, Any]] = []
                 try:
                     screenshot_bytes = manager.get_screenshot(context)
                     # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
                     compressed = compress_image_to_jpeg(screenshot_bytes, quality=80)
                     error_screenshot = base64.b64encode(compressed).decode("utf-8")
+                    reference = self.artifact_service.save_bytes(
+                        task.task_id, compressed, artifact_type="error_screenshot",
+                        mime_type="image/jpeg", extension="jpg",
+                    )
+                    error_artifacts.append(reference.to_dict())
                 except Exception as e:
                     logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
 
@@ -1248,6 +1266,7 @@ class Worker:
                     actions=actions_results,
                     error=result.error,
                     error_screenshot=error_screenshot,
+                    artifacts=[artifact for action_result in actions_results for artifact in action_result.artifacts] + error_artifacts,
                 )
 
                 # 打印结果（排除截图的 base64 数据）
@@ -1270,6 +1289,7 @@ class Worker:
             started_at=started_at,
             finished_at=datetime.now(),
             actions=actions_results,
+            artifacts=[artifact for action_result in actions_results for artifact in action_result.artifacts],
         )
 
         # 打印结果（排除截图的 base64 数据）
@@ -1284,6 +1304,9 @@ class Worker:
 
     # ========== 同步/异步执行方法 ==========
 
+    def _execute_task_callback(self, task: Task, cancel_event: threading.Event) -> TaskResult:
+        return self._execute_task(task, cancel_event=cancel_event)
+
     def execute_sync(
         self,
         platform: str,
@@ -1291,35 +1314,17 @@ class Worker:
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """
-        同步执行任务（不生成 task_id）。
-
-        Args:
-            platform: 目标平台
-            actions: 动作列表
-            device_id: 设备 ID
-            window: 窗口定位参数（Windows 平台）
-
-        Returns:
-            Dict: 执行结果（不含 task_id）
-        """
-        # 创建任务对象（不生成 task_id）
         task = Task.create(
             platform=platform,
             actions=actions,
             device_id=device_id,
             metadata={"window": window} if window else None,
-            generate_id=False,  # 不生成 task_id
+            generate_id=False,
         )
-
-        # 执行任务
-        try:
-            result = self.execute_task(task)
-        except Exception as e:
-            logger.error(f"execute_task failed: {e}\n{traceback.format_exc()}")
-            raise
-
-        # 返回结果（不含 task_id）
+        result = self.runtime.task_service.execute_sync(
+            task,
+            request_id=get_request_id(),
+        )
         return result.to_dict(include_task_id=False)
 
     def execute_async(
@@ -1328,31 +1333,8 @@ class Worker:
         actions: list[dict[str, Any]],
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
-    ) -> tuple:
-        """
-        异步执行任务（生成 task_id）。
-
-        Args:
-            platform: 目标平台
-            actions: 动作列表
-            device_id: 设备 ID
-            window: 窗口定位参数（Windows 平台）
-
-        Returns:
-            Tuple[str, str]: (task_id, status)
-
-        Raises:
-            TaskConflictError: 设备/平台正被占用
-        """
-        # 检查冲突
-        if self.task_store.is_busy(platform, device_id):
-            busy_task_id = self.task_store.get_busy_task_id(platform, device_id)
-            raise TaskConflictError(
-                "Device/Platform is busy",
-                task_id=busy_task_id,
-            )
-
-        # 创建任务对象（生成 task_id）
+        idempotency_key: str | None = None,
+    ) -> tuple[str, str]:
         task = Task.create(
             platform=platform,
             actions=actions,
@@ -1360,240 +1342,15 @@ class Worker:
             metadata={"window": window} if window else None,
             generate_id=True,
         )
-
-        # 获取当前 request-id（传递给后台线程）
-        request_id = get_request_id()
-
-        # 创建任务条目
-        entry = TaskEntry(
-            task_id=task.task_id,
-            task=task,
-            status=TaskStatus.RUNNING,
-            request_id=request_id,  # 传递 request-id
+        return self.runtime.task_service.submit_async(
+            task,
+            request_id=get_request_id(),
+            idempotency_key=idempotency_key,
         )
-
-        # 存储任务
-        self.task_store.store(entry)
-
-        # 启动后台线程执行
-        thread = threading.Thread(
-            target=self._run_async_task,
-            args=(entry,),
-            daemon=True,
-        )
-        entry.thread = thread
-        thread.start()
-
-        logger.info(f"Async task started: task_id={task.task_id}")
-
-        return task.task_id, "running"
-
-    def _run_async_task(self, entry: TaskEntry) -> None:
-        """
-        后台线程执行异步任务。
-
-        Args:
-            entry: 任务条目
-        """
-        from common.request_context import set_request_id, clear_request_id
-
-        task = entry.task
-        platform = task.platform
-        request_id = entry.request_id
-
-        # 后台线程设置 request-id
-        if request_id:
-            set_request_id(request_id)
-
-        try:
-            # 获取平台管理器
-            manager = self.platform_managers.get(platform)
-            if not manager:
-                entry.status = TaskStatus.FAILED
-                entry.result = TaskResult(
-                    task_id=task.task_id,
-                    request_id=request_id,  # 填充 request_id
-                    status=TaskStatus.FAILED,
-                    platform=platform,
-                    error=f"Platform manager not available: {platform}",
-                )
-                return
-
-            # 前置验证
-            validation_result = self._validate_task(task, manager)
-            if validation_result:
-                entry.status = TaskStatus.FAILED
-                entry.result = validation_result
-                return
-
-            # 启动平台（如果未启动）
-            if not manager.is_available():
-                try:
-                    manager.start()
-                except Exception as e:
-                    entry.status = TaskStatus.FAILED
-                    entry.result = TaskResult(
-                        task_id=task.task_id,
-                        request_id=request_id,  # 填充 request_id
-                        status=TaskStatus.FAILED,
-                        platform=platform,
-                        error=f"Failed to start platform: {e}",
-                    )
-                    return
-
-            # 获取执行锁
-            acquired = self.scheduler.acquire(platform, task.device_id, blocking=False)
-            if not acquired:
-                entry.status = TaskStatus.FAILED
-                entry.result = TaskResult(
-                    task_id=task.task_id,
-                    request_id=request_id,  # 填充 request_id
-                    status=TaskStatus.FAILED,
-                    platform=platform,
-                    error="Device is busy, please retry later",
-                )
-                return
-
-            context = None
-            try:
-                # 移动端：确保设备服务可用（启动 WDA/u2）
-                if platform in ("ios", "android", "harmony_mobile", "harmony_pc") and task.device_id:
-                    status, message = manager.ensure_device_service(task.device_id)
-                    if status != "online":
-                        entry.status = TaskStatus.FAILED
-                        entry.result = TaskResult(
-                            task_id=task.task_id,
-                            request_id=request_id,  # 填充 request_id
-                            status=TaskStatus.FAILED,
-                            platform=platform,
-                            error=f"Device service not available: {message}",
-                        )
-                        return
-                    # 服务启动成功，通知 device_monitor 更新设备状态
-                    if self.device_monitor:
-                        self.device_monitor.mark_device_online(platform, task.device_id)
-
-                # 创建执行上下文
-                context = manager.create_context(device_id=task.device_id, options=task.metadata)
-
-                # 执行动作列表（支持取消）
-                result = self._execute_actions(
-                    manager, context, task, cancel_event=entry.cancel_event
-                )
-
-                # 确保 result 包含 request_id
-                result.request_id = request_id
-
-                entry.result = result
-                entry.status = result.status
-
-            finally:
-                # 清理执行上下文（不关闭会话，保持资源复用）
-                if context is not None:
-                    try:
-                        manager.close_context(context, close_session=False)
-                    except Exception as e:
-                        logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
-
-                self.scheduler.release(platform, task.device_id)
-
-        except Exception as e:
-            logger.error(f"Async task error: task_id={task.task_id}, error={e}\n{traceback.format_exc()}")
-            entry.status = TaskStatus.FAILED
-            entry.result = TaskResult(
-                task_id=task.task_id,
-                request_id=request_id,  # 填充 request_id
-                status=TaskStatus.FAILED,
-                platform=task.platform,
-                error=str(e),
-            )
-
-        finally:
-            # 更新任务状态到 TaskStore
-            self.task_store.update_status(task.task_id, entry.status, entry.result)
-            # 清理忙碌状态（任务已完成）
-            self.task_store.clear_busy(platform, task.device_id)
-            logger.info(
-                f"Async task completed: task_id={task.task_id}, status={entry.status}"
-            )
-
-            # 清理 request-id
-            if request_id:
-                clear_request_id()
 
     def get_task_result(self, task_id: str) -> dict[str, Any] | None:
-        """
-        获取任务结果（一次性查询，查询后销毁）。
+        return self.runtime.task_service.get(task_id)
 
-        Args:
-            task_id: 任务 ID
+    def cancel_task(self, task_id: str) -> dict[str, Any]:
+        return self.runtime.task_service.cancel(task_id)
 
-        Returns:
-            Dict | None: 任务结果，不存在返回 None
-        """
-        # 先查询但不移除，检查任务状态
-        entry = self.task_store.get(task_id)
-        if entry is None:
-            return None
-
-        # 如果任务还在执行中，返回当前状态但不移除（允许持续轮询）
-        if entry.status == TaskStatus.RUNNING:
-            return {
-                "task_id": entry.task_id,
-                "status": "running",
-            }
-
-        # 任务已完成，移除并返回完整结果（一次性查询）
-        entry = self.task_store.pop(task_id)
-        if entry.result:
-            return entry.result.to_dict(include_task_id=True)
-
-        return {
-            "task_id": entry.task_id,
-            "status": entry.status.value,
-        }
-
-    def cancel_task(self, task_id: str) -> tuple:
-        """
-        取消任务。
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            Tuple[bool, str]: (是否成功, 消息)
-        """
-        entry = self.task_store.get(task_id)
-        if entry is None:
-            return False, "Task not found"
-
-        # 检查任务状态
-        if entry.status in [TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.CANCELLED]:
-            # 任务已完成，直接删除
-            self.task_store.remove(task_id)
-            return True, f"Task already {entry.status.value}, removed from store"
-
-        # 设置取消标志。执行线程仍存活时不能立即移除 TaskStore，
-        # 否则 busy 索引会先清掉，而 scheduler 锁仍由执行线程持有。
-        entry.cancel_event.set()
-
-        # 等待线程结束（最多等待 5 秒）。
-        if entry.thread and entry.thread.is_alive():
-            entry.thread.join(timeout=5.0)
-            if entry.thread.is_alive():
-                logger.warning(f"Task cancellation requested but still stopping: task_id={task_id}")
-                return True, "Task cancellation requested; task is still stopping"
-        # 删除任务
-        self.task_store.remove(task_id)
-
-        logger.info(f"Task cancelled: task_id={task_id}")
-
-        return True, "Task cancelled"
-
-
-class TaskConflictError(Exception):
-    """任务冲突异常。"""
-
-    def __init__(self, message: str, task_id: str | None = None):
-        super().__init__(message)
-        self.task_id = task_id

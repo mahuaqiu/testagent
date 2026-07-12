@@ -12,7 +12,7 @@ import threading
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -43,8 +43,9 @@ from worker.tools import (
     validate_script_name,
 )
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
-from worker.worker import TaskConflictError, Worker
-from worker.screen.windows_sidecar import media_packet_to_websocket_frame
+from worker.errors import WorkerError
+from worker.worker import Worker
+from worker.screen.windows_sidecar import media_packet_to_websocket_frames
 
 logger = logging.getLogger(__name__)
 
@@ -237,124 +238,59 @@ async def get_worker_devices():
 
 @app.post("/task/execute")
 async def execute_task(request: TaskRequest):
-    """
-    同步执行任务。
-
-    执行完成后返回结果，不生成 task_id。
-
-    Returns:
-        Dict: 执行结果（不含 task_id）
-    """
+    """同步执行任务，等待统一任务服务返回结果。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 生成 request-id
     request_id = generate_request_id()
     set_request_id(request_id)
-
     try:
-        # 记录原始请求数据（过滤 base64）
         logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
-
-        # 同步执行（不生成 task_id）- 使用线程池避免阻塞事件循环
         window_dict = request.window.model_dump(by_alias=True) if request.window else None
-        result = await asyncio.to_thread(
-            worker.execute_sync,
-            request.platform,
-            request.actions,
-            request.device_id,
-            window_dict,
-        )
-
-        # 添加 request_id 到返回结果
-        result['request_id'] = request_id
-
-        # 打印响应结果（排除 base64 数据）
+        result = await asyncio.to_thread(worker.execute_sync, request.platform, request.actions, request.device_id, window_dict)
+        result["request_id"] = request_id
         logger.info(f"Sync task response: {_format_result_for_log(result)}")
-
         return result
-
-    except Exception as e:
-        logger.error(f"execute_sync failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
-
+    except WorkerError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
+    except Exception as exc:
+        logger.error(f"execute_sync failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"code": "TASK_EXECUTION_FAILED", "message": str(exc), "retryable": True, "details": {}}) from exc
     finally:
         clear_request_id()
 
 
 @app.post("/task/execute_async")
-async def execute_task_async(request: TaskRequest):
-    """
-    异步执行任务。
-
-    立即返回 task_id，任务在后台执行。
-
-    Returns:
-        Dict: {"task_id": "xxx", "status": "running", "request_id": "xxx"}
-
-    Raises:
-        HTTPException: 409 如果设备/平台正被占用
-    """
+async def execute_task_async(request: TaskRequest, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    """异步提交任务，支持幂等键重试。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    # 生成 request-id
     request_id = generate_request_id()
     set_request_id(request_id)
-
     try:
-        # 记录原始请求数据（过滤 base64）
         logger.info(f"Async task raw request: {_format_request_for_log(request)}")
-
-        task_id, status = worker.execute_async(
-            platform=request.platform,
-            actions=request.actions,
-            device_id=request.device_id,
-            window=request.window.model_dump(by_alias=True) if request.window else None,
-        )
-
-        # 记录任务提交结果
+        task_id, status = worker.execute_async(platform=request.platform, actions=request.actions, device_id=request.device_id, window=request.window.model_dump(by_alias=True) if request.window else None, idempotency_key=idempotency_key)
         logger.info(f"Async task submitted: task_id={task_id}, status={status}")
-
         return {"task_id": task_id, "status": status, "request_id": request_id}
-
-    except TaskConflictError as e:
-        raise HTTPException(
-            status_code=409,
-            detail=str(e),
-        )
-
+    except WorkerError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
     finally:
         clear_request_id()
 
 
 @app.get("/task/{task_id}")
 async def get_task_result(task_id: str):
-    """
-    查询任务结果。
-
-    一次性查询：查询后任务从内存中销毁，下次查询返回 404。
-
-    Returns:
-        Dict: 任务状态和结果
-
-    Raises:
-        HTTPException: 404 如果任务不存在
-    """
+    """查询任务快照，允许重复轮询。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     result = worker.get_task_result(task_id)
-
     if result is None:
-        logger.info(f"Task result not found: task_id={task_id}")
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    # 从任务结果中获取 request_id 并设置到当前线程
-    request_id = result.get('request_id')
+        raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": "Task not found", "retryable": False, "details": {"task_id": task_id}})
+    request_id = result.get("request_id")
     if request_id:
         set_request_id(request_id)
-
     try:
         logger.info(f"Task result response: {_format_result_for_log(result)}")
         return result
@@ -365,29 +301,15 @@ async def get_task_result(task_id: str):
 
 @app.delete("/task/{task_id}")
 async def cancel_task(task_id: str):
-    """
-    取消任务。
-
-    取消正在执行的任务，销毁 task_id。
-
-    Returns:
-        Dict: {"success": bool, "message": str}
-
-    Raises:
-        HTTPException: 404 如果任务不存在
-    """
+    """请求取消任务，任务记录不会因取消请求被删除。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
-
-    success, message = worker.cancel_task(task_id)
-
-    if not success and "not found" in message.lower():
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    logger.info(f"Task cancelled: task_id={task_id}, success={success}")
-
-    return {"success": success, "message": message}
-
+    try:
+        result = worker.cancel_task(task_id)
+        logger.info(f"Task cancellation requested: task_id={task_id}, status={result['status']}")
+        return result
+    except WorkerError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
 
 @app.post("/devices/refresh")
 async def refresh_devices():
@@ -1029,8 +951,9 @@ async def screen_stream(
                     if not packet:
                         continue
                     _send_started = _stream_diag_time.monotonic()
-                    _frame = media_packet_to_websocket_frame(packet)
-                    await asyncio.wait_for(websocket.send_bytes(_frame), timeout=send_timeout)
+                    _frames = media_packet_to_websocket_frames(packet)
+                    for _frame in _frames:
+                        await asyncio.wait_for(websocket.send_bytes(_frame), timeout=send_timeout)
                     _sent_at = _stream_diag_time.monotonic()
                     _send_ms = (_sent_at - _send_started) * 1000
                     _diag_packets += 1
@@ -1041,7 +964,7 @@ async def screen_stream(
                     _gap = 0 if _diag_last_sequence is None else _sequence - _diag_last_sequence
                     _diag_last_sequence = _sequence
                     if _gap != 1:
-                        logger.debug("[stream-diag] websocket packet conn_key=%s sequence=%d gap=%d pts_100ns=%s flags=%d bytes=%d reader_count=%s connected_ms=%.1f read_ms=%.1f buffered_bytes=%s send_ms=%.1f relay_ms=%.1f elapsed_ms=%.1f", conn_key, _sequence, _gap, packet.get("pts_100ns"), _flags, len(_frame), packet.get("_packet_count"), packet.get("_connected_ms", 0.0), packet.get("_read_ms", 0.0), packet.get("_buffered_bytes"), _send_ms, (_sent_at - packet.get("_received_monotonic", _sent_at)) * 1000, (_sent_at - _diag_started) * 1000)
+                        logger.debug("[stream-diag] websocket packet conn_key=%s sequence=%d gap=%d pts_100ns=%s flags=%d bytes=%d reader_count=%s connected_ms=%.1f read_ms=%.1f buffered_bytes=%s send_ms=%.1f relay_ms=%.1f elapsed_ms=%.1f", conn_key, _sequence, _gap, packet.get("pts_100ns"), _flags, len(_frame), getattr(getattr(streamer, "_media_reader", None), "last_diagnostics", {}).get("_packet_count"), getattr(getattr(streamer, "_media_reader", None), "last_diagnostics", {}).get("_connected_ms", 0.0), getattr(getattr(streamer, "_media_reader", None), "last_diagnostics", {}).get("_read_ms", 0.0), getattr(getattr(streamer, "_media_reader", None), "last_diagnostics", {}).get("_buffered_bytes"), _send_ms, (_sent_at - getattr(getattr(streamer, "_media_reader", None), "last_diagnostics", {}).get("_received_monotonic", _sent_at)) * 1000, (_sent_at - _diag_started) * 1000)
                     if _send_ms >= 50:
                         logger.warning("[stream-diag] websocket slow send conn_key=%s sequence=%d send_ms=%.1f bytes=%d", conn_key, _sequence, _send_ms, len(_frame))
                     if _sent_at - _diag_window_started >= 5.0:
