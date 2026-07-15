@@ -55,6 +55,9 @@ class CollectStatus(BaseModel):
     target_processes: list[TargetProcess] | None = Field(None, description="目标进程列表")
     start_time: datetime | None = Field(None, description="采集开始时间")
     elapsed_seconds: int | None = Field(None, description="已采集时长（秒）")
+    state: str = Field("idle", description="采集状态")
+    last_sequence: int | None = Field(None, description="最后已读取的采样序号")
+    last_elapsed_ms: int | None = Field(None, description="最后样本相对时间（毫秒）")
 
 
 class PerformanceCollector:
@@ -76,6 +79,7 @@ class PerformanceCollector:
         self._target_processes: list[TargetProcess] = []
         self._start_time: datetime | None = None
         self._collecting: bool = False
+        self._stopping: bool = False
         self._collect_thread: threading.Thread | None = None
         self._stop_event: threading.Event = threading.Event()
         self._lock: threading.Lock = threading.Lock()
@@ -83,6 +87,9 @@ class PerformanceCollector:
 
         # 后端上报地址（从配置获取）
         self._backend_host: str | None = None
+        self._report_lock = threading.Lock()
+        self._last_sequence: int | None = None
+        self._last_elapsed_ms: int | None = None
 
     def set_backend_host(self, host: str) -> None:
         """设置后端上报地址。
@@ -106,6 +113,9 @@ class PerformanceCollector:
                 target_processes=self._target_processes if self._collecting else None,
                 start_time=self._start_time,
                 elapsed_seconds=elapsed,
+                state="running" if self._collecting else "idle",
+                last_sequence=self._last_sequence,
+                last_elapsed_ms=self._last_elapsed_ms,
             )
 
     def start_collect(self, request: CollectStartRequest) -> dict[str, Any]:
@@ -117,30 +127,38 @@ class PerformanceCollector:
         Returns:
             响应结果
         """
+        self._flush_spool()
+
         with self._lock:
+            if self._stopping:
+                logger.warning("拒绝在采集停止期间启动新任务: current=%s, requested=%s", self._collect_id, request.collect_id)
+                return {"status": "conflict", "message": "设备正在停止上一采集任务"}
             if self._collecting:
                 # 检查是否是相同任务
                 if self._is_same_task(request):
                     logger.info(f"任务已存在且参数相同: {request.collect_id}")
                     return {"status": "already_started", "message": "任务已开始"}
-                # 参数不同，停止旧任务
-                logger.info(f"新任务参数不同，停止旧任务: {self._collect_id}")
-                self._stop_collect_internal()
-
-            # 记录采集配置
+                # 同一设备不允许用新任务静默覆盖旧任务
+                logger.warning("拒绝覆盖正在运行的采集任务: current=%s, requested=%s", self._collect_id, request.collect_id)
+                return {"status": "conflict", "message": f"设备已有采集任务运行: {self._collect_id}"}
+            self._start_time = datetime.now(timezone.utc)
+            self._collecting = True
+            self._stopping = False
+            self._stop_event.clear()
+            self._last_sequence = None
+            self._last_elapsed_ms = None
             self._collect_id = request.collect_id
             self._interval = request.interval
             self._timeout = request.timeout
-            self._target_processes = request.target_processes
-            self._start_time = datetime.now(timezone.utc)
-            self._collecting = True
-            self._stop_event.clear()
+            self._target_processes = list(request.target_processes)
 
             # 创建 perfwin Monitor
             try:
                 self._create_monitor(request)
-            except ValueError as e:
+            except Exception as e:
                 self._collecting = False
+                self._collect_id = None
+                self._target_processes = []
                 return {"status": "error", "message": str(e)}
 
             # 启动采集线程
@@ -243,7 +261,6 @@ class PerformanceCollector:
                     "message": "当前无采集任务",
                 }
 
-            # 如果指定了 collect_id，检查是否匹配
             if request and request.collect_id and request.collect_id != self._collect_id:
                 logger.warning(
                     f"停止采集 ID 不匹配: 请求={request.collect_id}, "
@@ -254,32 +271,50 @@ class PerformanceCollector:
                     "message": f"采集ID不匹配，当前采集ID为 {self._collect_id}",
                 }
 
-            self._stop_collect_internal()
+            # 先标记停止，避免新任务在清理期间覆盖当前任务。
+            self._collecting = False
+            self._stopping = True
 
-            return {
-                "status": "stopped",
-                "message": "采集已停止",
-            }
+        # 停止 Monitor、等待线程和上报终态都在锁外执行。
+        self._stop_collect_internal()
+
+        return {
+            "status": "stopped",
+            "message": "采集已停止",
+        }
 
     def _stop_collect_internal(self) -> None:
         """内部停止采集方法（不加锁）。"""
         self._collecting = False
         self._stop_event.set()
 
-        # 停止 perfwin Monitor
-        if self._monitor:
+        # 先停止 perfwin 采集线程，确保不会再产生新样本。
+        monitor = self._monitor
+        if monitor:
             try:
-                self._monitor.stop()
+                monitor.stop()
             except Exception as e:
                 logger.warning(f"停止 perfwin Monitor 异常: {e}")
             self._monitor = None
 
-        # 等待线程结束
-        if self._collect_thread and self._collect_thread.is_alive():
+        # 主线程等待采集循环退出；采集线程不能 join 自己。
+        if (
+            self._collect_thread
+            and self._collect_thread.is_alive()
+            and threading.current_thread() is not self._collect_thread
+        ):
             self._collect_thread.join(timeout=2)
+
+        # 停止后再排空缓冲区，避免最后一个采样周期丢失。
+        self._drain_monitor_buffer(monitor)
+        self._collect_thread = None
+
+        collect_id = self._collect_id
+        self._notify_terminal(collect_id, "stopped", "用户停止采集")
 
         # 清理状态
         self._collect_id = None
+        self._stopping = False
         self._target_processes = []
         self._start_time = None
 
@@ -295,37 +330,75 @@ class PerformanceCollector:
                 break
 
             try:
-                # 从 perfwin buffer 获取增量数据
-                if self._monitor and self._monitor.buffer_len() > 0:
-                    result = self._monitor.get_result()
-                    samples = []
-                    for sample in result.samples:
-                        samples.append(self._convert_sample_to_report(sample))
-
-                    # 上报数组格式
-                    if samples:
-                        self._report_samples(samples)
-
-            except Exception as e:
-                logger.error(f"采集异常: {e}", exc_info=True)
+                # 先发送历史 spool，再读取本轮增量数据。
+                self._flush_spool()
+                self._drain_monitor_buffer()
+            except Exception as error:
+                collect_id = self._collect_id
+                logger.error(f"采集线程异常: {error}", exc_info=True)
+                self._stop_event.set()
+                monitor = self._monitor
+                self._monitor = None
+                if monitor:
+                    try:
+                        monitor.stop()
+                    except Exception as stop_error:
+                        logger.warning(f"异常清理 perfwin Monitor 失败: {stop_error}")
+                    try:
+                        self._drain_monitor_buffer(monitor)
+                    except Exception as drain_error:
+                        logger.warning(f"异常清理采样缓冲区失败: {drain_error}")
+                self._notify_terminal(collect_id, "failed", str(error))
+                with self._lock:
+                    self._collecting = False
+                    self._stopping = False
+                    self._collect_thread = None
+                    self._collect_id = None
+                    self._target_processes = []
+                    self._start_time = None
+                break
 
             # 检查 perfwin 是否仍在运行（timeout 后自动停止）
             if self._monitor and not self._monitor.is_running():
-                logger.info(f"perfwin Monitor 已停止（timeout 达到）: {self._collect_id}")
-                self._stop_collect_internal()
+                collect_id = self._collect_id
+                logger.info("perfwin Monitor 已停止（timeout 达到）: %s", collect_id)
+                self._stop_event.set()
+                monitor = self._monitor
+                self._monitor = None
+                self._drain_monitor_buffer(monitor)
+                self._notify_terminal(collect_id, "timed_out", "采集达到超时时间")
+                with self._lock:
+                    self._collecting = False
+                    self._stopping = False
+                    self._collect_thread = None
+                    self._collect_id = None
+                    self._target_processes = []
+                    self._start_time = None
                 break
 
+    def _drain_monitor_buffer(self, monitor=None) -> None:
+        """读取并上报当前 Monitor 缓冲区中的增量样本。"""
+        monitor = monitor or self._monitor
+        if not monitor or monitor.buffer_len() <= 0:
+            return
+        result = monitor.get_result()
+        samples = [self._convert_sample_to_report(sample) for sample in result.samples]
+        if samples:
+            self._last_sequence = samples[-1]["sequence"]
+            self._last_elapsed_ms = samples[-1]["elapsed_ms"]
+            self._report_samples(samples)
+
     def _convert_sample_to_report(self, sample) -> dict:
-        """将 perfwin Sample 直接转换为 dict 格式（透传）。
-
-        Args:
-            sample: perfwin v0.3.0 Sample 对象
-
-        Returns:
-            转换后的数据字典，结构完全透传 perfwin 原始数据
-        """
+        """将 perfwin Sample 直接转换为 dict 格式。"""
+        system = dict(sample.system)
+        sequence = int(sample.sequence)
+        elapsed_ms = int(sample.elapsed_ms)
         return {
+            "sample_key": f"{self._collect_id}:{sequence}",
+            "sequence": sequence,
+            "elapsed_ms": elapsed_ms,
             "timestamp": sample.timestamp,
+            "system": system,
             "hwinfo_raw": dict(sample.hwinfo_raw),
             "processes": self._convert_processes(sample.processes),
             "aggregated": self._convert_aggregated(sample.aggregated),
@@ -385,79 +458,213 @@ class PerformanceCollector:
             for a in aggregated
         ]
 
-    def _report_samples(self, samples: list[dict]) -> None:
-        """上报样本数组到后端或本地持久化。
+    def _spool_path(self, collect_id: str | None = None) -> str | None:
+        """返回当前采集任务的可靠本地队列路径。"""
+        from worker.config import get_base_dir
+        import os
 
-        Args:
-            samples: 样本数据列表
-        """
+        collect_id = collect_id or self._collect_id
+        if not collect_id:
+            return None
+        perf_dir = os.path.join(get_base_dir(), "data", "performance")
+        os.makedirs(perf_dir, exist_ok=True)
+        return os.path.join(perf_dir, f"{collect_id}.spool")
+
+    def _append_spool(self, payload: dict) -> None:
+        """将未成功上报的批次追加到本地队列并持久化。"""
+        import json
+        import os
+
+        path = self._spool_path(payload.get("collect_id"))
+        if not path:
+            logger.error("无法持久化性能数据：缺少 collect_id")
+            return
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        logger.info("性能数据已进入本地重试队列: %s, 样本数: %s", path, len(payload["samples"]))
+
+    def _terminal_spool_path(self, collect_id: str) -> str:
+        """返回终态事件的本地队列路径。"""
+        path = self._spool_path(collect_id)
+        if not path:
+            raise ValueError("缺少 collect_id")
+        return f"{path}.terminal"
+
+    def _append_terminal_spool(self, payload: dict) -> None:
+        """持久化未成功发送的终态事件。"""
+        import json
+        import os
+
+        path = self._terminal_spool_path(payload["collect_id"])
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        logger.info("性能终态事件已进入本地重试队列: %s", path)
+
+    def _post_terminal_payload(self, payload: dict) -> bool:
+        """发送一个终态事件。"""
+        if not self._backend_host:
+            return False
+        import requests
+
+        response = requests.post(
+            f"{self._backend_host}/api/core/performance-monitor/collect/worker-event",
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code in (200, 201, 202):
+            return True
+        logger.warning("性能终态事件上报失败: status=%s body=%s", response.status_code, response.text)
+        return False
+
+    def _flush_terminal_spool_unlocked(self) -> None:
+        """重试本地终态事件队列。"""
+        if not self._backend_host:
+            return
+        import glob
+        import json
+        import os
+        from worker.config import get_base_dir
+
+        perf_dir = os.path.join(get_base_dir(), "data", "performance")
+        for path in sorted(glob.glob(os.path.join(perf_dir, "*.spool.terminal"))):
+            try:
+                with open(path, "r", encoding="utf-8") as file:
+                    payload = json.load(file)
+                if self._post_terminal_payload(payload):
+                    os.remove(path)
+            except FileNotFoundError:
+                continue
+            except Exception as error:
+                logger.warning("性能终态事件重试异常: %s", error)
+
+    def _post_payload(self, payload: dict) -> bool:
+        """发送一个批次，返回服务端是否接受。"""
+        if not self._backend_host:
+            return False
+        import requests
+
+        url = f"{self._backend_host}/api/core/performance-monitor/report"
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code in (200, 201, 202):
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            if body.get("status") in (None, "success", "accepted", "partial"):
+                return True
+            logger.warning("性能数据上报业务失败: body=%s", body)
+            return False
+        logger.warning("性能数据上报失败: status=%s", response.status_code)
+        return False
+
+    def _flush_spool(self) -> None:
+        """在线程安全的上下文中重试所有本地队列。"""
+        with self._report_lock:
+            self._flush_spool_unlocked()
+            self._flush_terminal_spool_unlocked()
+    def _flush_spool_unlocked(self) -> None:
+        """在已持有上报锁时重试本地队列。"""
+        if not self._backend_host:
+            return
+        import glob
+        import json
+        import os
+        from worker.config import get_base_dir
+
+        perf_dir = os.path.join(get_base_dir(), "data", "performance")
+        paths = sorted(glob.glob(os.path.join(perf_dir, "*.spool")))
+        for path in paths:
+            with open(path, "r", encoding="utf-8") as file:
+                lines = file.readlines()
+
+            remaining: list[str] = []
+            for index, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.error("性能 spool 存在损坏记录，保留原文: %s", path)
+                    remaining.extend(lines[index:])
+                    break
+                try:
+                    accepted = self._post_payload(payload)
+                except Exception as error:
+                    logger.warning("性能 spool 重试异常: %s", error)
+                    accepted = False
+                if not accepted:
+                    remaining.extend(lines[index:])
+                    break
+
+            temp_path = f"{path}.tmp"
+            if remaining:
+                with open(temp_path, "w", encoding="utf-8") as file:
+                    file.writelines(remaining)
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(temp_path, path)
+            else:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+
+    def _report_samples(self, samples: list[dict]) -> None:
+        """上报样本；网络失败时进入可靠本地队列。"""
         if not samples:
             return
 
-        payload = {
-            "collect_id": self._collect_id,
-            "device_id": self.device_id,
-            "samples": samples,
-        }
+        with self._report_lock:
+            collect_id = self._collect_id
+            payload = {
+                "collect_id": collect_id,
+                "device_id": self.device_id,
+                "batch_id": f"{collect_id}:{samples[0]['sequence']}:{samples[-1]['sequence']}",
+                "samples": samples,
+            }
 
-        # 如果后端地址为空，直接持久化
-        if not self._backend_host:
-            self._persist_samples(payload)
+            if not self._backend_host:
+                self._append_spool(payload)
+                return
+
+            try:
+                self._flush_spool_unlocked()
+                if self._post_payload(payload):
+                    logger.info("性能数据上报成功: 样本数=%s, collect_id=%s", len(samples), collect_id)
+                else:
+                    self._append_spool(payload)
+            except Exception as error:
+                logger.warning("性能数据上报异常: %s", error)
+                self._append_spool(payload)
+
+    def _notify_terminal(self, collect_id: str | None, status: str, message: str) -> None:
+        """通知平台采集进入终态，失败时进入可靠本地队列。"""
+        if not collect_id:
             return
-
-        # 尝试 HTTP 上报
-        try:
-            import requests
-
-            # 打印上报数据摘要
-            sample_count = len(samples)
-            logger.info(f"准备上报 {sample_count} 个样本, collect_id={self._collect_id}")
-
-            # 打印第一个样本的详细数据（用于调试）
-            if samples:
-                first_sample = samples[0]
-                top_n_cpu = first_sample.get("top_n_cpu", [])
-                if top_n_cpu:
-                    cpu_summary = ", ".join(
-                        f"{p['name']}({p['process_count']}个实例): {p['cpu_percent_total']:.2f}%"
-                        for p in top_n_cpu[:5]
-                    )
-                    logger.info(f"top_n_cpu 前5: {cpu_summary}")
-
-            url = f"{self._backend_host}/api/core/performance-monitor/report"
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                logger.info(f"上报成功: {sample_count} 个样本")
-            else:
-                logger.warning(f"上报失败: {response.status_code}")
-                self._persist_samples(payload)
-        except Exception as e:
-            logger.warning(f"上报异常: {e}")
-            self._persist_samples(payload)
-
-    def _persist_samples(self, payload: dict) -> None:
-        """持久化数据到本地文件。
-
-        Args:
-            payload: 上报数据
-        """
-        from worker.config import get_base_dir
-        import os
-        import json
-
-        # 创建目录
-        perf_dir = os.path.join(get_base_dir(), "data", "performance")
-        os.makedirs(perf_dir, exist_ok=True)
-
-        # 文件路径：{collect_id}.log
-        file_path = os.path.join(perf_dir, f"{self._collect_id}.log")
-
-        # JSON Lines 格式：每行一条上报数据
-        with open(file_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-        logger.info(f"性能数据已持久化: {file_path}, 样本数: {len(payload['samples'])}")
-
+        payload = {
+            "collect_id": collect_id,
+            "device_id": self.device_id,
+            "status": status,
+            "message": message,
+            "last_sequence": self._last_sequence,
+            "last_elapsed_ms": self._last_elapsed_ms,
+        }
+        with self._report_lock:
+            if not self._backend_host:
+                self._append_terminal_spool(payload)
+                return
+            try:
+                self._flush_spool_unlocked()
+                self._flush_terminal_spool_unlocked()
+                if not self._post_terminal_payload(payload):
+                    self._append_terminal_spool(payload)
+            except Exception as error:
+                logger.warning("平台终态通知异常: %s", error)
+                self._append_terminal_spool(payload)
     def get_processes(self, search: str | None = None) -> list[ProcessInfo]:
         """获取所有进程列表及其资源使用率。
 

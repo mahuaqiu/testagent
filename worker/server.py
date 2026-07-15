@@ -732,6 +732,11 @@ async def start_collect(device_id: str, request: CollectStartRequest):
 
     result = collector.start_collect(request)
 
+    if result.get("status") == "conflict":
+        raise HTTPException(status_code=409, detail=result)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=503, detail=result)
+
     logger.info(
         f"Start collect: device_id={device_id}, "
         f"collect_id={request.collect_id}, "
@@ -760,6 +765,9 @@ async def stop_collect(device_id: str, request: CollectStopRequest | None = None
 
     collector = get_collector(device_id)
     result = collector.stop_collect(request)
+
+    if result.get("status") == "error":
+        raise HTTPException(status_code=409, detail=result)
 
     logger.info(f"Stop collect: device_id={device_id}, collect_id={request.collect_id if request else None}")
 
