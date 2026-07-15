@@ -90,6 +90,9 @@ class PerformanceCollector:
         self._report_lock = threading.Lock()
         self._last_sequence: int | None = None
         self._last_elapsed_ms: int | None = None
+        # GPU 回退日志节流，避免每个采样周期刷屏
+        self._gpu_fallback_logged: bool = False
+        self._gpu_source_last: str | None = None
 
     def set_backend_host(self, host: str) -> None:
         """设置后端上报地址。
@@ -151,6 +154,8 @@ class PerformanceCollector:
             self._interval = request.interval
             self._timeout = request.timeout
             self._target_processes = list(request.target_processes)
+            self._gpu_fallback_logged = False
+            self._gpu_source_last = None
 
             # 创建 perfwin Monitor
             try:
@@ -391,6 +396,12 @@ class PerformanceCollector:
     def _convert_sample_to_report(self, sample) -> dict:
         """将 perfwin Sample 直接转换为 dict 格式。"""
         system = dict(sample.system)
+        hwinfo_raw = dict(sample.hwinfo_raw)
+        # PDH 可能返回 gpu_percent=0 且 gpu_adapters=[]（假空闲/解析失败），
+        # 此时用 HWiNFO 传感器做运行时回退，避免前端 GPU 曲线全 0。
+        original_source = system.get("gpu_source")
+        system = self._enrich_gpu_with_hwinfo(system, hwinfo_raw)
+        self._log_gpu_source(system, original_source)
         sequence = int(sample.sequence)
         elapsed_ms = int(sample.elapsed_ms)
         return {
@@ -399,12 +410,106 @@ class PerformanceCollector:
             "elapsed_ms": elapsed_ms,
             "timestamp": sample.timestamp,
             "system": system,
-            "hwinfo_raw": dict(sample.hwinfo_raw),
+            "hwinfo_raw": hwinfo_raw,
             "processes": self._convert_processes(sample.processes),
             "aggregated": self._convert_aggregated(sample.aggregated),
             "top_n_cpu": self._convert_aggregated(sample.top_n_cpu),
             "top_n_gpu": self._convert_aggregated(sample.top_n_gpu),
         }
+
+    def _log_gpu_source(self, system: dict, original_source: str | None) -> None:
+        """记录 GPU 来源切换/回退，定位为何没用上 Rust PDH。"""
+        source = system.get("gpu_source")
+        gpu_percent = system.get("gpu_percent")
+        adapters = system.get("gpu_adapters") or []
+        if source != self._gpu_source_last:
+            if source == "rust_pdh":
+                logger.info(
+                    "GPU 主路径: rust_pdh, gpu_percent=%s, adapters=%s",
+                    gpu_percent,
+                    len(adapters),
+                )
+            elif source == "hwinfo_fallback":
+                logger.error(
+                    "GPU 回退到 HWiNFO: original_source=%s, gpu_percent=%s, adapters=%s "
+                    "(Rust PDH 未给出有效适配器数据)",
+                    original_source,
+                    gpu_percent,
+                    len(adapters),
+                )
+            else:
+                logger.error(
+                    "GPU 来源异常/不可用: source=%s, original_source=%s, gpu_percent=%s, adapters=%s",
+                    source,
+                    original_source,
+                    gpu_percent,
+                    len(adapters),
+                )
+            self._gpu_source_last = source
+            self._gpu_fallback_logged = source == "hwinfo_fallback"
+        elif source == "hwinfo_fallback" and not self._gpu_fallback_logged:
+            logger.error(
+                "GPU 持续使用 HWiNFO 回退: gpu_percent=%s",
+                gpu_percent,
+            )
+            self._gpu_fallback_logged = True
+
+    def _enrich_gpu_with_hwinfo(self, system: dict, hwinfo_raw: dict | None) -> dict:
+        """当 PDH GPU 为空/假 0 时，用 HWiNFO 字段回填 system.gpu_percent。"""
+        if not hwinfo_raw:
+            return system
+
+        gpu_percent = system.get("gpu_percent")
+        adapters = system.get("gpu_adapters") or []
+        source = system.get("gpu_source")
+
+        # 已有真实适配器 → 保留 Rust 主路径
+        if adapters:
+            return system
+        # rust_pdh 且非 0，即使 adapters 暂时为空也保留
+        if source == "rust_pdh" and gpu_percent not in (None, 0, 0.0):
+            return system
+        # 仅当无适配器且值为 None/0 时才考虑回退
+        if gpu_percent not in (None, 0, 0.0):
+            return system
+
+        candidates = (
+            "GPU D3D Usage",
+            "GPU Core Load",
+            "GPU Usage",
+            "GPU Utilization",
+            "Total GPU Usage",
+            "GPU Load",
+        )
+        for key in candidates:
+            item = hwinfo_raw.get(key)
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            if value is None:
+                continue
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= num <= 100):
+                continue
+            enriched = dict(system)
+            enriched["gpu_percent"] = num
+            enriched["gpu_source"] = "hwinfo_fallback"
+            if not self._gpu_fallback_logged:
+                logger.error(
+                    "Worker GPU 回退: rust_pdh 无效(original_source=%s, gpu_percent=%s, adapters=%s) "
+                    "-> HWiNFO[%s]=%s",
+                    source,
+                    gpu_percent,
+                    len(adapters),
+                    key,
+                    num,
+                )
+                self._gpu_fallback_logged = True
+            return enriched
+        return system
 
     def _convert_processes(self, processes) -> list[dict] | None:
         """转换进程列表为 dict 格式。
@@ -505,7 +610,10 @@ class PerformanceCollector:
         logger.info("性能终态事件已进入本地重试队列: %s", path)
 
     def _post_terminal_payload(self, payload: dict) -> bool:
-        """发送一个终态事件。"""
+        """发送一个终态事件。
+
+        返回 True 表示该事件无需再重试（成功，或平台确认记录已不存在）。
+        """
         if not self._backend_host:
             return False
         import requests
@@ -516,6 +624,14 @@ class PerformanceCollector:
             timeout=10,
         )
         if response.status_code in (200, 201, 202):
+            return True
+        # 404：采集记录已被删除/对账中断后清理，继续重试只会刷日志
+        if response.status_code == 404:
+            logger.warning(
+                "性能终态事件对应采集记录不存在，丢弃本地队列: collect_id=%s body=%s",
+                payload.get("collect_id"),
+                response.text,
+            )
             return True
         logger.warning("性能终态事件上报失败: status=%s body=%s", response.status_code, response.text)
         return False
