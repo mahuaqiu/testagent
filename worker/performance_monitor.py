@@ -749,9 +749,7 @@ class PerformanceCollector:
 
             try:
                 self._flush_spool_unlocked()
-                if self._post_payload(payload):
-                    logger.info("性能数据上报成功: 样本数=%s, collect_id=%s", len(samples), collect_id)
-                else:
+                if not self._post_payload(payload):
                     self._append_spool(payload)
             except Exception as error:
                 logger.warning("性能数据上报异常: %s", error)
