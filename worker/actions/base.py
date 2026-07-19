@@ -178,6 +178,15 @@ class BaseActionExecutor(ActionExecutor):
             )
         return None
 
+    @staticmethod
+    def _wait(action: Action, seconds: float) -> None:
+        """等待并遵守 Worker 注入的动作截止时间。"""
+        if action.execution_control:
+            action.execution_control.wait(seconds)
+        else:
+            import time
+            time.sleep(seconds)
+
     def _get_last_ocr_info(self, platform: "PlatformManager") -> list | None:
         """
         获取最后一次 OCR 调用的 ocr_info。
@@ -326,7 +335,8 @@ class BaseActionExecutor(ActionExecutor):
         timeout_ms: int,
         check_func: callable,
         check_interval: int = 3,
-        pre_wait_threshold: int = 6
+        pre_wait_threshold: int = 6,
+        action: Action | None = None,
     ) -> tuple[bool, float]:
         """
         智能等待策略（带中间检查）：在固定等待期间定期检查目标是否出现。
@@ -350,14 +360,14 @@ class BaseActionExecutor(ActionExecutor):
         # 如果固定等待时间不超过阈值，直接等待
         if pre_wait <= pre_wait_threshold:
             if pre_wait > 0:
-                time.sleep(pre_wait)
+                self._wait(action, pre_wait) if action else time.sleep(pre_wait)
             return (False, pre_wait)
 
         # 固定等待超过阈值，每 check_interval 秒检查一次
         elapsed = 0.0
         while elapsed < pre_wait:
             sleep_time = min(check_interval, pre_wait - elapsed)
-            time.sleep(sleep_time)
+            self._wait(action, sleep_time) if action else time.sleep(sleep_time)
             elapsed += sleep_time
 
             # 检查目标是否出现

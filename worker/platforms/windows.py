@@ -39,7 +39,10 @@ class WindowsPlatformManager(PlatformManager):
     """
 
     # Windows 平台特有动作
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "set_resolution", "set_volume", "audio_device"}
+    SUPPORTED_ACTIONS: set[str] = {
+        "start_app", "stop_app", "set_resolution", "set_volume", "audio_device",
+        "right_click", "move", "paste", "activate_window", "start_recording", "stop_recording",
+    }
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)

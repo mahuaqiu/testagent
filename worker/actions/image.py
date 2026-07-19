@@ -137,7 +137,9 @@ class ImageWaitAction(BaseActionExecutor):
             return position is not None
 
         # 智能等待（带中间检查）：固定等待超过6秒时每3秒检查一次
-        found, elapsed = self._smart_wait_with_check(action.timeout, check_image_appeared)
+        found, elapsed = self._smart_wait_with_check(
+            action.timeout, check_image_appeared, action=action
+        )
         if found:
             return ActionResult(
                 number=0,
@@ -168,7 +170,7 @@ class ImageWaitAction(BaseActionExecutor):
                     output="Image appeared",
                 )
 
-            time.sleep(loop_interval)
+            self._wait(action, loop_interval)
 
         return ActionResult(
             number=0,

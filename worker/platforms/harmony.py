@@ -21,6 +21,7 @@ from worker.platforms.harmony_hdc import (
     list_devices,
     _find_hdc_path,
 )
+from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.task import Action, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -54,27 +55,7 @@ class HarmonyPlatformManager(PlatformManager):
         "ocr_check_same_row_text", "ocr_check_same_row_image",
     }
 
-    # 鸿蒙按键映射（KeyCode 参考鸿蒙 KeyEvent）
-    KEY_MAP = {
-        # 导航键
-        "HOME": 1,
-        "BACK": 2,
-        "MENU": 2067,
-        # 电源键
-        "POWER": 18,
-        # 音量键
-        "VOLUME_UP": 16,
-        "VOLUME_DOWN": 17,
-        "VOLUME_MUTE": 22,
-        # 功能键
-        "ENTER": 2054,
-        # 方向键
-        "DPAD_UP": 2012,
-        "DPAD_DOWN": 2013,
-        "DPAD_LEFT": 2014,
-        "DPAD_RIGHT": 2015,
-        "DPAD_CENTER": 2016,
-    }
+    KEY_MAP = HARMONY_KEY_MAP
 
     def __init__(
         self,
@@ -420,6 +401,14 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("No device context")
         if not client.input_text(text):
             raise HarmonyError("HDC 文本输入失败")
+
+    def input_text_at(self, x: int, y: int, text: str, context=None) -> None:
+        """使用 HDC 原生坐标输入，避免已聚焦输入被错误重定向到 (0, 0)。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if not client.input_text_at(x, y, text):
+            raise HarmonyError(f"HDC 文本输入失败: ({x}, {y})")
 
     def press(self, key: str, context=None) -> None:
         """

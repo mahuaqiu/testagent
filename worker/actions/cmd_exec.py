@@ -6,7 +6,7 @@
 
 import subprocess  # 用于 TimeoutExpired 异常类型
 import logging
-import threading
+import os
 from typing import Optional, TYPE_CHECKING
 
 from common.utils import run_cmd_with_process_tree_timeout
@@ -26,8 +26,6 @@ class CmdExecAction(BaseActionExecutor):
     name = "cmd_exec"
     requires_context = False  # 不需要浏览器/设备上下文
     requires_ocr = False
-    _background_processes: set[subprocess.Popen] = set()
-    _background_lock = threading.RLock()
 
     def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
         cmd = action.value
@@ -51,18 +49,21 @@ class CmdExecAction(BaseActionExecutor):
         return self._execute_sync(cmd, action)
 
     def _execute_background(self, cmd: str, action: Action) -> ActionResult:
-        """启动可由 Worker 生命周期统一回收的后台进程。"""
-        with self._background_lock:
-            self._background_processes = {
-                process for process in self._background_processes if process.poll() is None
-            }
-            process = subprocess.Popen(
-                cmd,
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+        """启动独立后台进程，不纳入任务取消和 Worker 生命周期。"""
+        popen_kwargs = {
+            "shell": True,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
             )
-            self._background_processes.add(process)
+        else:
+            popen_kwargs["start_new_session"] = True
+        subprocess.Popen(cmd, **popen_kwargs)
 
         logger.info(f"Executing command in background: {cmd}")
 
@@ -73,24 +74,16 @@ class CmdExecAction(BaseActionExecutor):
             output="command started in background",
         )
 
-    @classmethod
-    def shutdown_background_processes(cls) -> None:
-        """停止仍在运行的后台命令。"""
-        with cls._background_lock:
-            processes = list(cls._background_processes)
-            cls._background_processes.clear()
-        for process in processes:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-
     def _execute_sync(self, cmd: str, action: Action) -> ActionResult:
         """同步执行命令，等待结果返回。"""
 
         # 超时时间，默认 30 秒
-        timeout_ms = action.timeout or 30000
+        timeout_ms = action.timeout if action.timeout_explicit else 30000
+        if action.execution_control:
+            remaining = action.execution_control.remaining_seconds()
+            if remaining is not None:
+                remaining_ms = max(1, int(remaining * 1000))
+                timeout_ms = min(timeout_ms, remaining_ms) if action.timeout_explicit else remaining_ms
         timeout_sec = timeout_ms / 1000
 
         logger.info(f"Executing command: {cmd}")

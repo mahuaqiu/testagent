@@ -1212,33 +1212,35 @@ class iOSPlatformManager(PlatformManager):
             context: 执行上下文
         """
         client = context or self._device_clients.get(self._current_device)
-        if client:
-            # 转换坐标
-            wx, wy = self._convert_coords(x, y)
-            if duration > 0:
-                # 长按：使用 touch_and_hold，单位转换 毫秒 → 秒
-                duration_sec = duration / 1000.0
-                logger.debug(f"Long click at ({wx}, {wy}) for {duration}ms")
-                success = client.touch_and_hold(wx, wy, duration=duration_sec)
-            else:
-                logger.debug(f"Click at ({wx}, {wy})")
-                success = client.tap(wx, wy)
-            if not success:
-                raise RuntimeError(f"Click failed at ({wx}, {wy})")
+        if not client:
+            raise RuntimeError("No device context")
+        # 转换坐标
+        wx, wy = self._convert_coords(x, y)
+        if duration > 0:
+            # 长按：使用 touch_and_hold，单位转换 毫秒 → 秒
+            duration_sec = duration / 1000.0
+            logger.debug(f"Long click at ({wx}, {wy}) for {duration}ms")
+            success = client.touch_and_hold(wx, wy, duration=duration_sec)
+        else:
+            logger.debug(f"Click at ({wx}, {wy})")
+            success = client.tap(wx, wy)
+        if not success:
+            raise RuntimeError(f"Click failed at ({wx}, {wy})")
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标（模拟两次快速点击）。"""
         client = context or self._device_clients.get(self._current_device)
-        if client:
-            wx, wy = self._convert_coords(x, y)
-            success = client.tap(wx, wy)
-            if not success:
-                raise RuntimeError(f"First tap failed at ({wx}, {wy})")
-            import time
-            time.sleep(0.1)
-            success = client.tap(wx, wy)
-            if not success:
-                raise RuntimeError(f"Second tap failed at ({wx}, {wy})")
+        if not client:
+            raise RuntimeError("No device context")
+        wx, wy = self._convert_coords(x, y)
+        success = client.tap(wx, wy)
+        if not success:
+            raise RuntimeError(f"First tap failed at ({wx}, {wy})")
+        import time
+        time.sleep(0.1)
+        success = client.tap(wx, wy)
+        if not success:
+            raise RuntimeError(f"Second tap failed at ({wx}, {wy})")
 
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标（移动端不支持）。"""
@@ -1247,10 +1249,11 @@ class iOSPlatformManager(PlatformManager):
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本。"""
         client = context or self._device_clients.get(self._current_device)
-        if client:
-            success = client.send_keys(text)
-            if not success:
-                raise RuntimeError(f"Send keys failed: {text}")
+        if not client:
+            raise RuntimeError("No device context")
+        success = client.send_keys(text)
+        if not success:
+            raise RuntimeError(f"Send keys failed: {text}")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
               duration: int = 500, steps: int | None = None, context: Any = None) -> None:
@@ -1269,15 +1272,16 @@ class iOSPlatformManager(PlatformManager):
             iOS WDA 不支持 steps 参数，始终使用 duration 控制滕动时间。
         """
         client = context or self._device_clients.get(self._current_device)
-        if client:
-            wx1, wy1 = self._convert_coords(start_x, start_y)
-            wx2, wy2 = self._convert_coords(end_x, end_y)
-            # duration 单位转换：毫秒 → 秒
-            duration_sec = duration / 1000.0
-            logger.debug(f"Swipe from ({wx1}, {wy1}) to ({wx2}, {wy2}) with duration={duration}ms")
-            success = client.swipe(wx1, wy1, wx2, wy2, duration=duration_sec)
-            if not success:
-                raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")
+        if not client:
+            raise RuntimeError("No device context")
+        wx1, wy1 = self._convert_coords(start_x, start_y)
+        wx2, wy2 = self._convert_coords(end_x, end_y)
+        # duration 单位转换：毫秒 → 秒
+        duration_sec = duration / 1000.0
+        logger.debug(f"Swipe from ({wx1}, {wy1}) to ({wx2}, {wy2}) with duration={duration}ms")
+        success = client.swipe(wx1, wy1, wx2, wy2, duration=duration_sec)
+        if not success:
+            raise RuntimeError(f"Swipe failed from ({wx1}, {wy1}) to ({wx2}, {wy2})")
 
     # ========== 手势操作 ==========
 
@@ -1317,22 +1321,23 @@ class iOSPlatformManager(PlatformManager):
         注意：LOCK/POWER 按键 WDA 不支持，需通过其他方式唤醒屏幕。
         """
         client = context or self._device_clients.get(self._current_device)
-        if client:
-            key_upper = key.upper()
+        if not client:
+            raise RuntimeError("No device context")
+        key_upper = key.upper()
 
-            # 检查是否在不支持的按键列表中
-            if key_upper in self.UNSUPPORTED_KEYS:
-                raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
+        # 检查是否在不支持的按键列表中
+        if key_upper in self.UNSUPPORTED_KEYS:
+            raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
 
-            # 按键名映射
-            wda_key = self.KEY_MAP.get(key_upper)
-            if wda_key:
-                success = client.press_button(wda_key)
-                if not success:
-                    raise RuntimeError(f"Press button failed: {key}")
-            else:
-                supported = ", ".join(sorted(self.KEY_MAP.keys()))
-                raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
+        # 按键名映射
+        wda_key = self.KEY_MAP.get(key_upper)
+        if wda_key:
+            success = client.press_button(wda_key)
+            if not success:
+                raise RuntimeError(f"Press button failed: {key}")
+        else:
+            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（使用 ScreenManager）。"""

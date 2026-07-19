@@ -180,12 +180,10 @@ class InputAction(BaseActionExecutor):
                 error="x and y coordinates are required",
             )
 
-        # 点击（普通点击，duration=0）
-        platform.click(action.x, action.y, duration=0, context=context)
-
-        # 输入
         if action.text:
-            platform.input_text(action.text, context)
+            platform.input_text_at(action.x, action.y, action.text, context)
+        else:
+            platform.click(action.x, action.y, duration=0, context=context)
 
         return ActionResult(
             number=0,
@@ -394,13 +392,20 @@ class WaitAction(BaseActionExecutor):
 
     def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         # time 参数（秒）优先，其次是 wait（毫秒），最后是 value
+        control = action.execution_control
         if action.time is not None:
             wait_time_sec = action.time
-            time.sleep(wait_time_sec)
+            if control:
+                control.wait(wait_time_sec)
+            else:
+                time.sleep(wait_time_sec)
             wait_time_ms = wait_time_sec * 1000
         else:
             wait_time_ms = action.wait or int(action.value or 1000)
-            time.sleep(wait_time_ms / 1000.0)
+            if control:
+                control.wait(wait_time_ms / 1000.0)
+            else:
+                time.sleep(wait_time_ms / 1000.0)
             wait_time_sec = wait_time_ms / 1000
 
         return ActionResult(

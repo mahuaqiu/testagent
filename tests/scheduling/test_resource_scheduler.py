@@ -30,3 +30,14 @@ def test_old_lease_cannot_release_new_lease():
     assert second is not None
     assert not scheduler.release_lease(first)
     assert scheduler.get_busy_task_id("web") == "task-2"
+
+
+def test_scheduler_supports_explicit_resource_key():
+    scheduler = ResourceScheduler()
+    command = scheduler.try_acquire_key("host:command", "command-1")
+    web = scheduler.try_acquire("web", None, "web-1")
+
+    assert command is not None
+    assert web is not None
+    assert scheduler.try_acquire_key("host:command", "command-2") is None
+    assert scheduler.get_busy_task_id_by_key("host:command") == "command-1"

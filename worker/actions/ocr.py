@@ -143,13 +143,11 @@ class OcrInputAction(BaseActionExecutor):
         # 记录 OCR 定位结果
         logger.debug(f"OCR located: text=\"{action.value}\", position=({x}, {y})")
 
-        # 点击输入框（支持长按）
-        click_duration = action.click_duration or 0
-        platform.click(x, y, duration=click_duration, context=context)
-
-        # 输入文本
         if action.text:
-            platform.input_text(action.text, context)
+            platform.input_text_at(x, y, action.text, context)
+        else:
+            click_duration = action.click_duration or 0
+            platform.click(x, y, duration=click_duration, context=context)
 
         return ActionResult(
             number=0,
@@ -178,7 +176,7 @@ class OcrWaitAction(BaseActionExecutor):
 
         # 如果有 time 参数，先等待指定秒数
         if action.time:
-            time.sleep(action.time)
+            self._wait(action, action.time)
 
         timeout = action.timeout / 1000
 
@@ -193,7 +191,9 @@ class OcrWaitAction(BaseActionExecutor):
             return position is not None
 
         # 智能等待（带中间检查）：固定等待超过6秒时每3秒检查一次
-        found, elapsed = self._smart_wait_with_check(action.timeout, check_text_appeared)
+        found, elapsed = self._smart_wait_with_check(
+            action.timeout, check_text_appeared, action=action
+        )
         if found:
             return ActionResult(
                 number=0,
@@ -229,7 +229,7 @@ class OcrWaitAction(BaseActionExecutor):
                     ocr_info=self._get_last_ocr_info(platform),
                 )
 
-            time.sleep(loop_interval)
+            self._wait(action, loop_interval)
 
         return ActionResult(
             number=0,

@@ -7,7 +7,13 @@ import pytest
 from worker.discovery.harmony import HarmonyDeviceInfo
 from worker.platforms import harmony_hdc
 from worker.platforms.harmony import HarmonyPlatformManager
-from worker.platforms.harmony_hdc import CommandResult, HdcCommandError, HarmonyHdcWrapper
+from worker.platforms.harmony_hdc import (
+    CommandResult,
+    HdcCommandError,
+    HarmonyHdcWrapper,
+    classify_harmony_device,
+)
+from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.config import PlatformConfig, WorkerConfig
 from worker.task import Action, ActionStatus, Task, TaskStatus
 from worker.scheduling.scheduler import ResourceScheduler
@@ -101,7 +107,6 @@ def test_execute_hdc_command_retries_transient_failure(monkeypatch: pytest.Monke
 def test_input_text_escapes_single_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
     wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
     commands: list[str] = []
-    monkeypatch.setattr(wrapper, "tap", lambda x, y: True)
     monkeypatch.setattr(
         wrapper,
         "shell",
@@ -110,6 +115,49 @@ def test_input_text_escapes_single_quotes(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert wrapper.input_text_at(10, 20, "a'b") is True
     assert commands == ["uitest uiInput inputText 10 20 'a'\"'\"'b'"]
+
+
+@pytest.mark.parametrize("text", ["中文 空格", 'a"b\\c', "line1\nline2", "$HOME; echo x"])
+def test_input_text_quotes_special_characters(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command: commands.append(command) or CommandResult("", "", 0),
+    )
+
+    assert wrapper.input_text_at(12, 34, text)
+    assert commands == [
+        f"uitest uiInput inputText 12 34 {harmony_hdc._quote_remote_shell_argument(text)}"
+    ]
+
+
+def test_harmony_keycodes_have_single_correct_direction_mapping() -> None:
+    assert HarmonyHdcWrapper.KEY_MAP is HARMONY_KEY_MAP
+    assert HarmonyPlatformManager.KEY_MAP is HARMONY_KEY_MAP
+    assert [HARMONY_KEY_MAP[key] for key in ("DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT", "DPAD_CENTER")] == [2012, 2013, 2014, 2015, 2016]
+
+
+def test_harmony_device_classification_uses_exact_property_values() -> None:
+    assert classify_harmony_device({"const.product.type": "tablet"}) == "mobile"
+    assert classify_harmony_device({"const.product.device_type": "desktop"}) == "pc"
+    assert classify_harmony_device({"const.product.name": "my-pc-phone-shell"}) == "unknown"
+    assert classify_harmony_device({"const.product.type": "smartphone-pro"}) == "unknown"
+
+
+def test_harmony_input_action_uses_located_coordinates() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    calls: list[tuple[int, int, str]] = []
+    client = SimpleNamespace(
+        input_text_at=lambda x, y, text: calls.append((x, y, text)) or True
+    )
+
+    manager.input_text_at(23, 45, "中文 input", context=client)
+
+    assert calls == [(23, 45, "中文 input")]
 
 
 def test_harmony_device_info_uses_public_platform_type() -> None:

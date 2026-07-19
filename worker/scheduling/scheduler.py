@@ -17,7 +17,10 @@ class ResourceScheduler:
 
     def try_acquire(self, platform: str, device_id: str | None, task_id: str) -> ResourceLease | None:
         """原子申请资源，忙碌时返回 None。"""
-        key = resource_key(platform, device_id)
+        return self.try_acquire_key(resource_key(platform, device_id), task_id)
+
+    def try_acquire_key(self, key: str, task_id: str) -> ResourceLease | None:
+        """按完整资源键原子申请资源，供独立资源域使用。"""
         with self._lock:
             if key in self._leases:
                 return None
@@ -36,8 +39,12 @@ class ResourceScheduler:
 
     def get_busy_task_id(self, platform: str, device_id: str | None = None) -> str | None:
         """获取资源当前占用任务。"""
+        return self.get_busy_task_id_by_key(resource_key(platform, device_id))
+
+    def get_busy_task_id_by_key(self, key: str) -> str | None:
+        """按完整资源键获取当前占用任务。"""
         with self._lock:
-            lease = self._leases.get(resource_key(platform, device_id))
+            lease = self._leases.get(key)
             return lease.task_id if lease else None
 
     def is_busy(self, platform: str, device_id: str | None = None) -> bool:

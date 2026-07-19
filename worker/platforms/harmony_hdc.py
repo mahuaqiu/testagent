@@ -19,8 +19,27 @@ from typing import Optional, Tuple, List, Dict, Union
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd, run_cmd
+from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 
 logger = logging.getLogger(__name__)
+
+
+def classify_harmony_device(properties: Dict[str, str]) -> str:
+    """按属性优先级和规范值判断鸿蒙设备形态。"""
+    mobile_values = {"phone", "tablet", "watch", "wearable", "mobile"}
+    pc_values = {"pc", "desktop", "laptop", "notebook", "computer", "2in1", "2-in-1"}
+    for key in (
+        "const.product.type",
+        "const.product.device_type",
+        "const.product.form",
+        "const.product.family",
+    ):
+        value = properties.get(key, "").strip().lower().replace("_", "-")
+        if value in mobile_values:
+            return "mobile"
+        if value in pc_values:
+            return "pc"
+    return "unknown"
 
 
 # ============================================================================
@@ -306,22 +325,7 @@ class HarmonyHdcWrapper:
     - 性能监控
     """
 
-    # 按键映射表（参考 hmnextauto KeyCode）
-    KEY_MAP = {
-        "HOME": 1,
-        "BACK": 2,
-        "POWER": 18,
-        "VOLUME_UP": 16,
-        "VOLUME_DOWN": 17,
-        "VOLUME_MUTE": 22,
-        "ENTER": 2054,
-        "MENU": 2067,
-        "DPAD_UP": 19,
-        "DPAD_DOWN": 20,
-        "DPAD_LEFT": 21,
-        "DPAD_RIGHT": 22,
-        "DPAD_CENTER": 23,
-    }
+    KEY_MAP = HARMONY_KEY_MAP
 
     def __init__(self, serial: str, hdc_path: Optional[str] = None):
         """
@@ -630,12 +634,6 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        # 先点击目标位置
-        if not self.tap(x, y):
-            logger.error("点击目标位置失败")
-            return False
-
-        # 使用 input text 命令输入文本
         quoted_text = _quote_remote_shell_argument(text)
         result = self.shell(f"uitest uiInput inputText {x} {y} {quoted_text}")
         return self._check_result(result, "输入文本")
@@ -668,7 +666,7 @@ class HarmonyHdcWrapper:
 
     def device_category(self) -> str:
         """根据系统属性判断设备形态，无法确认时返回 unknown。"""
-        values = []
+        properties: Dict[str, str] = {}
         for key in (
             "const.product.type",
             "const.product.device_type",
@@ -677,14 +675,8 @@ class HarmonyHdcWrapper:
         ):
             result = self.shell(f"param get {key}")
             if result.exit_code == 0 and result.output.strip():
-                values.append(result.output.strip().lower())
-
-        text = " ".join(values)
-        if any(marker in text for marker in ("phone", "tablet", "watch", "wearable", "mobile")):
-            return "mobile"
-        if any(marker in text for marker in ("pc", "desktop", "laptop", "notebook", "computer", "2in1")):
-            return "pc"
-        return "unknown"
+                properties[key] = result.output.strip()
+        return classify_harmony_device(properties)
 
     # ========================================================================
     # 按键操作

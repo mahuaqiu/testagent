@@ -215,25 +215,27 @@ class AndroidPlatformManager(PlatformManager):
             context: 执行上下文
         """
         device = context or self._device_clients.get(self._current_device)
-        if device:
-            if duration > 0:
-                # 长按：使用 long_click，单位转换 毫秒 → 秒
-                duration_sec = duration / 1000.0
-                logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
-                device.long_click(x, y, duration=duration_sec)
-            else:
-                logger.debug(f"Click at ({x}, {y})")
-                device.click(x, y)
+        if not device:
+            raise RuntimeError("No device context")
+        if duration > 0:
+            # 长按：使用 long_click，单位转换 毫秒 → 秒
+            duration_sec = duration / 1000.0
+            logger.debug(f"Long click at ({x}, {y}) for {duration}ms")
+            device.long_click(x, y, duration=duration_sec)
+        else:
+            logger.debug(f"Click at ({x}, {y})")
+            device.click(x, y)
 
     def double_click(self, x: int, y: int, context: Any = None) -> None:
         """双击指定坐标（模拟两次快速点击）。"""
         device = context or self._device_clients.get(self._current_device)
-        if device:
-            # 模拟双击：快速两次点击，间隔100ms
-            device.click(x, y)
-            import time
-            time.sleep(0.1)
-            device.click(x, y)
+        if not device:
+            raise RuntimeError("No device context")
+        # 模拟双击：快速两次点击，间隔100ms
+        device.click(x, y)
+        import time
+        time.sleep(0.1)
+        device.click(x, y)
 
     def move(self, x: int, y: int, context: Any = None) -> None:
         """移动鼠标（移动端不支持）。"""
@@ -242,8 +244,9 @@ class AndroidPlatformManager(PlatformManager):
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本。"""
         device = context or self._device_clients.get(self._current_device)
-        if device:
-            device.send_keys(text)
+        if not device:
+            raise RuntimeError("No device context")
+        device.send_keys(text)
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
               duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
@@ -259,11 +262,12 @@ class AndroidPlatformManager(PlatformManager):
             context: 执行上下文
         """
         device = context or self._device_clients.get(self._current_device)
-        if device:
-            # 默认使用 steps=5 实现平滑滑动
-            actual_steps = steps if steps is not None else 5
-            logger.debug(f"Swipe with steps={actual_steps}")
-            device.swipe(start_x, start_y, end_x, end_y, steps=actual_steps)
+        if not device:
+            raise RuntimeError("No device context")
+        # 默认使用 steps=5 实现平滑滑动
+        actual_steps = steps if steps is not None else 5
+        logger.debug(f"Swipe with steps={actual_steps}")
+        device.swipe(start_x, start_y, end_x, end_y, steps=actual_steps)
 
     def pinch(self, direction: str, scale: float = 0.5,
               duration: int = 500, context: Any = None) -> None:
@@ -299,18 +303,19 @@ class AndroidPlatformManager(PlatformManager):
         详见 KEY_MAP 定义。
         """
         device = context or self._device_clients.get(self._current_device)
-        if device:
-            key_name = key.upper() if key else ""
-            key_code = self.KEY_MAP.get(key_name)
+        if not device:
+            raise RuntimeError("No device context")
+        key_name = key.upper() if key else ""
+        key_code = self.KEY_MAP.get(key_name)
 
-            if key_code:
-                device.press(key_code)
-            elif key and key.isdigit():
-                # 支持直接传入 KeyCode 数字
-                device.press(int(key))
-            else:
-                supported = ", ".join(sorted(self.KEY_MAP.keys()))
-                raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
+        if key_code:
+            device.press(key_code)
+        elif key and key.isdigit():
+            # 支持直接传入 KeyCode 数字
+            device.press(int(key))
+        else:
+            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（使用 ScreenManager）。"""

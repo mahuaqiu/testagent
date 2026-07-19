@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from worker.errors import IdempotencyConflictError, TaskConflictError, TaskNotFoundError
+from worker.errors import IdempotencyConflictError, TaskConflictError, TaskNotFoundError, WorkerError
 from worker.scheduling.models import ResourceLease
 from worker.scheduling.scheduler import ResourceScheduler
 from worker.task.repository import TaskRepository
@@ -19,6 +19,8 @@ from worker.task.result import TaskResult, TaskStatus
 from worker.task.task import Task
 
 logger = logging.getLogger(__name__)
+
+HOST_COMMAND_RESOURCE_KEY = "host:command"
 
 TERMINAL_STATUSES = {
     TaskStatus.SUCCESS.value,
@@ -86,10 +88,11 @@ class TaskService:
                     raise IdempotencyConflictError(idempotency_key or "")
                 return existing["task"].task_id, self._status_value(existing["status"])
 
-            lease = self.scheduler.try_acquire(task.platform, task.device_id, task.task_id)
+            lease_key = self._resource_key_for_task(task)
+            lease = self.scheduler.try_acquire_key(lease_key, task.task_id)
             if lease is None:
                 raise TaskConflictError(
-                    task_id=self.scheduler.get_busy_task_id(task.platform, task.device_id)
+                    task_id=self.scheduler.get_busy_task_id_by_key(lease_key)
                 )
             try:
                 self.repository.create(
@@ -201,3 +204,19 @@ class TaskService:
     @staticmethod
     def _status_value(status: Any) -> str:
         return status.value if isinstance(status, TaskStatus) else str(status)
+
+    @staticmethod
+    def _resource_key_for_task(task: Task) -> str:
+        """为任务选择资源域，宿主机命令不占用平台或设备资源。"""
+        from worker.scheduling.models import resource_key
+
+        action_types = {action.action_type for action in task.actions}
+        if action_types == {"cmd_exec"}:
+            return HOST_COMMAND_RESOURCE_KEY
+        if "cmd_exec" in action_types:
+            raise WorkerError(
+                code="INVALID_TASK_ACTIONS",
+                message="cmd_exec cannot be mixed with platform actions",
+                http_status=400,
+            )
+        return resource_key(task.platform, task.device_id)

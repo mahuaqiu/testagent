@@ -36,13 +36,7 @@ class PlatformManager(ABC):
         "image_click", "image_wait", "image_assert", "image_click_near_text",
         "image_move", "image_double_click", "image_exist",
         "image_get_position",
-        "click", "right_click", "double_click", "swipe", "drag", "input", "paste", "press", "screenshot", "wait",
-        "move",
-        "cmd_exec",  # 宿主机命令执行
-        "pinch",  # 双指缩放（Android/iOS）
-        "start_recording",  # 开始录屏
-        "stop_recording",  # 停止录屏
-        "activate_window",  # 窗口激活（Windows/Mac）
+        "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
     }
 
     # 子类可覆盖，定义平台特有动作
@@ -196,6 +190,11 @@ class PlatformManager(ABC):
             context: 执行上下文（可选）
         """
         pass
+
+    def input_text_at(self, x: int, y: int, text: str, context: Any = None) -> None:
+        """在指定坐标聚焦后输入文本，平台可覆盖为原生坐标输入。"""
+        self.click(x, y, duration=0, context=context)
+        self.input_text(text, context)
 
     @abstractmethod
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,

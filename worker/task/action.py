@@ -76,6 +76,7 @@ class Action:
     offset: dict[str, int] | None = None  # 点击偏移 {"x": 10, "y": 5}
     threshold: float = 0.9                   # 图像匹配阈值
     timeout: int = 30000                     # 超时时间(ms)
+    timeout_explicit: bool = False            # 请求是否显式传入 timeout
     match_mode: str = "exact"                # OCR 匹配模式
     screenshot: bool = False                 # 是否截图
     wait: int | None = None               # 等待时间(ms)
@@ -143,6 +144,9 @@ class Action:
     # 命令执行参数（cmd_exec 专用）
     background: bool = False                  # 是否后台异步执行（不等待结果直接返回）
 
+    # 运行时注入，不参与请求序列化；由 Worker 为当前动作设置截止时间。
+    execution_control: Any = None
+
     # 扩展参数（用于自定义动作，如 pinch）
     params: dict[str, Any] | None = None
 
@@ -177,6 +181,7 @@ class Action:
             offset=data.get("offset"),
             threshold=data.get("threshold", 0.9),
             timeout=data.get("timeout", 30000),
+            timeout_explicit="timeout" in data,
             match_mode=data.get("match_mode", "exact"),
             screenshot=data.get("screenshot", False),
             wait=data.get("wait"),

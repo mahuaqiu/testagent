@@ -37,6 +37,7 @@ from worker.reporter import DesktopInfo, HarmonyDeviceInfo, Reporter, WorkerCapa
 from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
 from worker.tools import get_all_script_versions
 from worker.runtime import WorkerRuntime
+from worker.actions.spec import ActionCancelled, ActionTimedOut, ExecutionControl
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +191,7 @@ class Worker:
         # 鍏堝仠姝换鍔℃湇鍔★紝纭繚鎵ц涓殑浠诲姟閲婃斁璧勬簮绉熺害
         self.runtime.stop()
 
-        from worker.actions.cmd_exec import CmdExecAction
-        CmdExecAction.shutdown_background_processes()
+        # background=true 的命令属于宿主机独立进程，不随 Worker 生命周期回收。
 
         # 关闭所有 ScreenManager
         from worker.screen.manager import close_all_screen_managers
@@ -741,6 +741,9 @@ class Worker:
             TaskResult | None: 验证失败返回错误结果，通过返回 None
         """
         request_id = get_request_id()
+        host_command_only = bool(task.actions) and all(
+            action.action_type == "cmd_exec" for action in task.actions
+        )
 
         # 1. 平台支持验证
         if task.platform not in self.supported_platforms:
@@ -753,7 +756,7 @@ class Worker:
             )
 
         # 2. device_id 验证（移动端必填）
-        if task.platform in ["android", "ios", "harmony_mobile", "harmony_pc"]:
+        if not host_command_only and task.platform in ["android", "ios", "harmony_mobile", "harmony_pc"]:
             if not task.device_id:
                 return TaskResult(
                     task_id=task.task_id,
@@ -785,6 +788,8 @@ class Worker:
         supported_actions = manager.get_supported_actions()
         for i, action in enumerate(task.actions):
             action_type = action.action_type
+            if action_type == "cmd_exec" and host_command_only:
+                continue
             if action_type not in supported_actions:
                 return TaskResult(
                     task_id=task.task_id,
@@ -1174,13 +1179,56 @@ class Worker:
                     actions=actions_results,
                     error=f"Task timeout after {timeout_ms}ms",
                 )
-            if action.action_type == 'wait':
-                wait_seconds = action.time if action.time is not None else ((action.wait or int(action.value or 1000)) / 1000)
-                if cancel_event is not None and cancel_event.wait(wait_seconds):
-                    return TaskResult(task_id=task.task_id, request_id=request_id, status=TaskStatus.CANCELLED, platform=task.platform, started_at=started_at, finished_at=datetime.now(), actions=actions_results, error='Task cancelled by user')
-                result = ActionResult(number=i, action_type=action.action_type, status=ActionStatus.SUCCESS, output=f'Waited {wait_seconds}s')
-            else:
+            action_started = time.monotonic()
+            configured_action_timeout = (
+                action.timeout if action.timeout_explicit else task.config.action_timeout
+            )
+            action_timeout_ms = (
+                configured_action_timeout
+                if configured_action_timeout and configured_action_timeout > 0
+                else timeout_ms
+            )
+            action_deadline = (
+                action_started + action_timeout_ms / 1000
+                if action_timeout_ms and action_timeout_ms > 0
+                else deadline
+            )
+            if deadline is not None:
+                action_deadline = min(action_deadline, deadline) if action_deadline else deadline
+            action.execution_control = ExecutionControl(
+                deadline_monotonic=action_deadline,
+                cancel_event=cancel_event or threading.Event(),
+            )
+            try:
                 result = manager.execute_action(context, action)
+                action.execution_control.checkpoint()
+            except ActionCancelled as exc:
+                return TaskResult(
+                    task_id=task.task_id, request_id=request_id,
+                    status=TaskStatus.CANCELLED, platform=task.platform,
+                    started_at=started_at, finished_at=datetime.now(),
+                    actions=actions_results, error=str(exc),
+                )
+            except ActionTimedOut:
+                result = ActionResult(
+                    number=i,
+                    action_type=action.action_type,
+                    status=ActionStatus.FAILED,
+                    error=f"Action timeout after {action_timeout_ms}ms",
+                )
+                result.duration_ms = int((time.monotonic() - action_started) * 1000)
+                result.request_id = request_id
+                actions_results.append(result)
+                return TaskResult(
+                    task_id=task.task_id, request_id=request_id,
+                    status=TaskStatus.TIMEOUT, platform=task.platform,
+                    started_at=started_at, finished_at=datetime.now(),
+                    actions=actions_results, error=result.error,
+                )
+            finally:
+                action.execution_control = None
+            if result.duration_ms <= 0:
+                result.duration_ms = int((time.monotonic() - action_started) * 1000)
             result.number = i
             result.request_id = request_id  # 填充 request_id
             self._attach_action_artifacts(task, result)
