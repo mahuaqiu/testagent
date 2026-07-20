@@ -342,7 +342,9 @@
       "Bash(./venv/Scripts/python.exe -m pytest -q)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_worker_screenshot_recording.py -q)",
       "Bash(PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe -c ' *)",
-      "Bash(./venv/Scripts/python.exe *)"
+      "Bash(./venv/Scripts/python.exe *)",
+      "PowerShell(pytest *)",
+      "PowerShell(git *)"
     ]
   }
 }
