@@ -124,8 +124,9 @@ class Action:
     device: str | None = None             # 设备名称/ID（音频设备）
     state: str | None = None              # 设备状态："enable" 或 "disabled"
 
-    # 窗口激活参数
-    name: str | None = None               # 进程 exe 名称（如 "chrome.exe"），用于 activate_window
+    # 窗口激活/关闭参数
+    name: str | None = None               # 进程 exe 名称（如 "chrome.exe"），用于 activate_window/close_window
+    window_class: str | None = None       # 窗口类名（精确匹配），用于 close_window 与 title 组合定位
 
     # 断言参数
     negate: bool = False                  # 断言不存在（ocr_assert/image_assert 专用）
@@ -215,6 +216,7 @@ class Action:
             device=data.get("device"),
             state=data.get("state"),
             name=data.get("name"),
+            window_class=data.get("window_class") or data.get("class"),
             negate=data.get("negate", False),
             proxy=data.get("proxy"),
             fps=data.get("fps"),
@@ -303,6 +305,8 @@ class Action:
             result["state"] = self.state
         if self.name is not None:
             result["name"] = self.name
+        if self.window_class is not None:
+            result["window_class"] = self.window_class
         if self.negate:
             result["negate"] = self.negate
         if self.proxy is not None:

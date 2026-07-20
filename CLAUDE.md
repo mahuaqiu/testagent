@@ -113,6 +113,7 @@ PlatformManager (抽象基类)
 - **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
 - **移动端特有**：`unlock_screen` - 解锁屏幕（iOS/Android 专用）
 - **窗口激活**：`activate_window` - 激活窗口（Windows/Mac/Web 专用）
+- **窗口关闭**：`close_window` - 关闭窗口/弹窗（Windows/Web 专用，WM_CLOSE）
 - **Windows 系统控制**：`set_resolution`, `set_volume`, `audio_device` - 分辨率、音量、音频设备控制（Windows 专用）
 
 **OCR 统一匹配策略**：精确匹配 → 模糊匹配，`reg_` 前缀使用正则匹配。
@@ -288,6 +289,38 @@ PlatformManager (抽象基类)
 - Edge: `Chrome_WidgetWin_1`（Edge 也使用 Chromium）
 - 记事本: `Notepad`
 - 计算器: `Windows.UI.Core.CoreWindow`
+
+### close_window 关闭窗口（Windows/Web 专用）
+
+通过 `PostMessage(WM_CLOSE)` 请求关闭指定窗口/弹窗。适合关闭系统对话框（如 `#32770`「声音」设置窗）等场景。
+
+**参数**：
+| 参数 | 说明 |
+|------|------|
+| `value` | 窗口标题（`match_by=title`，包含匹配）或窗口类名（`match_by=class`） |
+| `match_by` | 定位方式，默认 `"title"`，可选 `"class"` |
+| `window_class` | 窗口类名精确匹配（可选）；可与 `value`（标题）组合实现双条件定位。短字段 `class` 等价 |
+| `name` | 进程 exe 名称过滤（可选），如 `"rundll32.exe"` |
+
+**使用示例**：
+```json
+// 按标题关闭
+{"action_type": "close_window", "value": "声音"}
+
+// 按类名关闭
+{"action_type": "close_window", "value": "#32770", "match_by": "class"}
+
+// class + title 双条件（推荐：#32770 很常见，需配合标题避免误关）
+{"action_type": "close_window", "value": "声音", "window_class": "#32770"}
+
+// 再加进程过滤
+{"action_type": "close_window", "value": "声音", "window_class": "#32770", "name": "rundll32.exe"}
+```
+
+**行为说明**：
+- 找不到窗口 → `FAILED`
+- 已发送 `WM_CLOSE` 但窗口仍在（如弹出「是否保存」）→ `FAILED`
+- 关闭成功 → `SUCCESS`
 
 ### set_resolution 设置分辨率（Windows 专用）
 

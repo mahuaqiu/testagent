@@ -50,7 +50,7 @@ from worker.actions.recording import StartRecordingAction, StopRecordingAction
 from worker.actions.registry import ActionRegistry
 from worker.actions.unlock import UnlockScreenAction
 from worker.actions.web_token import GetTokenAction
-from worker.actions.window import ActivateWindowAction
+from worker.actions.window import ActivateWindowAction, CloseWindowAction
 from worker.task import ActionResult, ActionStatus
 
 
@@ -115,6 +115,7 @@ def _register_all_actions():
 
     # Window Actions
     ActionRegistry.register(ActivateWindowAction())
+    ActionRegistry.register(CloseWindowAction())
 
 
 # 模块加载时自动注册
@@ -175,4 +176,5 @@ __all__ = [
     "StopRecordingAction",
     # Window Actions
     "ActivateWindowAction",
+    "CloseWindowAction",
 ]

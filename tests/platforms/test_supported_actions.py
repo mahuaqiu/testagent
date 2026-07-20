@@ -10,7 +10,7 @@ from worker.platforms.ios import iOSPlatformManager
 def test_base_actions_do_not_claim_optional_platform_capabilities() -> None:
     optional_actions = {
         "right_click", "move", "paste", "cmd_exec", "pinch",
-        "start_recording", "stop_recording", "activate_window",
+        "start_recording", "stop_recording", "activate_window", "close_window",
     }
 
     assert PlatformManager.BASE_SUPPORTED_ACTIONS.isdisjoint(optional_actions)

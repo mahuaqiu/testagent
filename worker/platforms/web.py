@@ -92,7 +92,7 @@ class WebPlatformManager(PlatformManager):
     # Web 平台特有动作
     SUPPORTED_ACTIONS: Set[str] = {
         "navigate", "start_app", "stop_app", "get_token", "new_page", "switched_page", "close_page",
-        "right_click", "move", "paste",
+        "right_click", "move", "paste", "close_window",
     }
 
     def __init__(self, config: PlatformConfig, ocr_client=None):

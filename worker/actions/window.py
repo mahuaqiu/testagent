@@ -1,8 +1,11 @@
 """
-窗口激活 Action 执行器。
+窗口相关 Action 执行器。
 
-支持 Windows/Mac/Web 平台将指定窗口带到前台并获取焦点。
-match_by 支持两种模式：title（窗口标题）、class（窗口类名）。
+- activate_window: 将指定窗口带到前台并获取焦点（Windows/Mac/Web）
+- close_window: 通过 WM_CLOSE 关闭指定窗口（Windows/Web）
+
+match_by 支持 title（窗口标题）、class（窗口类名）。
+close_window 额外支持 window_class，可与 title 组合实现双条件精确定位。
 """
 
 import logging
@@ -18,6 +21,36 @@ if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_window_filters(action: Action) -> tuple[str | None, str | None, str | None, str | None]:
+    """从 Action 解析 title / class_name / exe_name。
+
+    Returns:
+        (title, class_name, exe_name, error)
+        error 非空表示参数不合法。
+    """
+    match_by = action.match_by or "title"
+    if match_by not in ("title", "class"):
+        return None, None, None, f"Invalid match_by: {match_by}, must be 'title' or 'class'"
+
+    value = action.value if isinstance(action.value, str) else None
+    window_class = getattr(action, "window_class", None)
+    exe_name = action.name
+
+    title: str | None = None
+    class_name: str | None = window_class or None
+
+    if value:
+        if match_by == "class":
+            class_name = value
+        else:
+            title = value
+
+    if not title and not class_name:
+        return None, None, None, "value or window_class is required"
+
+    return title, class_name, exe_name, None
 
 
 class ActivateWindowAction(BaseActionExecutor):
@@ -311,3 +344,125 @@ class ActivateWindowAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Failed to activate: {e}",
             )
+
+
+class CloseWindowAction(BaseActionExecutor):
+    """关闭指定窗口（Windows/Web）。
+
+    通过 Win32 PostMessage(WM_CLOSE) 请求窗口关闭。
+    支持 title / class / window_class + name(exe) 组合精确定位，
+    避免 #32770 等通用对话框类名误关其他窗口。
+    """
+
+    name = "close_window"
+    requires_context = False
+
+    # 发送 WM_CLOSE 后等待窗口销毁的时间（秒）
+    _CLOSE_VERIFY_WAIT = 0.3
+
+    def execute(self, platform: "PlatformManager", action: Action, context=None) -> ActionResult:
+        """执行关闭窗口。"""
+        if platform.platform not in ("windows", "web"):
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"close_window is not supported on {platform.platform}",
+            )
+
+        title, class_name, exe_name, error = _resolve_window_filters(action)
+        if error:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=error,
+            )
+
+        return self._close_windows(title, class_name, exe_name)
+
+    def _close_windows(
+        self,
+        title: str | None,
+        class_name: str | None,
+        exe_name: str | None,
+    ) -> ActionResult:
+        """Windows 平台关闭窗口。"""
+        import win32con
+        import win32gui
+
+        from worker.platforms.win_utils import find_window_handle
+
+        filter_desc = self._format_filters(title, class_name, exe_name)
+
+        hwnd = find_window_handle(
+            title=title,
+            class_name=class_name,
+            exe_name=exe_name,
+            retry=True,
+        )
+        if not hwnd:
+            logger.error(f"Window not found for close_window: {filter_desc}")
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Window not found: {filter_desc}",
+            )
+
+        try:
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        except Exception as e:
+            logger.error(f"PostMessage WM_CLOSE failed: hwnd={hwnd}, {e}")
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=f"Failed to post WM_CLOSE: {e}",
+            )
+
+        time.sleep(self._CLOSE_VERIFY_WAIT)
+
+        # 校验窗口是否已销毁；部分应用会弹确认框导致窗口仍在
+        still_exists = False
+        try:
+            still_exists = bool(win32gui.IsWindow(hwnd))
+        except Exception:
+            still_exists = False
+
+        if still_exists:
+            logger.warning(
+                f"WM_CLOSE sent but window still exists: hwnd={hwnd}, {filter_desc}"
+            )
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error=(
+                    f"WM_CLOSE sent but window still exists: {filter_desc} "
+                    f"(hwnd={hwnd}). App may show a confirm dialog."
+                ),
+            )
+
+        logger.info(f"Closed window: {filter_desc}, hwnd={hwnd}")
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Closed window: {filter_desc}",
+        )
+
+    @staticmethod
+    def _format_filters(
+        title: str | None,
+        class_name: str | None,
+        exe_name: str | None,
+    ) -> str:
+        parts: list[str] = []
+        if title:
+            parts.append(f"title~={title}")
+        if class_name:
+            parts.append(f"class={class_name}")
+        if exe_name:
+            parts.append(f"exe={exe_name}")
+        return ", ".join(parts) if parts else "(empty)"

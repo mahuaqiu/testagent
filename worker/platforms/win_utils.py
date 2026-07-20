@@ -9,9 +9,31 @@ import win32gui
 logger = logging.getLogger(__name__)
 
 
+def get_exe_name(hwnd: int) -> str | None:
+    """获取窗口对应的进程 exe 名称。
+
+    Args:
+        hwnd: 窗口句柄
+
+    Returns:
+        进程 exe 名称（如 "chrome.exe"），获取失败返回 None
+    """
+    try:
+        import psutil
+        import win32process
+
+        _, process_id = win32process.GetWindowThreadProcessId(hwnd)
+        process = psutil.Process(process_id)
+        return process.name()
+    except Exception:
+        return None
+
+
 def find_window_handle(
     title: str | None = None,
-    class_name: str | None = None
+    class_name: str | None = None,
+    exe_name: str | None = None,
+    retry: bool = True,
 ) -> int | None:
     """
     查找窗口句柄。
@@ -19,6 +41,8 @@ def find_window_handle(
     Args:
         title: 窗口标题（包含匹配），可选
         class_name: 窗口类名（精确匹配），可选
+        exe_name: 进程 exe 名称过滤（精确匹配），可选，如 "chrome.exe"
+        retry: 找不到时是否等待 1 秒后重试一次
 
     Returns:
         int: 窗口句柄，找不到返回 None
@@ -27,17 +51,18 @@ def find_window_handle(
         - 只传 title: 遍历窗口，第一个可见且标题包含匹配的
         - 只传 class: 遍历窗口，第一个可见且类名精确匹配的
         - 都传: 遍历窗口，第一个可见且类名精确匹配 + 标题包含匹配的
+        - 可叠加 exe_name 进一步收窄
         - 都不传: 返回 None（全屏模式）
     """
     if not title and not class_name:
         return None
 
-    found_hwnd = _do_find_window_handle(title, class_name)
+    found_hwnd = _do_find_window_handle(title, class_name, exe_name)
 
     # 找不到时等待 1 秒后重试一次
-    if found_hwnd is None:
+    if found_hwnd is None and retry:
         time.sleep(1)
-        found_hwnd = _do_find_window_handle(title, class_name)
+        found_hwnd = _do_find_window_handle(title, class_name, exe_name)
 
     if found_hwnd:
         try:
@@ -50,14 +75,16 @@ def find_window_handle(
         except Exception:
             logger.debug(f"Window found: hwnd={found_hwnd}")
     else:
-        logger.warning(f"Window not found: class='{class_name}', title='{title}'")
+        extra = f", exe='{exe_name}'" if exe_name else ""
+        logger.warning(f"Window not found: class='{class_name}', title='{title}'{extra}")
 
     return found_hwnd
 
 
 def _do_find_window_handle(
     title: str | None = None,
-    class_name: str | None = None
+    class_name: str | None = None,
+    exe_name: str | None = None,
 ) -> int | None:
     """执行单次窗口查找。"""
     # 统一使用 EnumWindows 遍历查找，避免 FindWindow 只返回一个窗口的问题
@@ -79,6 +106,12 @@ def _do_find_window_handle(
                 window_title = win32gui.GetWindowText(hwnd)
                 if title not in window_title:
                     return True  # 标题不匹配，继续枚举
+
+            # 进程 exe 精确匹配（如果指定了 exe_name）
+            if exe_name:
+                exe = get_exe_name(hwnd)
+                if exe != exe_name:
+                    return True
 
             # 匹配成功但不可见，打印提醒日志
             if not visible:
