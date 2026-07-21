@@ -1382,7 +1382,7 @@ class Worker:
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str | None]:
         task = Task.create(
             platform=platform,
             actions=actions,
@@ -1390,11 +1390,12 @@ class Worker:
             metadata={"window": window} if window else None,
             generate_id=True,
         )
-        return self.runtime.task_service.submit_async(
+        task_id, status = self.runtime.task_service.submit_async(
             task,
             request_id=get_request_id(),
             idempotency_key=idempotency_key,
         )
+        return task_id, status, self.runtime.task_service.get_request_id(task_id)
 
     def get_task_result(self, task_id: str) -> dict[str, Any] | None:
         return self.runtime.task_service.get(task_id)

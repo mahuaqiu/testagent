@@ -17,7 +17,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from common.request_context import clear_request_id, generate_request_id, set_request_id
+from common.request_context import generate_request_id, reset_request_id, set_request_id
 from worker.config import (
     load_config_version,
     merge_config_with_ip_protection,
@@ -243,7 +243,7 @@ async def execute_task(request: TaskRequest):
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     request_id = generate_request_id()
-    set_request_id(request_id)
+    request_id_token = set_request_id(request_id)
     try:
         logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
         window_dict = request.window.model_dump(by_alias=True) if request.window else None
@@ -257,7 +257,7 @@ async def execute_task(request: TaskRequest):
         logger.error(f"execute_sync failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail={"code": "TASK_EXECUTION_FAILED", "message": str(exc), "retryable": True, "details": {}}) from exc
     finally:
-        clear_request_id()
+        reset_request_id(request_id_token)
 
 
 @app.post("/task/execute_async")
@@ -267,16 +267,16 @@ async def execute_task_async(request: TaskRequest, idempotency_key: str | None =
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
     request_id = generate_request_id()
-    set_request_id(request_id)
+    request_id_token = set_request_id(request_id)
     try:
         logger.info(f"Async task raw request: {_format_request_for_log(request)}")
-        task_id, status = worker.execute_async(platform=request.platform, actions=request.actions, device_id=request.device_id, window=request.window.model_dump(by_alias=True) if request.window else None, idempotency_key=idempotency_key)
+        task_id, status, task_request_id = worker.execute_async(platform=request.platform, actions=request.actions, device_id=request.device_id, window=request.window.model_dump(by_alias=True) if request.window else None, idempotency_key=idempotency_key)
         logger.info(f"Async task submitted: task_id={task_id}, status={status}")
-        return {"task_id": task_id, "status": status, "request_id": request_id}
+        return {"task_id": task_id, "status": status, "request_id": task_request_id}
     except WorkerError as exc:
         raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
     finally:
-        clear_request_id()
+        reset_request_id(request_id_token)
 
 
 @app.get("/task/{task_id}")
@@ -289,14 +289,15 @@ async def get_task_result(task_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": "Task not found", "retryable": False, "details": {"task_id": task_id}})
     request_id = result.get("request_id")
+    request_id_token = None
     if request_id:
-        set_request_id(request_id)
+        request_id_token = set_request_id(request_id)
     try:
         logger.info(f"Task result response: {_format_result_for_log(result)}")
         return result
     finally:
-        if request_id:
-            clear_request_id()
+        if request_id_token is not None:
+            reset_request_id(request_id_token)
 
 
 @app.delete("/task/{task_id}")
@@ -304,12 +305,18 @@ async def cancel_task(task_id: str):
     """请求取消任务，任务记录不会因取消请求被删除。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
+    snapshot = worker.get_task_result(task_id)
+    request_id = snapshot.get("request_id") if snapshot else None
+    request_id_token = set_request_id(request_id) if request_id else None
     try:
         result = worker.cancel_task(task_id)
         logger.info(f"Task cancellation requested: task_id={task_id}, status={result['status']}")
         return result
     except WorkerError as exc:
         raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
+    finally:
+        if request_id_token is not None:
+            reset_request_id(request_id_token)
 
 @app.post("/devices/refresh")
 async def refresh_devices():

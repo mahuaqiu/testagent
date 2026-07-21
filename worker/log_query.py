@@ -9,21 +9,13 @@
 
 import logging
 import os
-import platform
-import subprocess
-from datetime import datetime, timedelta
-from typing import Optional
-
-from common.utils import SUBPROCESS_HIDE_WINDOW
+import re
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 # 日志时间格式
 LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-# 停止搜索的时间阈值（request_id 模式）
-STOP_SEARCH_THRESHOLD_SECONDS = 300  # 5 分钟
-
 
 class LogQueryError(Exception):
     """日志查询参数错误。"""
@@ -34,7 +26,7 @@ def collect_log_files(log_path: str) -> list[str]:
     """
     收集日志文件列表（当前 + 轮转备份）。
 
-    按从新到旧排序：worker.log -> worker.log.1 -> ... -> worker.log.5
+    按从新到旧排序：worker.log -> worker.log.1 -> worker.log.2 -> ...
 
     Args:
         log_path: 当前日志文件路径（如 worker.log）
@@ -42,22 +34,31 @@ def collect_log_files(log_path: str) -> list[str]:
     Returns:
         存在的日志文件路径列表，从新到旧排序
     """
-    files = []
+    files: list[str] = []
 
     # 当前日志文件
     if os.path.exists(log_path):
         files.append(log_path)
 
-    # 轮转备份文件
-    for i in range(1, 6):
-        backup_path = f"{log_path}.{i}"
-        if os.path.exists(backup_path):
-            files.append(backup_path)
+    # 轮转数量由配置决定，因此动态枚举全部数字后缀备份。
+    log_dir = os.path.dirname(os.path.abspath(log_path))
+    log_name = os.path.basename(log_path)
+    backup_pattern = re.compile(rf"^{re.escape(log_name)}\.(\d+)$")
+    backups: list[tuple[int, str]] = []
+    try:
+        for name in os.listdir(log_dir):
+            match = backup_pattern.match(name)
+            if match:
+                backups.append((int(match.group(1)), os.path.join(log_dir, name)))
+    except FileNotFoundError:
+        return files
+
+    files.extend(path for _, path in sorted(backups))
 
     return files
 
 
-def parse_log_time(line: str) -> Optional[datetime]:
+def parse_log_time(line: str) -> datetime | None:
     """
     解析日志行的时间戳。
 
@@ -102,7 +103,7 @@ def query_by_lines(log_path: str, lines: int) -> tuple[str, int]:
 
 def grep_request_id_in_file(file_path: str, request_id: str) -> list[str]:
     """
-    使用系统命令在单个文件中搜索 request_id。
+    流式读取单个文件并搜索 request_id。
 
     Args:
         file_path: 日志文件路径
@@ -114,45 +115,19 @@ def grep_request_id_in_file(file_path: str, request_id: str) -> list[str]:
     # 搜索模式：[request_id]（方括号内精确匹配）
     pattern = f"[{request_id}]"
 
-    try:
-        if platform.system() == "Windows":
-            # Windows 使用 findstr /C: 进行字面字符串匹配
-            # /C: 后紧跟搜索字符串，方括号作为字面值而非正则字符集
-            result = subprocess.run(
-                ["findstr", f"/C:{pattern}", file_path],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=30,
-                creationflags=SUBPROCESS_HIDE_WINDOW,
-            )
-        else:
-            # Linux/Mac 使用 grep -F（固定字符串匹配）
-            result = subprocess.run(
-                ["grep", "-F", pattern, file_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
-        if result.stdout:
-            return result.stdout.splitlines()
-        return []
-
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Grep timeout for file: {file_path}")
-        return []
-    except Exception as e:
-        logger.error(f"Grep failed for file {file_path}: {e}")
-        return []
+    matches: list[str] = []
+    with open(file_path, encoding="utf-8", errors="replace") as log_file:
+        for line in log_file:
+            if pattern in line:
+                matches.append(line.rstrip("\n\r"))
+    return matches
 
 
 def query_by_request_id(log_path: str, request_id: str) -> tuple[str, int, int]:
     """
     按 request_id 查询日志。
 
-    搜索所有日志文件，带停止优化：
-    - 找到最早匹配时间后，往前 5 分钟无该 request_id 则停止
+    搜索当前日志及全部数字后缀轮转文件。
 
     Args:
         log_path: 当前日志文件路径
@@ -164,39 +139,21 @@ def query_by_request_id(log_path: str, request_id: str) -> tuple[str, int, int]:
     log_files = collect_log_files(log_path)
 
     all_matches = []
-    earliest_time: Optional[datetime] = None
     files_scanned = 0
 
     for file_path in log_files:
+        try:
+            matches = grep_request_id_in_file(file_path, request_id)
+        except FileNotFoundError:
+            # 日志可能恰好在查询期间发生轮转，跳过已被重命名的快照路径。
+            logger.info("Log file rotated while querying request-id: %s", file_path)
+            continue
         files_scanned += 1
-        matches = grep_request_id_in_file(file_path, request_id)
 
         if not matches:
             continue
 
-        # 解析每行时间，更新最早时间
-        for line in matches:
-            line_time = parse_log_time(line)
-            if line_time:
-                if earliest_time is None or line_time < earliest_time:
-                    earliest_time = line_time
-
         all_matches.extend(matches)
-
-        # 停止优化检查
-        if earliest_time:
-            # 检查该文件最后一行的时间
-            # 如果最后一行时间 < earliest_time - 5分钟，停止搜索
-            if matches:
-                last_line_time = parse_log_time(matches[-1])
-                if last_line_time:
-                    threshold = earliest_time - timedelta(seconds=STOP_SEARCH_THRESHOLD_SECONDS)
-                    if last_line_time < threshold:
-                        logger.debug(
-                            f"Stop searching older files: last_line_time={last_line_time}, "
-                            f"threshold={threshold}"
-                        )
-                        break
 
     # 按时间排序（旧到新）
     if all_matches:
@@ -226,30 +183,26 @@ def query_by_time_range(
 
     all_matches = []
     files_scanned = 0
-    should_stop = False
-
     for file_path in log_files:
-        if should_stop:
-            break
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
+                files_scanned += 1
+                for line in f:
+                    line_time = parse_log_time(line.rstrip("\n\r"))
 
-        files_scanned += 1
+                    if line_time is None:
+                        continue
 
-        with open(file_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line_time = parse_log_time(line.rstrip("\n\r"))
+                    # 时间区间过滤
+                    if start_time <= line_time <= end_time:
+                        all_matches.append(line.rstrip("\n\r"))
 
-                if line_time is None:
-                    continue
-
-                # 时间区间过滤
-                if start_time <= line_time <= end_time:
-                    all_matches.append(line.rstrip("\n\r"))
-
-                # 停止优化：日志文件是从旧到新追加写入的
-                # 当遇到晚于 end_time 的行时，已经过了查询区间上限，后续所有行都更晚
-                if line_time > end_time:
-                    should_stop = True
-                    break
+                    # 单个文件内部按时间递增，超过区间后只结束当前文件。
+                    # 轮转文件列表是从新到旧，仍需继续扫描更旧文件。
+                    if line_time > end_time:
+                        break
+        except FileNotFoundError:
+            logger.info("Log file rotated while querying time range: %s", file_path)
 
     # 重新排序为整体旧到新
     all_matches.sort(key=lambda line: parse_log_time(line) or datetime.min)
@@ -289,11 +242,11 @@ def parse_iso_time(time_str: str) -> datetime:
 
 
 def validate_query_params(
-    lines: Optional[int],
-    request_id: Optional[str],
-    start_time: Optional[str],
-    end_time: Optional[str],
-) -> tuple[str, Optional[int], Optional[str], Optional[datetime], Optional[datetime]]:
+    lines: int | None,
+    request_id: str | None,
+    start_time: str | None,
+    end_time: str | None,
+) -> tuple[str, int | None, str | None, datetime | None, datetime | None]:
     """
     校验查询参数，返回查询模式和和解后的参数。
 

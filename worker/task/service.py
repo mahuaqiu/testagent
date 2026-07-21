@@ -6,11 +6,13 @@ import json
 import logging
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
+from common.request_context import reset_request_id, set_request_id
 from worker.errors import IdempotencyConflictError, TaskConflictError, TaskNotFoundError, WorkerError
 from worker.scheduling.models import ResourceLease
 from worker.scheduling.scheduler import ResourceScheduler
@@ -133,7 +135,16 @@ class TaskService:
         result: TaskResult | None = row.get("result")
         if result is not None:
             return result.to_dict(include_task_id=True)
-        return {"task_id": task_id, "status": self._status_value(row["status"])}
+        return {
+            "task_id": task_id,
+            "status": self._status_value(row["status"]),
+            "request_id": row.get("request_id"),
+        }
+
+    def get_request_id(self, task_id: str) -> str | None:
+        """返回任务首次提交时绑定的 request-id。"""
+        row = self.repository.get(task_id)
+        return row.get("request_id") if row else None
 
     def cancel(self, task_id: str) -> dict[str, Any]:
         """请求取消任务，资源释放后才进入 cancelled。"""
@@ -169,6 +180,9 @@ class TaskService:
 
     def _run(self, handle: TaskHandle) -> TaskResult:
         task = handle.task
+        request_id_token = (
+            set_request_id(handle.request_id) if handle.request_id else None
+        )
         try:
             if handle.cancel_event.is_set():
                 result = TaskResult(
@@ -195,10 +209,14 @@ class TaskService:
                 error=str(exc),
             )
         finally:
-            self.scheduler.release_lease(handle.lease, "task_finished")
-            with self._lock:
-                self._handles.pop(task.task_id, None)
-            self.repository.update_status(task.task_id, result.status, result=result)
+            try:
+                self.scheduler.release_lease(handle.lease, "task_finished")
+                with self._lock:
+                    self._handles.pop(task.task_id, None)
+                self.repository.update_status(task.task_id, result.status, result=result)
+            finally:
+                if request_id_token is not None:
+                    reset_request_id(request_id_token)
         return result
 
     @staticmethod

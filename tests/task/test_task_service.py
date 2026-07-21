@@ -3,6 +3,7 @@
 import threading
 import time
 
+from common.request_context import get_request_id
 from worker.scheduling.scheduler import ResourceScheduler
 from worker.storage.database import Database
 from worker.task.result import TaskResult, TaskStatus
@@ -43,6 +44,41 @@ def test_task_service_runs_sync_and_keeps_queryable_result(tmp_path):
     queried = service.get(result.task_id)
     assert queried["status"] == TaskStatus.SUCCESS.value
     assert repository.get(result.task_id) is not None
+    service.shutdown()
+
+
+def test_task_service_binds_request_id_inside_executor(tmp_path):
+    callback_request_ids = []
+
+    def callback(task, cancel_event):
+        callback_request_ids.append(get_request_id())
+        return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
+
+    service, _ = make_service(tmp_path, callback)
+    result = service.execute_sync(make_task(), request_id="request-123")
+
+    assert callback_request_ids == ["request-123"]
+    assert result.request_id == "request-123"
+    assert service.get_request_id("task-1") == "request-123"
+    service.shutdown()
+
+
+def test_running_snapshot_keeps_request_id(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def callback(task, cancel_event):
+        started.set()
+        release.wait(2)
+        return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
+
+    service, _ = make_service(tmp_path, callback)
+    service.submit_async(make_task(), request_id="request-123")
+    assert started.wait(1)
+
+    assert service.get("task-1")["request_id"] == "request-123"
+
+    release.set()
     service.shutdown()
 
 

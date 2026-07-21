@@ -29,10 +29,15 @@ def test_same_request_reuses_persisted_task(tmp_path):
         return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
 
     service = IdempotentTaskService(repository, ResourceScheduler(), callback, max_workers=1)
-    first_id, _ = service.submit_async(make_task(), idempotency_key="request-1")
-    second_id, _ = service.submit_async(make_task(), idempotency_key="request-1")
+    first_id, _ = service.submit_async(
+        make_task(), request_id="original-request", idempotency_key="request-1"
+    )
+    second_id, _ = service.submit_async(
+        make_task(), request_id="retry-request", idempotency_key="request-1"
+    )
     time.sleep(0.05)
     assert second_id == first_id
+    assert service.get_request_id(second_id) == "original-request"
     assert calls == [first_id]
     service.shutdown()
 
@@ -49,4 +54,3 @@ def test_same_key_with_different_request_is_rejected(tmp_path):
         service.submit_async(make_task("two"), idempotency_key="request-1")
     assert getattr(exc_info.value, "code", None) == "IDEMPOTENCY_CONFLICT"
     service.shutdown()
-
