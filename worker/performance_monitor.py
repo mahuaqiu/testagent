@@ -11,6 +11,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from worker.perf_backends.base import CollectBackend
+from worker.perf_backends.perfwin_backend import PerfwinBackend
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +86,7 @@ class PerformanceCollector:
         self._collect_thread: threading.Thread | None = None
         self._stop_event: threading.Event = threading.Event()
         self._lock: threading.Lock = threading.Lock()
-        self._monitor: Any | None = None  # perfwin Monitor 实例
+        self._backend: CollectBackend | None = None  # 采集后端实例
 
         # 后端上报地址（从配置获取）
         self._backend_host: str | None = None
@@ -157,9 +160,9 @@ class PerformanceCollector:
             self._gpu_fallback_logged = False
             self._gpu_source_last = None
 
-            # 创建 perfwin Monitor
+            # 创建采集后端
             try:
-                self._create_monitor(request)
+                self._create_backend(request)
             except Exception as e:
                 self._collecting = False
                 self._collect_id = None
@@ -210,8 +213,8 @@ class PerformanceCollector:
                 return False
         return True
 
-    def _create_monitor(self, request: CollectStartRequest) -> None:
-        """创建 perfwin Monitor 实例。
+    def _create_backend(self, request: CollectStartRequest) -> None:
+        """创建采集后端实例。
 
         Args:
             request: 采集请求
@@ -239,16 +242,17 @@ class PerformanceCollector:
             names = [tp.name for tp in request.target_processes]
             process_filter = perfwin.ProcessFilter(names=names)
 
-        # 设置 duration = timeout（超时后自动停止）
-        self._monitor = perfwin.Monitor(
+        # 创建后端
+        backend = PerfwinBackend()
+        backend.start(
             interval=float(request.interval),
-            duration=float(request.timeout),  # 超时后自动停止
+            duration=float(request.timeout),
             process_filter=process_filter,
             top_n_cpu=10,
             top_n_gpu=10,
             enable_aggregation=True,
         )
-        self._monitor.start()
+        self._backend = backend
 
     def stop_collect(self, request: CollectStopRequest | None = None) -> dict[str, Any]:
         """停止采集。
@@ -293,14 +297,14 @@ class PerformanceCollector:
         self._collecting = False
         self._stop_event.set()
 
-        # 先停止 perfwin 采集线程，确保不会再产生新样本。
-        monitor = self._monitor
-        if monitor:
+        # 先停止采集后端，确保不会再产生新样本。
+        backend = self._backend
+        if backend:
             try:
-                monitor.stop()
+                backend.stop()
             except Exception as e:
-                logger.warning(f"停止 perfwin Monitor 异常: {e}")
-            self._monitor = None
+                logger.warning(f"停止采集后端异常: {e}")
+            self._backend = None
 
         # 主线程等待采集循环退出；采集线程不能 join 自己。
         if (
@@ -311,7 +315,7 @@ class PerformanceCollector:
             self._collect_thread.join(timeout=2)
 
         # 停止后再排空缓冲区，避免最后一个采样周期丢失。
-        self._drain_monitor_buffer(monitor)
+        self._drain_backend_buffer(backend)
         self._collect_thread = None
 
         collect_id = self._collect_id
@@ -337,20 +341,20 @@ class PerformanceCollector:
             try:
                 # 先发送历史 spool，再读取本轮增量数据。
                 self._flush_spool()
-                self._drain_monitor_buffer()
+                self._drain_backend_buffer()
             except Exception as error:
                 collect_id = self._collect_id
                 logger.error(f"采集线程异常: {error}", exc_info=True)
                 self._stop_event.set()
-                monitor = self._monitor
-                self._monitor = None
-                if monitor:
+                backend = self._backend
+                self._backend = None
+                if backend:
                     try:
-                        monitor.stop()
+                        backend.stop()
                     except Exception as stop_error:
-                        logger.warning(f"异常清理 perfwin Monitor 失败: {stop_error}")
+                        logger.warning(f"异常清理采集后端失败: {stop_error}")
                     try:
-                        self._drain_monitor_buffer(monitor)
+                        self._drain_backend_buffer(backend)
                     except Exception as drain_error:
                         logger.warning(f"异常清理采样缓冲区失败: {drain_error}")
                 self._notify_terminal(collect_id, "failed", str(error))
@@ -363,14 +367,14 @@ class PerformanceCollector:
                     self._start_time = None
                 break
 
-            # 检查 perfwin 是否仍在运行（timeout 后自动停止）
-            if self._monitor and not self._monitor.is_running():
+            # 检查后端是否仍在运行（timeout 后自动停止）
+            if self._backend and not self._backend.is_running():
                 collect_id = self._collect_id
-                logger.info("perfwin Monitor 已停止（timeout 达到）: %s", collect_id)
+                logger.info("采集后端已停止（timeout 达到）: %s", collect_id)
                 self._stop_event.set()
-                monitor = self._monitor
-                self._monitor = None
-                self._drain_monitor_buffer(monitor)
+                backend = self._backend
+                self._backend = None
+                self._drain_backend_buffer(backend)
                 self._notify_terminal(collect_id, "timed_out", "采集达到超时时间")
                 with self._lock:
                     self._collecting = False
@@ -381,12 +385,12 @@ class PerformanceCollector:
                     self._start_time = None
                 break
 
-    def _drain_monitor_buffer(self, monitor=None) -> None:
-        """读取并上报当前 Monitor 缓冲区中的增量样本。"""
-        monitor = monitor or self._monitor
-        if not monitor or monitor.buffer_len() <= 0:
+    def _drain_backend_buffer(self, backend=None) -> None:
+        """读取并上报当前后端缓冲区中的增量样本。"""
+        backend = backend or self._backend
+        if not backend or backend.buffer_len() <= 0:
             return
-        result = monitor.get_result()
+        result = backend.get_result()
         samples = [self._convert_sample_to_report(sample) for sample in result.samples]
         if samples:
             self._last_sequence = samples[-1]["sequence"]
