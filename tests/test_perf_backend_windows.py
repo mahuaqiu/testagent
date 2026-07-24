@@ -324,3 +324,23 @@ class TestHarmonyCollector:
         result = collector.start_collect(request)
         assert result["status"] == "error"
         assert "device_sn" in result["message"]
+
+    def test_harmony_empty_targets_do_not_create_empty_process_filter(self):
+        """鸿蒙空目标列表只采系统指标，不构造空 ProcessFilter。"""
+        mock_monitor = _make_mock_monitor()
+        mock_perfharmony = MagicMock()
+        mock_perfharmony.Monitor.return_value = mock_monitor
+        request = CollectStartRequest(
+            collect_id="harmony-system-only",
+            interval=2,
+            timeout=60,
+            target_processes=[],
+            device_type="harmony_mobile",
+            device_sn="HDC-UDID-001",
+        )
+        collector = PerformanceCollector("env-machine-id")
+        with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+            result = collector.start_collect(request)
+        assert result["status"] == "started"
+        assert mock_perfharmony.Monitor.call_args.kwargs["process_filter"] is None
+        collector.stop_collect()

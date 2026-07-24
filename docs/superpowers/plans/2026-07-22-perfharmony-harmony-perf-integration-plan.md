@@ -21,12 +21,24 @@
 - 每个 UDID 的 HDC shell 调用串行；P0 每轮正常路径不超过 4 次、上限 6 次，禁止对全量 PID 逐个执行 CPU/内存命令。
 - CPU 统一归一化到整机 `[0,100]`，使进程、聚合与 TopN 满足当前 ZQ schema；TopN 在批量 CPU 快照经真机冻结前不是 P0 交付。
 
-## 本轮执行状态（2026-07-24）
+## 本轮执行状态（2026-07-25）
 
-- **Task 4：部分完成。** 已有 P0 Monitor 循环、固定容量 RingBuffer、HDC shell 超时/取消回收、按 UDID 全局串行锁、PyO3 Sample/Monitor API，以及 Rust FakeHdc fixture 测试；真实 PC/Mobile 命令格式、指标语义和批量进程 CPU 仍受 Task 0 门禁约束。
-- **Task 8：部分完成。** Worker 已接入 `PerfharmonyBackend`、显式 `device_type/device_sn`、DeviceRegistry 在线/健康校验、dict/PyO3 样本转换、Windows 回退兼容和可选 wheel/Nuitka smoke test；真实 Worker-HDC start/stop/status 链路仍需真机执行。
-- **ZQ 调用：已完成骨架接入。** ZQ 性能 API 已在创建采集记录前校验设备类型和鸿蒙 `device_sn`，并向 Worker 的进程列表、start、stop、status 请求透传身份；状态页仍沿用平台数据库/Worker 上报状态，不直接发起 HDC 采集。
-- **未完成项不标记为 P0 真机交付：** `top_n_cpu`/`top_n_gpu`、真实 `hidumper`/`top`/`ps` 字段、RSS/PSS/VSS 语义、GPU/温度/功耗/网络权限和单位校准，以及 PC/Mobile 真机 E2E。
+- **离线可完成项已继续完成。** perfharmony 已补齐 optional collector trait 的实际调用、marker 边界测试、`probe()` 与 `list_sensors()`、使用示例、PC/Mobile fixture 归档目录和命令契约文档；Worker 已补齐通用 `platforms.harmony.hdc_path` 回退、空目标进程测试、健康状态测试和 Windows 构建虚拟环境调用；ZQ 已补齐 Harmony mapping、后端类型分支、内存 raw 回填、同类型对比限制和前端 Harmony 指标分组/裁剪。
+- **Task 4：离线实现完成，真机门禁未完成。** P0 Monitor、固定容量 RingBuffer、HDC shell 超时/取消回收、按 UDID 全局串行锁、PyO3 Sample/Monitor API、Collector trait 实际调用和 FakeHdc 测试均完成；真实 PC/Mobile 命令格式、指标语义、批量进程 CPU 仍待 Task 0 真机证据。
+- **Task 8：离线实现完成，真机 E2E 未完成。** Worker 已接入 `PerfharmonyBackend`、显式 `device_type/device_sn`、DeviceRegistry 在线/健康校验、dict/PyO3 样本转换、Windows 回退兼容、通用 HDC 配置回退和 wheel/Nuitka smoke 配置；真实 Worker-HDC start/stop/status、断线和 shell 回收仍需真机执行。
+- **ZQ 调用：离线实现完成，真机链路未完成。** ZQ 性能 API 已在创建采集记录前校验设备类型和鸿蒙 `device_sn`，并向 Worker 的进程列表、start、stop、status 请求透传身份；状态页仍沿用平台数据库/Worker 上报状态，不直接发起 HDC 采集。
+- **真机依赖清单：** PC/Mobile 原始 `hidumper`/`top`/`ps` 输出、CPU user/system/idle 语义、RSS/PSS/VSS 映射、批量 CPU 快照和 TopN、GPU/温度/功耗/网络节点权限与单位、PC/Mobile fixture、Worker-HDC E2E、断线三轮失败、duration/stop 期间 shell 行为、前端真实数据视觉验收。
+
+### 本轮提交与验证
+
+- `perfharmony`：`05a9c7d`（前一轮 optional collector/probe）及本轮未提交修改。
+- `zq-platform`：`8f62e0c`（前一轮 Harmony mapping/UI）及本轮未提交修改。
+- `autotest`：此前 Worker 集成提交 `9a9d505`；本轮继续修改计划、契约、构建脚本和测试。
+- Rust：`cargo test` 28 passed；`cargo check` 通过；Rustfmt 已执行。
+- Worker：项目虚拟环境 `venv` 下相关测试 24 passed。
+- ZQ 后端：项目虚拟环境 `.venv` 下全量测试 24 passed。
+- ZQ 前端：`pnpm typecheck` 仍被仓库既有全局类型错误阻断，未发现错误指向本轮 performance-monitor 文件；需后续治理既有错误后再做完整类型门禁。
+- wheel：`D:\code\perfharmony\target\wheels\perfharmony-0.1.0-cp312-cp312-win_amd64.whl`，真机能力不由 wheel 构建证明。
 
 ### 本轮补齐的边界契约（2026-07-24）
 
@@ -114,21 +126,21 @@ D:\code\zq-platform\
 - Worker 以 `DeviceRegistry.get(device_type, device_sn)` 验证在线状态；不匹配、离线或不支持时返回 4xx，绝不回退为 perfwin。
 - CPU 全部按整机容量归一化为 `[0,100]`，记录逻辑 CPU 数/来源。
 
-- [ ] **Step 1: 获取 PC 和 Mobile 的 P0 真机输出并归档**
+- [ ] **Step 1: 获取 PC 和 Mobile 的 P0 真机输出并归档（真机依赖）**
 
 每个设备至少归档：`hdc list targets -v`、`param get const.product.type`、`hidumper -h`、`hidumper --cpuusage`、`hidumper --mem`、`ps -ef`、`cat /proc/stat`、`cat /proc/meminfo`，以及目标应用运行前后两次 CPU 快照。
 
-- [ ] **Step 2: 在 command-contract.md 固化命令、样例、解析器、字段、权限和 CPU 归一化规则**
+- [x] **Step 2: 在 command-contract.md 固化命令、样例、解析器、字段、权限和 CPU 归一化规则（离线文档完成；真实样例和语义仍为真机依赖）**
 
-- [ ] **Step 3: 决定批量全量 CPU 快照命令**
+- [ ] **Step 3: 决定批量全量 CPU 快照命令（真机依赖）**
 
 必须能在有限 HDC 往返内获得全量进程 CPU；不能做到则首期不提供 TopN，只采目标进程。
 
-- [ ] **Step 4: 写跨仓请求/响应契约测试用例清单**
+- [x] **Step 4: 写跨仓请求/响应契约测试用例清单（离线完成；见 `docs/superpowers/specs/harmony-perf-command-contract.md`）**
 
 覆盖缺 `device_sn`、UDID 不存在、UDID 离线、`device_type` 不支持、Windows 兼容请求，以及 device_id 与 device_sn 不相等的正常鸿蒙请求。
 
-- [ ] **Gate: PC/Mobile P0 原始证据、身份契约和 CPU 语义均经评审确认后，才声称 Task 4/8 的鸿蒙 P0 可用。Task 1/2 的骨架、通用 HDC 工作和 Worker/ZQ 契约可先行。**
+- [ ] **Gate: PC/Mobile P0 原始证据、身份契约和 CPU 语义均经评审确认后，才声称 Task 4/8 的鸿蒙 P0 可用（真机依赖；身份契约已完成，P0 原始证据未完成）**
 
 ---
 
@@ -152,7 +164,7 @@ D:\code\zq-platform\
 **Interfaces:**
 - Produces: Python `import perfharmony`；`perfharmony.__version__ == "0.1.0"`；Rust 导出空模块可加载；预置与 perfwin 共享的 API/序列化契约测试骨架
 
-- [ ] **Step 1: 创建仓库目录与 git**
+- [x] **Step 1: 创建仓库目录与 git**
 
 ```powershell
 New-Item -ItemType Directory -Force -Path D:\code\perfharmony | Out-Null
@@ -160,9 +172,9 @@ Set-Location D:\code\perfharmony
 git init
 ```
 
-- [ ] **Step 1.1: 将 Task 0 已评审的命令样例复制到新仓 fixtures，并保留来源说明与设备版本指纹**
+- [ ] **Step 1.1: 将 Task 0 已评审的命令样例复制到新仓 fixtures，并保留来源说明与设备版本指纹（真机依赖；已创建归档目录）**
 
-- [ ] **Step 2: 写 `Cargo.toml`**
+- [x] **Step 2: 写 `Cargo.toml`**
 
 ```toml
 [package]
@@ -183,7 +195,7 @@ regex = "1"
 log = "0.4"
 ```
 
-- [ ] **Step 3: 写 `pyproject.toml`**
+- [x] **Step 3: 写 `pyproject.toml`**
 
 ```toml
 [build-system]
@@ -203,7 +215,7 @@ module-name = "perfharmony._native"
 features = ["pyo3/extension-module"]
 ```
 
-- [ ] **Step 4: 最小 `data.rs` 与绑定清单（字段及 Python 行为对齐 perfwin）**
+- [x] **Step 4: 最小 `data.rs` 与绑定清单（字段及 Python 行为对齐 perfwin）**
 
 从 `D:\code\perfwin\src\data.rs` 复制 `SensorValue`、`ProcessInfo`、`AggregatedProcessInfo`、`GpuAdapterMetrics`、`SystemMetrics`、`Sample`、`ProcessFilter` 结构定义到 `src/data.rs`（保持字段名一致）。`MonitorConfig` 增加：
 
@@ -230,7 +242,7 @@ pub struct MonitorConfig {
 
 同时建立 `tests/test_perfwin_contract.py`，定义后续两库共用的断言：`ProcessFilter` 参数互斥、Monitor 上下文管理器、`get_result().samples`、`to_dicts()`、Sample dict 属性、ISO 时间戳、增量 drain 和 `buffer_len/is_running`。Task 1 可以只标记为 xfail/skip，Task 4 前必须转为通过。
 
-- [ ] **Step 5: 最小 `lib.rs` 暴露版本**
+- [x] **Step 5: 最小 `lib.rs` 暴露版本**
 
 ```rust
 use pyo3::prelude::*;
@@ -245,7 +257,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 ```
 
-- [ ] **Step 6: Python 包入口**
+- [x] **Step 6: Python 包入口**
 
 ```python
 # python/perfharmony/__init__.py
@@ -254,7 +266,7 @@ from perfharmony._native import __version__
 __all__ = ["__version__"]
 ```
 
-- [ ] **Step 7: 使用仓库虚拟环境构建并验证 import**
+- [x] **Step 7: 使用仓库虚拟环境构建并验证 import**
 
 ```powershell
 Set-Location D:\code\perfharmony
@@ -269,7 +281,7 @@ python -c "import perfharmony; print(perfharmony.__version__)"
 
 Expected: 打印 `0.1.0`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add Cargo.toml pyproject.toml src python tests README.md CLAUDE.md .gitignore
@@ -296,7 +308,7 @@ git commit -m "chore: init perfharmony rust/pyo3 package skeleton"
   - `fn parse_list_targets(output: &str) -> Vec<TargetInfo { udid, status, connection_type }>`
   - Python: `list_targets(hdc_path: Optional[str]=None) -> list[dict]`
 
-- [ ] **Step 1: 写 fixture `list_targets_v.txt`（合成样例，真机后替换）**
+- [x] **Step 1: 写 fixture `list_targets_v.txt`（合成样例，真机后替换）**
 
 ```text
 127.0.0.1:5555	TCP	Ready	harmony-pc-demo	hdc
@@ -304,7 +316,7 @@ ABCDEF123456	USB	Ready	phone-demo	hdc
 COM1	UART	Ready	unknown	hdc
 ```
 
-- [ ] **Step 2: 写真实格式与异常格式的解析测试**
+- [x] **Step 2: 写真实格式与异常格式的解析测试（真实表头变体仍待真机）**
 
 ```python
 # tests/test_list_targets_parse.py
@@ -331,28 +343,28 @@ fn parse_list_targets_skips_uart_optional() {
 }
 ```
 
-- [ ] **Step 3: 实现路径搜索与错误分类**
+- [x] **Step 3: 实现路径搜索与错误分类**
 
 `传入 path` > `PERFHARMONY_HDC` > `HDC_PATH` > Worker 包内 tools 路径（仅 Worker 注入时）> SDK 根目录环境变量 > PATH。开发机绝对路径不得作为库发布时的固定候选；可仅在本地开发测试中通过显式参数使用。
 
 `shell` 必须区分：HDC 不存在、target 离线、超时、远端命令失败、输出解析失败；超时后终止并回收子进程。
 
-- [ ] **Step 4: 实现 client**
+- [x] **Step 4: 实现 client**
 
 调用：`hdc -t <udid> shell <cmd>`（Windows 下 cmd 整体作一参，对齐 `harmony_hdc.py` 双引号转义策略）。
 
 超时：默认 15s；list targets 默认 10s。
 
-- [ ] **Step 5: 导出 Python `list_targets`**
+- [x] **Step 5: 导出 Python `list_targets`**
 
 ```python
 def list_targets(hdc_path: str | None = None) -> list[dict]:
     ...
 ```
 
-- [ ] **Step 6: 无设备时 list_targets 返回 []；HDC 不存在和命令失败返回可辨识异常**
+- [x] **Step 6: 无设备时 list_targets 返回 []；HDC 不存在和命令失败返回可辨识异常**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add src/hdc src/lib.rs tests
@@ -383,13 +395,13 @@ git commit -m "feat: add HdcClient and list targets"
 - 内存系统：`MemTotal/MemFree/MemAvailable` 同 hidebug 注释。
 - 进程内存：`hidumper --mem <pid>` 解析（参考 SmartPerf `GetPssRamInfo` 字段名 pss 等；fixture 用合成文本）。
 
-- [ ] **Step 1: 接入 Task 0 的 PC/Mobile 真实 P0 fixtures，并补合成边界 fixtures**
+- [ ] **Step 1: 接入 Task 0 的 PC/Mobile 真实 P0 fixtures，并补合成边界 fixtures（真机依赖；合成 fixture 已完成）**
 
 `proc_stat.txt` 两段（t0/t1）写在 `proc_stat_t0.txt` / `proc_stat_t1.txt`。
 
 `proc_net_dev.txt` 含 wlan0/eth0/lo。
 
-- [ ] **Step 2: 为每个 parse 写测试（先失败）**
+- [x] **Step 2: 为每个 parse 写测试（合成 fixture 已完成，真实 fixture 待真机）**
 
 ```rust
 #[test]
@@ -400,9 +412,9 @@ fn netdev_sums_wlan_eth_skips_lo() {
 }
 ```
 
-- [ ] **Step 3: 实现解析直至全绿，并记录语义/单位与 CPU 归一化来源**
+- [x] **Step 3: 实现解析直至全绿，并记录语义/单位与 CPU 归一化来源（真实字段语义仍待真机）**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add src/parse tests/fixtures tests
@@ -446,7 +458,7 @@ def list_processes(udid: str, hdc_path: str | None = None) -> list[tuple[int,str
   - `processes` / `aggregated`（有 filter 时）；`top_n_cpu` 仅在 Task 0 已冻结批量全量 CPU 快照时启用
   - `sequence` 从 1 递增，`elapsed_ms`
 
-- [ ] **Step 1: Collector trait**
+- [x] **Step 1: Collector trait**
 
 ```rust
 trait Collector: Send {
@@ -457,7 +469,7 @@ trait Collector: Send {
 
 `CollectContext` 持有：`&HdcClient`、`udid`、可变 `Sample` 草稿、上一拍 CPU/Net 快照、本轮命令预算、`collection_duration_ms` 与 collector 状态。每个 UDID 共用串行命令锁。
 
-- [ ] **Step 2: 实现 SystemCpuCollector / SystemMemCollector / ProcessCollector / TopN**
+- [x] **Step 2: 实现 SystemCpuCollector / SystemMemCollector / ProcessCollector / TopN（P0 骨架和失败降级完成；TopN 真机依赖）**
 
 命令优先级：
 
@@ -468,19 +480,19 @@ trait Collector: Send {
 5. 单轮 P0 正常路径不超过 4 次 HDC shell、硬上限 6 次；任何 collector 不得突破预算。
 6. 采集失败不写 0：系统字段 null/缺键；进程 CPU/RSS 不完整时本轮不写该进程，并记录状态。
 
-- [ ] **Step 3: Monitor 循环、固定容量 RingBuffer 与故障状态机**
+- [x] **Step 3: Monitor 循环、固定容量 RingBuffer 与故障状态机**
 
 要求：`interval>=1.0`、默认 2.0；超时子进程必须回收；一轮超时不补跑；连续 3 轮无任何 P0 数据则停止并暴露设备不可用错误；`stop()` 可在 shell 等待期间有界退出。
 
-- [ ] **Step 4: 完整 PyO3 绑定与稳定 `to_dicts()` API**
+- [x] **Step 4: 完整 PyO3 绑定与稳定 `to_dicts()` API**
 
 Worker 侧需要能读：`sample.sequence`、`elapsed_ms`、`timestamp`、`system`（dict 或属性）、`hwinfo_raw`、`processes`、`aggregated`、`top_n_cpu`、`top_n_gpu`。
 
-- [ ] **Step 5: 共享兼容契约与 FakeHdc 可靠性测试**
+- [x] **Step 5: 共享兼容契约与 FakeHdc 可靠性测试（Rust FakeHdc 已完成；PyO3 真机注入仍未做）**
 
 注入返回 fixture 文本的 HdcClient trait 对象；覆盖部分 collector 失败、连续断线、shell 超时、stop during shell、duration 自动停止、RingBuffer 满、单轮命令预算和 CPU `[0,100]`。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/collector src/monitor.rs src/lib.rs python tests examples
@@ -508,13 +520,13 @@ git commit -m "feat: monitor loop with bounded P0 collectors"
 - Thermal → 列 `/sys/class/thermal`，匹配 SmartPerf `collectNodes`，temp/1000 → `Harmony CPU Temp` 等。
 - GPU → 尝试 `hidumper`/已知 devfreq load；失败 `system.gpu_percent=None`, `gpu_source="unavailable"`。
 
-- [ ] **Step 1: 网络 collector + 测试（两拍差分）**
+- [x] **Step 1: 网络 collector + 测试（两拍差分骨架完成；真实节点/权限为真机依赖）**
 
-- [ ] **Step 2: Power/Thermal/GPU + 测试（失败路径也要测）**
+- [x] **Step 2: Power/Thermal/GPU + 测试（失败路径已覆盖；单位/节点为真机依赖）**
 
-- [ ] **Step 3: `probe(udid)` API 返回各能力 Available/Degraded/Unavailable（必做）**
+- [x] **Step 3: `probe(udid)` API 返回各能力 Available/Degraded/Unavailable（离线 API 完成；真实能力状态为真机依赖）**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add src/collector src/lib.rs tests/fixtures tests
@@ -531,15 +543,15 @@ git commit -m "feat: add probed optional collectors"
 - Modify: `README.md` 用法
 - Create: `build_wheel` 说明或脚本
 
-- [ ] **Step 1: command-contract.md 列出每条 shell、fixture 文件名、字段**
+- [x] **Step 1: command-contract.md 列出每条 shell、fixture 文件名、字段（真实样例待真机）**
 
 含真机验收命令清单（从设计 § 拷贝）。
 
-- [ ] **Step 2: 在已激活的仓库 `.venv` 中执行 `python -m maturin build --release`**
+- [x] **Step 2: 在仓库 `.venv` 中执行 `python -m maturin build --release` 并完成 wheel/import/测试验证**
 
 在全新、匹配 Worker CPython ABI 的虚拟环境中安装 wheel，运行 import、list_targets mock、Monitor 共享契约测试；记录 wheel 文件名和 SHA256。
 
-- [ ] **Step 3: Commit tag `v0.1.0`（可选）**
+- [ ] **Step 3: Commit tag `v0.1.0`（可选，未执行）**
 
 ---
 
@@ -566,9 +578,9 @@ class CollectBackend(Protocol):
 def list_processes_backend(...) -> list[tuple[int, str]]: ...
 ```
 
-- [ ] **Step 1: 把现有 `import perfwin` 创建 Monitor 逻辑移到 `PerfwinBackend`，`PerformanceCollector` 只持有 `self._backend`**
+- [x] **Step 1: 把现有 `import perfwin` 创建 Monitor 逻辑移到 `PerfwinBackend`，`PerformanceCollector` 只持有 `self._backend`**
 
-- [ ] **Step 2: Windows 回归：现有 performance 相关测试全绿**
+- [x] **Step 2: Windows 回归：现有 performance 相关测试全绿**
 
 ```powershell
 Set-Location D:\code\autotest
@@ -576,7 +588,7 @@ Set-Location D:\code\autotest
 pytest tests -k "performance or perf" -q
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```powershell
 git add worker/perf_backends worker/performance_monitor.py tests/test_perf_backend_windows.py
@@ -613,7 +625,7 @@ else:
 
 仅为兼容当前已上线的 Windows 调用，可在 API 边界将缺失 `device_type` 显式补为 `windows` 并记录弃用日志；Backend 选择函数本身不得接受 `None`。
 
-- [ ] **Step 1: 实现 PerfharmonyBackend 包装**
+- [x] **Step 1: 实现 PerfharmonyBackend 包装（真机 start 仍待验证）**
 
 ```python
 import perfharmony
@@ -624,19 +636,19 @@ ProcessFilter 映射：names/pids 与现逻辑一致，禁止混合。
 
 `target_processes=[]` 表示仅采系统指标，不创建空 `ProcessFilter`。若目标进程详细内存需要逐 PID 命令，Backend 必须依据单轮命令预算限制目标数量，并在 start 阶段返回 400/422，不能启动后静默漏采。
 
-- [ ] **Step 2: `_convert_sample_to_report` 共用**；Windows 的 GPU HWiNFO 回退仅当 backend 为 perfwin 或 sample.system.gpu_source 需要时执行。
+- [x] **Step 2: `_convert_sample_to_report` 共用**；Windows 的 GPU HWiNFO 回退仅当 backend 为 perfwin 或 sample.system.gpu_source 需要时执行。
 
-- [ ] **Step 3: `get_processes`：鸿蒙走 `perfharmony.list_processes(udid)`**
+- [x] **Step 3: `get_processes`：鸿蒙走 `perfharmony.list_processes(udid)`（真机命令输出待验证）**
 
-- [ ] **Step 4: 单测 mock**
+- [x] **Step 4: 单测 mock**
 
 覆盖：`device_id != device_sn` 正常工作、缺少 device_sn、类型/UDID 不匹配、设备离线、不支持类型、Windows 老请求兼容、鸿蒙请求绝不 import perfwin。
 
-- [ ] **Step 5: Worker Windows 发布物集成**
+- [x] **Step 5: Worker Windows 发布物集成（构建脚本和 import smoke 配置已完成，实际 Nuitka 发布构建未执行）**
 
 修改 `scripts/build_windows.ps1`：增加 `PerfharmonyWheel` 参数、安装对应 CPython ABI wheel、Nuitka 显式包含 `perfharmony`，最终打包目录执行 `import perfharmony` smoke test。`perfharmony` 延迟导入，缺失时不得影响 Windows perfwin 路径。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit（前一轮已提交；本轮另有修改待提交）**
 
 ```powershell
 git add worker/perf_backends worker/performance_monitor.py worker/server.py worker/config.py config/worker.yaml scripts/build_windows.ps1 tests
@@ -674,11 +686,11 @@ HARMONY_METRIC_MAPPINGS = [
 ]
 ```
 
-- [ ] **Step 1: 改 api 分支、身份参数和前置校验**
+- [x] **Step 1: 改 api 分支、身份参数和前置校验**
 
-- [ ] **Step 2: 加 mapping 脚本**
+- [x] **Step 2: 加 mapping 脚本**
 
-- [ ] **Step 3: Commit（zq-platform 仓）**
+- [x] **Step 3: Commit（zq-platform 仓）**
 
 ```powershell
 git add backend-fastapi/core/performance_monitor/api.py backend-fastapi/scripts/init_harmony_metric_mapping.py backend-fastapi/tests
@@ -696,17 +708,17 @@ git commit -m "feat(performance): support harmony devices via worker"
 - Modify: `components/MetricSearchPopup.vue` — 最近搜索和分组按真实设备类型隔离
 - Modify: `compare.vue` — 默认仅允许相同 `device_type` 对比，跨 Windows/鸿蒙需显式确认并提示指标语义差异
 
-- [ ] **Step 1: 设备列表包含在线 harmony_pc / harmony_mobile**
+- [x] **Step 1: 设备列表包含在线 harmony_pc / harmony_mobile（沿用 Worker 上报设备列表）**
 
-- [ ] **Step 2: 以 `deviceKind=windows|linux|harmony` 统一 UI 分支**
+- [x] **Step 2: 以 `deviceKind=windows|linux|harmony` 统一 UI 分支**
 
 GPU/句柄按样本能力与数据可用性隐藏；鸿蒙内存明确显示 RSS/PSS 语义；Harmony raw 指标独立分组，不再把所有非 Linux 指标当作 Windows/HWiNFO。
 
-- [ ] **Step 3: 前端测试与响应式视觉检查**
+- [ ] **Step 3: 前端测试与响应式视觉检查（真实 Harmony 数据/视觉验收依赖真机；离线类型检查被既有仓库错误阻断）**
 
 至少覆盖 Windows、Linux、harmony_pc、harmony_mobile 四种设备，验证进程选择、无 GPU/句柄、指标搜索隔离和跨类型对比提示。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit（前一轮已提交；本轮另有修改待提交）**
 
 ```powershell
 git add web/apps/web-ele/src/views/performance-monitor
@@ -722,7 +734,7 @@ git commit -m "feat(web): support harmony performance views"
 - Update: `docs/command-contract.md` 解析备注
 - Fix: 解析正则/单位（尤其 current_now/voltage_now）
 
-- [ ] **Step 1: 在 PC/Mobile 真机补齐可选指标输出并归档**
+- [ ] **Step 1: 在 PC/Mobile 真机补齐可选指标输出并归档（真机依赖）**
 
 ```bat
 hdc -t <udid> shell "hidumper -h"
@@ -742,15 +754,15 @@ hdc -t <udid> shell "ls /sys/class/thermal"
 hdc -t <udid> shell "param get const.product.type"
 ```
 
-- [ ] **Step 2: 替换 fixtures，跑 `pytest` / `cargo test` 全绿**
+- [ ] **Step 2: 替换 fixtures，跑 `pytest` / `cargo test` 全绿（真机 fixture 依赖；离线 fixture 已全绿）**
 
-- [ ] **Step 3: PC/Mobile 各跑 E2E**
+- [ ] **Step 3: PC/Mobile 各跑 E2E（真机依赖）**
 
 平台选鸿蒙设备 → 选进程 → 采集 2 分钟 → 曲线有 CPU/内存 → 停止终态 stopped；另测设备断开连续 3 轮后 failed、duration 到期 timed_out、停止期间 shell 有界退出、device_id 与 device_sn 不同。
 
-- [ ] **Step 4: Windows 路径回归一次**
+- [x] **Step 4: Windows 路径回归一次（离线相关 Worker 测试已通过，完整发布物回归待实际构建）**
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit（真机校准后执行）**
 
 ```powershell
 git add tests/fixtures docs src

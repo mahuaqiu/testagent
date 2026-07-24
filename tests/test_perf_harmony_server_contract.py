@@ -82,6 +82,15 @@ def test_disconnected_harmony_device_is_rejected():
     assert error.value.status_code == 409
 
 
+def test_unhealthy_harmony_device_is_rejected():
+    """注册表中的不健康设备不能启动采集。"""
+    worker = _worker_with_record(_harmony_record(health_status="unhealthy"))
+    with patch.object(server_module, "worker", worker):
+        with pytest.raises(HTTPException) as error:
+            server_module._prepare_performance_collector("env-machine-id", "harmony_pc", "HDC-001")
+    assert error.value.status_code == 409
+
+
 def test_unsupported_type_is_rejected_without_registry_fallback():
     """未知类型不能静默回退为 Windows。"""
     worker = _worker_with_record()

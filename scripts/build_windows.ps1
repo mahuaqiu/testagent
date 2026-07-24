@@ -42,12 +42,6 @@ if ($PythonPath -ne "") {
     }
 }
 
-$nuitkaInstalled = & $PythonExe -c "import nuitka; print('ok')" 2>$null
-if ($nuitkaInstalled -ne "ok") {
-    Write-Host "Installing Nuitka..."
-    pip install nuitka ordered-set zstandard
-}
-
 # Check Visual Studio
 $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vsWhere)) {
@@ -64,16 +58,24 @@ if ($Clean -or -not (Test-Path $VenvPath)) {
 }
 
 & "$VenvPath\Scripts\Activate.ps1"
+$VenvPython = "$VenvPath\Scripts\python.exe"
+$VenvPip = "$VenvPath\Scripts\pip.exe"
+
+$nuitkaInstalled = & $VenvPython -c "import nuitka; print('ok')" 2>$null
+if ($nuitkaInstalled -ne "ok") {
+    Write-Host "Installing Nuitka in the build virtual environment..."
+    & $VenvPip install nuitka ordered-set zstandard
+}
 
 Write-Host "[2/6] Installing dependencies..."
-pip install --upgrade pip
-pip install nuitka ordered-set zstandard
-pip install -e ".[all]"
+& $VenvPip install --upgrade pip
+& $VenvPip install nuitka ordered-set zstandard
+& $VenvPip install -e ".[all]"
 
 # Install perfwin wheel
 if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
     Write-Host "  Installing perfwin wheel: $PerfwinWheel"
-    pip install $PerfwinWheel
+    & $VenvPip install $PerfwinWheel
 } else {
     Write-Warning "perfwin wheel not found at: $PerfwinWheel"
     Write-Warning "Performance monitoring may not work!"
@@ -83,7 +85,7 @@ if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
 $PerfharmonyInstalled = $false
 if ($PerfharmonyWheel -ne "" -and (Test-Path $PerfharmonyWheel)) {
     Write-Host "  Installing perfharmony wheel: $PerfharmonyWheel"
-    pip install $PerfharmonyWheel
+    & $VenvPip install $PerfharmonyWheel
     if ($LASTEXITCODE -eq 0) {
         $PerfharmonyInstalled = $true
     } else {
@@ -98,7 +100,7 @@ if ($PerfharmonyWheel -ne "" -and (Test-Path $PerfharmonyWheel)) {
 # Install win-control wheel
 if ($WinControlWheel -ne "" -and (Test-Path $WinControlWheel)) {
     Write-Host "  Installing win-control wheel: $WinControlWheel"
-    pip install $WinControlWheel
+    & $VenvPip install $WinControlWheel
 } else {
     Write-Warning "win-control wheel not found at: $WinControlWheel"
     Write-Warning "System control actions (set_resolution, set_volume, audio_device) may not work!"
@@ -222,7 +224,7 @@ if ($PerfharmonyInstalled) {
     $nuitkaArgs += "--include-package-data=perfharmony"
 }
 
-& python -m nuitka $nuitkaArgs
+& $VenvPython -m nuitka $nuitkaArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Nuitka build failed!"

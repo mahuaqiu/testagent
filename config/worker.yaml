@@ -101,6 +101,10 @@ platforms:
     session_timeout: 300
     screenshot_dir: data/screenshots
 
+  harmony:
+    enabled: null                   # 鸿蒙性能采集的通用 HDC 回退配置
+    hdc_path: tools/hdc/hdc.exe
+
 # Image Matching Settings
 image_matching:
   default_threshold: 0.8            # Default matching threshold
