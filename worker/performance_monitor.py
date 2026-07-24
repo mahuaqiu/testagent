@@ -6,12 +6,14 @@
 
 import logging
 import threading
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from worker.perf_backends.base import CollectBackend
+from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 
 logger = logging.getLogger(__name__)
@@ -38,15 +40,22 @@ class CollectStartRequest(BaseModel):
     """开始采集请求。"""
 
     collect_id: str = Field(..., description="采集记录ID（由后端生成）")
-    interval: int = Field(5, description="采集频率（秒）", ge=1, le=60)
+    interval: int = Field(5, description="采集频率（秒）", ge=1, le=1800)
     timeout: int = Field(43200, description="采集超时时间（秒），默认12小时", ge=60, le=86400)
-    target_processes: list[TargetProcess] = Field(..., description="目标进程列表")
+    target_processes: list[TargetProcess] = Field(
+        default_factory=list,
+        description="目标进程列表；空列表表示只采集系统指标",
+    )
+    device_type: str | None = Field(None, description="设备类型，鸿蒙必须显式传入")
+    device_sn: str | None = Field(None, description="设备物理标识，鸿蒙为 HDC UDID")
 
 
 class CollectStopRequest(BaseModel):
     """停止采集请求。"""
 
     collect_id: str | None = Field(None, description="采集记录ID，不传则停止当前所有采集")
+    device_type: str | None = Field(None, description="设备类型")
+    device_sn: str | None = Field(None, description="设备物理标识")
 
 
 class CollectStatus(BaseModel):
@@ -76,6 +85,10 @@ class PerformanceCollector:
             device_id: 设备ID
         """
         self.device_id = device_id
+        # device_id 是平台数据库关联键；鸿蒙采集必须另外保存 HDC UDID。
+        self._device_type: str | None = None
+        self._device_sn: str | None = None
+        self._hdc_path: str | None = None
         self._collect_id: str | None = None
         self._interval: int = 5
         self._timeout: int = 43200  # 默认 12 小时
@@ -96,6 +109,32 @@ class PerformanceCollector:
         # GPU 回退日志节流，避免每个采样周期刷屏
         self._gpu_fallback_logged: bool = False
         self._gpu_source_last: str | None = None
+
+    def configure_device(
+        self,
+        device_type: str,
+        device_sn: str | None = None,
+        hdc_path: str | None = None,
+    ) -> None:
+        """配置本次采集使用的设备身份和 HDC 路径。
+
+        ``device_id`` 只用于平台任务和上报关联，不能作为鸿蒙 HDC UDID
+        使用。调用方应在进入此方法前完成设备注册表校验。
+        """
+        normalized_type = (device_type or "").strip().lower()
+        if normalized_type not in {"windows", "harmony_pc", "harmony_mobile"}:
+            raise ValueError(f"不支持的性能采集设备类型: {device_type}")
+        if normalized_type != "windows" and not (device_sn and device_sn.strip()):
+            raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+        with self._lock:
+            if self._collecting and (
+                self._device_type != normalized_type
+                or self._device_sn != (device_sn.strip() if device_sn else None)
+            ):
+                raise ValueError("设备已有采集任务，不能切换性能采集身份")
+            self._device_type = normalized_type
+            self._device_sn = device_sn.strip() if device_sn else None
+            self._hdc_path = hdc_path
 
     def set_backend_host(self, host: str) -> None:
         """设置后端上报地址。
@@ -134,6 +173,22 @@ class PerformanceCollector:
             响应结果
         """
         self._flush_spool()
+
+        # 直接调用 Collector 的旧 Windows 客户端可能没有走 API 边界，继续兼容；
+        # Server 会在进入这里前显式配置设备类型和设备注册表状态。
+        normalized_type = request.device_type or self._device_type or "windows"
+        if self._device_type is None:
+            try:
+                self.configure_device(normalized_type, request.device_sn, self._hdc_path)
+            except ValueError as error:
+                return {"status": "error", "message": str(error)}
+        elif request.device_type and request.device_type != self._device_type:
+            return {"status": "error", "message": "请求设备类型与当前采集器身份不一致"}
+
+        if request.device_type != normalized_type or request.device_sn != self._device_sn:
+            request = request.model_copy(
+                update={"device_type": normalized_type, "device_sn": self._device_sn}
+            )
 
         with self._lock:
             if self._stopping:
@@ -201,6 +256,10 @@ class PerformanceCollector:
             return False
         if self._interval != request.interval:
             return False
+        if request.device_type != self._device_type:
+            return False
+        if request.device_sn != self._device_sn:
+            return False
         # timeout 不同可以接受（不影响采集逻辑）
         if len(self._target_processes) != len(request.target_processes):
             return False
@@ -222,10 +281,24 @@ class PerformanceCollector:
         Raises:
             ValueError: 不支持混合筛选模式
         """
-        import perfwin
+        device_type = request.device_type
+        if device_type is None:
+            raise ValueError("性能采集内部请求缺少 device_type")
+
+        if device_type in ("harmony_pc", "harmony_mobile") and not request.device_sn:
+            raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+
+        if device_type == "windows":
+            backend_module = __import__("perfwin")
+            filter_type = backend_module.ProcessFilter
+        elif device_type in ("harmony_pc", "harmony_mobile"):
+            backend_module = __import__("perfharmony")
+            filter_type = backend_module.ProcessFilter
+        else:
+            raise ValueError(f"不支持的性能采集设备类型: {device_type}")
 
         # 根据 target_processes 构建 ProcessFilter（不支持混合模式）
-        all_have_pids = all(tp.pids for tp in request.target_processes)
+        all_have_pids = bool(request.target_processes) and all(tp.pids for tp in request.target_processes)
         all_no_pids = all(not tp.pids for tp in request.target_processes)
 
         if not all_have_pids and not all_no_pids:
@@ -236,20 +309,24 @@ class PerformanceCollector:
             pids = []
             for tp in request.target_processes:
                 pids.extend(tp.pids)
-            process_filter = perfwin.ProcessFilter(pids=pids)
+            process_filter = filter_type(pids=pids)
         else:
             # Names 模式：收集所有进程名
             names = [tp.name for tp in request.target_processes]
-            process_filter = perfwin.ProcessFilter(names=names)
+            process_filter = filter_type(names=names) if names else None
 
-        # 创建后端
-        backend = PerfwinBackend()
+        # 按设备类型选择后端，鸿蒙永远使用 device_sn，不把 URL 中的 device_id 当 UDID。
+        if device_type == "windows":
+            backend = PerfwinBackend()
+        else:
+            backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
         backend.start(
             interval=float(request.interval),
             duration=float(request.timeout),
             process_filter=process_filter,
-            top_n_cpu=10,
-            top_n_gpu=10,
+            # 鸿蒙批量 CPU/GPU 输出尚未经过 PC/Mobile 真机冻结，先关闭 TopN。
+            top_n_cpu=10 if device_type == "windows" else None,
+            top_n_gpu=10 if device_type == "windows" else None,
             enable_aggregation=True,
         )
         self._backend = backend
@@ -399,27 +476,35 @@ class PerformanceCollector:
 
     def _convert_sample_to_report(self, sample) -> dict:
         """将 perfwin Sample 直接转换为 dict 格式。"""
-        system = dict(sample.system)
-        hwinfo_raw = dict(sample.hwinfo_raw)
+        system = dict(self._value(sample, "system") or {})
+        hwinfo_raw = dict(self._value(sample, "hwinfo_raw") or {})
         # PDH 可能返回 gpu_percent=0 且 gpu_adapters=[]（假空闲/解析失败），
         # 此时用 HWiNFO 传感器做运行时回退，避免前端 GPU 曲线全 0。
-        original_source = system.get("gpu_source")
-        system = self._enrich_gpu_with_hwinfo(system, hwinfo_raw)
-        self._log_gpu_source(system, original_source)
-        sequence = int(sample.sequence)
-        elapsed_ms = int(sample.elapsed_ms)
+        if self._device_type == "windows":
+            original_source = system.get("gpu_source")
+            system = self._enrich_gpu_with_hwinfo(system, hwinfo_raw)
+            self._log_gpu_source(system, original_source)
+        sequence = int(self._value(sample, "sequence", 0))
+        elapsed_ms = int(self._value(sample, "elapsed_ms", 0))
         return {
             "sample_key": f"{self._collect_id}:{sequence}",
             "sequence": sequence,
             "elapsed_ms": elapsed_ms,
-            "timestamp": sample.timestamp,
+            "timestamp": self._value(sample, "timestamp"),
             "system": system,
             "hwinfo_raw": hwinfo_raw,
-            "processes": self._convert_processes(sample.processes),
-            "aggregated": self._convert_aggregated(sample.aggregated),
-            "top_n_cpu": self._convert_aggregated(sample.top_n_cpu),
-            "top_n_gpu": self._convert_aggregated(sample.top_n_gpu),
+            "processes": self._convert_processes(self._value(sample, "processes")),
+            "aggregated": self._convert_aggregated(self._value(sample, "aggregated")),
+            "top_n_cpu": self._convert_aggregated(self._value(sample, "top_n_cpu")),
+            "top_n_gpu": self._convert_aggregated(self._value(sample, "top_n_gpu")),
         }
+
+    @staticmethod
+    def _value(item: Any, key: str, default: Any = None) -> Any:
+        """同时读取 Rust/PyO3 属性对象和 dict 样本。"""
+        if isinstance(item, Mapping):
+            return item.get(key, default)
+        return getattr(item, key, default)
 
     def _log_gpu_source(self, system: dict, original_source: str | None) -> None:
         """记录 GPU 来源切换/回退，定位为何没用上 Rust PDH。"""
@@ -529,14 +614,14 @@ class PerformanceCollector:
 
         return [
             {
-                "pid": p.pid,
-                "name": p.name,
-                "cpu_percent": p.cpu_percent,
-                "working_set_mb": p.working_set_mb,
-                "committed_memory_mb": p.committed_memory_mb,
-                "gpu_percent": p.gpu_percent,
-                "gpu_memory_mb": p.gpu_memory_mb,
-                "handle_count": p.handle_count,
+                "pid": self._value(p, "pid"),
+                "name": self._value(p, "name"),
+                "cpu_percent": self._value(p, "cpu_percent", 0),
+                "working_set_mb": self._value(p, "working_set_mb", 0),
+                "committed_memory_mb": self._value(p, "committed_memory_mb", 0),
+                "gpu_percent": self._value(p, "gpu_percent", 0),
+                "gpu_memory_mb": self._value(p, "gpu_memory_mb", 0),
+                "handle_count": self._value(p, "handle_count", 0),
             }
             for p in processes
         ]
@@ -555,14 +640,14 @@ class PerformanceCollector:
 
         return [
             {
-                "name": a.name,
-                "pids": list(a.pids),
-                "cpu_percent_total": a.cpu_percent_total,
-                "working_set_mb_total": a.working_set_mb_total,
-                "committed_memory_mb_total": a.committed_memory_mb_total,
-                "gpu_percent_total": a.gpu_percent_total,
-                "handle_count_total": a.handle_count_total,
-                "process_count": a.process_count,
+                "name": self._value(a, "name"),
+                "pids": list(self._value(a, "pids", []) or []),
+                "cpu_percent_total": self._value(a, "cpu_percent_total", 0),
+                "working_set_mb_total": self._value(a, "working_set_mb_total", 0),
+                "committed_memory_mb_total": self._value(a, "committed_memory_mb_total", 0),
+                "gpu_percent_total": self._value(a, "gpu_percent_total", 0),
+                "handle_count_total": self._value(a, "handle_count_total", 0),
+                "process_count": self._value(a, "process_count", 0),
             }
             for a in aggregated
         ]
@@ -792,10 +877,19 @@ class PerformanceCollector:
         Returns:
             进程列表
         """
-        import perfwin
+        device_type = getattr(self, "_device_type", None) or "windows"
+        device_sn = getattr(self, "_device_sn", None)
+        if device_type == "windows":
+            import perfwin
 
-        # 使用 perfwin.list_processes() 获取所有进程的 PID 和名称
-        all_processes = perfwin.list_processes()
+            all_processes = perfwin.list_processes()
+        elif device_type in ("harmony_pc", "harmony_mobile"):
+            if not device_sn:
+                raise ValueError("鸿蒙进程列表必须提供 device_sn（HDC UDID）")
+            hdc_path = getattr(self, "_hdc_path", None)
+            all_processes = PerfharmonyBackend(udid=device_sn, hdc_path=hdc_path).list_processes(search)
+        else:
+            raise ValueError(f"不支持的性能采集设备类型: {device_type}")
 
         if not all_processes:
             return []
@@ -803,7 +897,7 @@ class PerformanceCollector:
         # 转换为接口格式
         process_list = []
         for pid, name in all_processes:
-            if search and search.lower() not in name.lower():
+            if search and search.lower() not in name.lower() and device_type == "windows":
                 continue
             process_list.append(ProcessInfo(
                 name=name,

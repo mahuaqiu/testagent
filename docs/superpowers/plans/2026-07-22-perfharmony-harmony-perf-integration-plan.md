@@ -14,11 +14,40 @@
 - 样本字段、Python 可观察 API 和 WorkerReport v0.3.1 与 perfwin **同构**（sequence、elapsed_ms、system、hwinfo_raw、processes、aggregated、top_n_*）；必须以共享契约测试验证，不能只复制 `data.rs`。
 - 设备类型：`harmony_pc` + `harmony_mobile` 共用库；Windows 继续用 perfwin。
 - 不做远程桌面/投屏；平台不直连 HDC；perfharmony 库内无 HTTP。
+- **HDC 工具已就绪**：`D:\code\autotest\tools\hdc\` 包含 `hdc.exe` (v3.2.0c) + `libusb_shared.dll` (来自 SDK 6.1.0.850)，无需额外复制文件。Worker 打包时自动包含该目录。
 - 所有指标按**可实现**规划；系统字段采不到时为 null/缺键，不 fail 整次采样；禁止用 0 代表采集失败。进程字段受现有上报 schema 限制不能为 null，采不到时不写该进程。
 - 解析器 **必须** 有单元测试 + `tests/fixtures/`；真机调试阶段只更新 fixture 与正则，不改 API。
 - P0（系统/目标进程 CPU、内存）进入 Worker/ZQ 前，鸿蒙 PC 与鸿蒙移动端各必须冻结一份真实命令输出；合成 fixture 只允许用于骨架和失败路径。
 - 每个 UDID 的 HDC shell 调用串行；P0 每轮正常路径不超过 4 次、上限 6 次，禁止对全量 PID 逐个执行 CPU/内存命令。
 - CPU 统一归一化到整机 `[0,100]`，使进程、聚合与 TopN 满足当前 ZQ schema；TopN 在批量 CPU 快照经真机冻结前不是 P0 交付。
+
+## 本轮执行状态（2026-07-24）
+
+- **Task 4：部分完成。** 已有 P0 Monitor 循环、固定容量 RingBuffer、HDC shell 超时/取消回收、按 UDID 全局串行锁、PyO3 Sample/Monitor API，以及 Rust FakeHdc fixture 测试；真实 PC/Mobile 命令格式、指标语义和批量进程 CPU 仍受 Task 0 门禁约束。
+- **Task 8：部分完成。** Worker 已接入 `PerfharmonyBackend`、显式 `device_type/device_sn`、DeviceRegistry 在线/健康校验、dict/PyO3 样本转换、Windows 回退兼容和可选 wheel/Nuitka smoke test；真实 Worker-HDC start/stop/status 链路仍需真机执行。
+- **ZQ 调用：已完成骨架接入。** ZQ 性能 API 已在创建采集记录前校验设备类型和鸿蒙 `device_sn`，并向 Worker 的进程列表、start、stop、status 请求透传身份；状态页仍沿用平台数据库/Worker 上报状态，不直接发起 HDC 采集。
+- **未完成项不标记为 P0 真机交付：** `top_n_cpu`/`top_n_gpu`、真实 `hidumper`/`top`/`ps` 字段、RSS/PSS/VSS 语义、GPU/温度/功耗/网络权限和单位校准，以及 PC/Mobile 真机 E2E。
+
+### 本轮补齐的边界契约（2026-07-24）
+
+- Worker `target_processes` 允许为空列表；空列表表示只采集系统指标，不创建空的 `ProcessFilter`。
+- ZQ 前端从 `EnvMachine` 读取 `device_type/device_sn`，并在 processes、start、stop、status 请求中透传；后端 status 也会在读取平台状态前校验设备身份。
+- Windows 旧调用仍允许缺省 `device_type`，仅在 Worker/API 边界兼容为 `windows`；鸿蒙请求必须显式携带 HDC UDID。
+
+## ⚠️ 遗留问题
+
+| # | 问题 | 影响范围 | 状态 |
+|---|------|----------|------|
+| ISSUE-001 | **批量全量 CPU 快照可行性待验证**：当前无真实设备，无法确认鸿蒙是否有单次命令获取全量进程 CPU 的方式（如 `top -n 1` 或 `hidumper -p` 格式）。如不可行且单轮超出 6 次 shell 预算，则 TopN 功能降级为 P2 可选，首期仅采目标进程，不提供 TopN。 | Task 0 Step 3、Task 4 Step 2、Task 5 TopN | ⏳ 待真机验证 |
+
+> **ISSUE-001 解决方案**（真机到位后执行）：
+> ```bat
+> hdc -t <udid> shell "top -n 1 -b"
+> hdc -t <udid> shell "hidumper -p"
+> hdc -t <udid> shell "cat /proc/stat"
+> ```
+> 若任意一条能在单次调用中返回所有进程 CPU 占比，则 TopN 可按计划实现；
+> 否则在 Task 0 Step 3 标记 TopN 为 P2，并将 `top_n_cpu` 字段在 API 中预留但运行时返回 `None`。
 - 参考源码（只参考算法/命令，**不拷进运行时依赖**）：
   - `D:\code\developtools\developtools_smartperf_host-master\smartperf_device\device_command\collector\`
   - `D:\code\developtools\hiviewdfx_hidumper-master\README_zh.md`
@@ -99,7 +128,7 @@ D:\code\zq-platform\
 
 覆盖缺 `device_sn`、UDID 不存在、UDID 离线、`device_type` 不支持、Windows 兼容请求，以及 device_id 与 device_sn 不相等的正常鸿蒙请求。
 
-- [ ] **Gate: PC/Mobile P0 原始证据、身份契约和 CPU 语义均经评审确认后，才开始 Task 3/4/8–10。Task 1/2 的骨架与通用 HDC 工作可先行。**
+- [ ] **Gate: PC/Mobile P0 原始证据、身份契约和 CPU 语义均经评审确认后，才声称 Task 4/8 的鸿蒙 P0 可用。Task 1/2 的骨架、通用 HDC 工作和 Worker/ZQ 契约可先行。**
 
 ---
 
@@ -625,7 +654,7 @@ git commit -m "feat(worker): integrate perfharmony backend for harmony devices"
 - Create: `backend-fastapi/scripts/init_harmony_metric_mapping.py`
 - Test: 若有 api 测试则补 harmony 分支
 
-**调用契约：** ZQ 从 `EnvMachine` 读取 `device_type/device_sn`，调用 Worker 的 processes/start/stop/status 时一并传递。鸿蒙缺少 `device_sn` 在创建采集记录前返回 400；未支持类型在创建记录前返回 400，避免先落库再异步失败。
+**调用契约：** ZQ 从 `EnvMachine` 读取 `device_type/device_sn`，调用 Worker 的 processes/start/stop 时一并传递；`status` 接口沿用平台数据库和 Worker 上报/终态事件作为权威状态，在读取前校验同一设备身份，不额外同步调用 Worker。鸿蒙缺少 `device_sn` 在创建采集记录前返回 400；未支持类型在创建记录前返回 400，避免先落库再异步失败。
 
 **metric mapping 初始键（与库稳定 key 一致）：**
 

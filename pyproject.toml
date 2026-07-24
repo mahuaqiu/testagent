@@ -45,6 +45,10 @@ dev = [
     "black>=23.0",
     "ruff>=0.1.0",
 ]
+# 鸿蒙性能内核按 wheel 可选安装，Windows 旧 perfwin 路径不依赖它。
+harmony = [
+    "perfharmony==0.1.0",
+]
 
 [project.scripts]
 test-worker = "worker.main:main"

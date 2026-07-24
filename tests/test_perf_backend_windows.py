@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from worker.perf_backends.base import CollectBackend
+from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 from worker.performance_monitor import (
     CollectStartRequest,
@@ -218,3 +219,108 @@ class TestPerformanceCollector:
             result = collector.start_collect(req)
         assert result["status"] == "error"
         assert "混合" in result["message"]
+
+
+class TestPerfharmonyBackend:
+    """Perfharmony 后端的 mock 契约测试。"""
+
+    def test_harmony_backend_does_not_import_perfwin(self):
+        """鸿蒙后端只应创建 perfharmony.Monitor。"""
+        mock_monitor = _make_mock_monitor()
+        mock_perfharmony = MagicMock()
+        mock_perfharmony.Monitor.return_value = mock_monitor
+        original_perfwin = sys.modules.pop("perfwin", None)
+        try:
+            with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+                backend = PerfharmonyBackend(udid="HDC-UDID-001", hdc_path="tools/hdc/hdc.exe")
+                backend.start(
+                    interval=2.0,
+                    duration=60.0,
+                    process_filter=None,
+                    top_n_cpu=None,
+                    top_n_gpu=None,
+                    enable_aggregation=True,
+                )
+            mock_perfharmony.Monitor.assert_called_once()
+            assert mock_perfharmony.Monitor.call_args.kwargs["udid"] == "HDC-UDID-001"
+            assert mock_perfharmony.Monitor.call_args.kwargs["hdc_path"] == "tools/hdc/hdc.exe"
+        finally:
+            if original_perfwin is not None:
+                sys.modules["perfwin"] = original_perfwin
+
+    def test_empty_udid_is_rejected(self):
+        """没有 HDC UDID 时不能创建鸿蒙后端。"""
+        with pytest.raises(ValueError, match="device_sn/HDC UDID"):
+            PerfharmonyBackend(udid=" ")
+
+
+class TestHarmonyCollector:
+    """Collector 的设备身份和样本兼容测试。"""
+
+    def test_database_id_and_hdc_udid_are_independent(self):
+        """平台设备 ID 与 HDC UDID 不相等时仍使用 HDC UDID 启动。"""
+        mock_monitor = _make_mock_monitor()
+        mock_perfharmony = MagicMock()
+        mock_filter = MagicMock()
+        mock_perfharmony.ProcessFilter.return_value = mock_filter
+        mock_perfharmony.Monitor.return_value = mock_monitor
+        request = CollectStartRequest(
+            collect_id="harmony-001",
+            interval=2,
+            timeout=60,
+            target_processes=[TargetProcess(name="com.example.app")],
+            device_type="harmony_mobile",
+            device_sn="HDC-UDID-001",
+        )
+        collector = PerformanceCollector("env-machine-id")
+        with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+            result = collector.start_collect(request)
+        assert result["status"] == "started"
+        assert mock_perfharmony.Monitor.call_args.kwargs["udid"] == "HDC-UDID-001"
+        collector.stop_collect()
+
+    def test_harmony_sample_dict_is_converted(self):
+        """perfharmony 返回的 dict 样本可转换为 Worker 上报格式。"""
+        collector = PerformanceCollector("env-machine-id")
+        collector.configure_device("harmony_pc", "HDC-UDID-001")
+        collector._collect_id = "collect-001"
+        sample = {
+            "sequence": 1,
+            "elapsed_ms": 1000,
+            "timestamp": "2026-07-24T00:00:00Z",
+            "system": {"cpu_percent": 25.0},
+            "hwinfo_raw": {"Harmony CPU Usage": {"value": 25.0, "unit": "%"}},
+            "processes": [{
+                "pid": 200,
+                "name": "com.example.app",
+                "cpu_percent": 10.0,
+                "working_set_mb": 12.0,
+            }],
+            "aggregated": [{
+                "name": "com.example.app",
+                "pids": [200],
+                "cpu_percent_total": 10.0,
+                "working_set_mb_total": 12.0,
+            }],
+            "top_n_cpu": None,
+            "top_n_gpu": None,
+        }
+        converted = collector._convert_sample_to_report(sample)
+        assert converted["sequence"] == 1
+        assert converted["processes"][0]["pid"] == 200
+        assert converted["aggregated"][0]["name"] == "com.example.app"
+        assert converted["top_n_cpu"] is None
+
+    def test_harmony_requires_device_sn(self):
+        """鸿蒙采集缺少 UDID 时拒绝启动。"""
+        collector = PerformanceCollector("env-machine-id")
+        request = CollectStartRequest(
+            collect_id="harmony-002",
+            interval=2,
+            timeout=60,
+            target_processes=[],
+            device_type="harmony_pc",
+        )
+        result = collector.start_collect(request)
+        assert result["status"] == "error"
+        assert "device_sn" in result["message"]

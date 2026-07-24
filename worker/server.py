@@ -224,6 +224,51 @@ def set_gui_app(app: Any) -> None:
     gui_app = app
 
 
+_PERFORMANCE_DEVICE_TYPES = {"windows", "harmony_pc", "harmony_mobile"}
+
+
+def _prepare_performance_collector(
+    device_id: str,
+    device_type: str | None,
+    device_sn: str | None,
+):
+    """校验性能采集身份并配置 Collector。
+
+    ``device_id`` 是 ZQ 的 EnvMachine.id；鸿蒙设备必须用注册表中的 HDC
+    UDID（device_sn）定位，不能从 URL 参数猜测或回退到 Windows。
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    normalized_type = (device_type or "windows").strip().lower()
+    if normalized_type not in _PERFORMANCE_DEVICE_TYPES:
+        raise HTTPException(status_code=400, detail=f"不支持的性能采集设备类型: {normalized_type}")
+    normalized_sn = device_sn.strip() if device_sn else None
+
+    if normalized_type != "windows":
+        if not normalized_sn:
+            raise HTTPException(status_code=400, detail="鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+        record = worker.device_registry.get(normalized_type, normalized_sn)
+        if record is None:
+            raise HTTPException(status_code=404, detail="鸿蒙设备未在 Worker 注册表中")
+        if (record.connection_status or "").lower() in {"disconnected", "offline", "faulty"}:
+            raise HTTPException(status_code=409, detail="鸿蒙设备当前不在线")
+        if (record.health_status or "").lower() in {"unhealthy", "faulty", "error"}:
+            raise HTTPException(status_code=409, detail="鸿蒙设备当前不健康")
+
+    collector = get_collector(device_id)
+    hdc_path = None
+    if normalized_type != "windows" and worker.config:
+        hdc_path = worker.config.get_platform_config(normalized_type).get("hdc_path")
+        if not hdc_path:
+            hdc_path = worker.config.get_platform_config("harmony").get("hdc_path")
+    try:
+        collector.configure_device(normalized_type, normalized_sn, hdc_path)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return collector, normalized_type, normalized_sn
+
+
 # ========== API 端点 ==========
 
 
@@ -687,6 +732,8 @@ def _trigger_restart_after_response():
 async def get_processes(
     device_id: str,
     search: str | None = Query(default=None, description="模糊搜索进程名"),
+    device_type: str | None = Query(default=None, description="设备类型"),
+    device_sn: str | None = Query(default=None, description="设备物理标识，鸿蒙为 HDC UDID"),
 ):
     """
     获取进程列表。
@@ -703,10 +750,22 @@ async def get_processes(
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    collector = get_collector(device_id)
-    processes = collector.get_processes(search)
+    collector, normalized_type, normalized_sn = _prepare_performance_collector(
+        device_id, device_type, device_sn
+    )
+    try:
+        processes = collector.get_processes(search)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
-    logger.info(f"Get processes: device_id={device_id}, search={search}, count={len(processes)}")
+    logger.info(
+        "Get processes: device_id=%s device_type=%s device_sn=%s search=%s count=%s",
+        device_id,
+        normalized_type,
+        normalized_sn,
+        search,
+        len(processes),
+    )
 
     return {"processes": [p.model_dump() for p in processes]}
 
@@ -731,12 +790,15 @@ async def start_collect(device_id: str, request: CollectStartRequest):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    collector = get_collector(device_id)
+    collector, normalized_type, normalized_sn = _prepare_performance_collector(
+        device_id, request.device_type, request.device_sn
+    )
 
     # 设置后端地址（使用 platform_api）
     if worker.config and worker.config.platform_api:
         collector.set_backend_host(worker.config.platform_api)
 
+    request = request.model_copy(update={"device_type": normalized_type, "device_sn": normalized_sn})
     result = collector.start_collect(request)
 
     if result.get("status") == "conflict":
@@ -745,7 +807,7 @@ async def start_collect(device_id: str, request: CollectStartRequest):
         raise HTTPException(status_code=503, detail=result)
 
     logger.info(
-        f"Start collect: device_id={device_id}, "
+        f"Start collect: device_id={device_id}, device_type={normalized_type}, "
         f"collect_id={request.collect_id}, "
         f"interval={request.interval}s, "
         f"target_processes={len(request.target_processes)}"
@@ -770,19 +832,33 @@ async def stop_collect(device_id: str, request: CollectStopRequest | None = None
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    collector = get_collector(device_id)
+    request_type = request.device_type if request else None
+    request_sn = request.device_sn if request else None
+    collector, normalized_type, normalized_sn = _prepare_performance_collector(
+        device_id, request_type, request_sn
+    )
     result = collector.stop_collect(request)
 
     if result.get("status") == "error":
         raise HTTPException(status_code=409, detail=result)
 
-    logger.info(f"Stop collect: device_id={device_id}, collect_id={request.collect_id if request else None}")
+    logger.info(
+        "Stop collect: device_id=%s device_type=%s device_sn=%s collect_id=%s",
+        device_id,
+        normalized_type,
+        normalized_sn,
+        request.collect_id if request else None,
+    )
 
     return result
 
 
 @app.get("/api/worker/{device_id}/collect/status")
-async def get_collect_status(device_id: str):
+async def get_collect_status(
+    device_id: str,
+    device_type: str | None = Query(default=None, description="设备类型"),
+    device_sn: str | None = Query(default=None, description="设备物理标识，鸿蒙为 HDC UDID"),
+):
     """
     获取采集状态。
 
@@ -803,7 +879,11 @@ async def get_collect_status(device_id: str):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    collector = get_collector(device_id)
+    if device_type or device_sn:
+        collector, _, _ = _prepare_performance_collector(device_id, device_type, device_sn)
+    else:
+        # 兼容旧 Windows 状态轮询；新鸿蒙调用应显式携带身份。
+        collector = get_collector(device_id)
     status = collector.get_status()
 
     logger.debug(f"Get collect status: device_id={device_id}, is_collecting={status.is_collecting}")
