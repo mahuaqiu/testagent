@@ -31,14 +31,16 @@
 
 ### 本轮提交与验证
 
-- `perfharmony`：`05a9c7d`（前一轮 optional collector/probe）及本轮未提交修改。
-- `zq-platform`：`8f62e0c`（前一轮 Harmony mapping/UI）及本轮未提交修改。
-- `autotest`：此前 Worker 集成提交 `9a9d505`；本轮继续修改计划、契约、构建脚本和测试。
+- `perfharmony`：`2775e8b`（离线 collector/probe/tooling 完成），已创建 tag `v0.1.0`。
+- `zq-platform`：`aa35afb`（Harmony 进程名兼容修复；前一提交 `8f62e0c` 完成 mapping/UI）。
+- `autotest`：`50f8ae6`（离线 Harmony performance integration 完成；前一提交 `9a9d505` 完成 Worker 接入）。
 - Rust：`cargo test` 28 passed；`cargo check` 通过；Rustfmt 已执行。
 - Worker：项目虚拟环境 `venv` 下相关测试 24 passed。
 - ZQ 后端：项目虚拟环境 `.venv` 下全量测试 24 passed。
-- ZQ 前端：`pnpm typecheck` 仍被仓库既有全局类型错误阻断，未发现错误指向本轮 performance-monitor 文件；需后续治理既有错误后再做完整类型门禁。
-- wheel：`D:\code\perfharmony\target\wheels\perfharmony-0.1.0-cp312-cp312-win_amd64.whl`，真机能力不由 wheel 构建证明。
+- perfharmony Python：wheel 安装后 `12 passed, 5 skipped, 2 xfailed`；真机相关测试按预期保留 skip/xfail。
+- ZQ 前端：`pnpm typecheck` 仍被仓库既有全局类型错误阻断，未发现错误指向本轮 performance-monitor 文件；生产构建和安装包验收交由用户执行，本轮不作为代码完成门禁。
+- wheel：`D:\code\perfharmony\target\wheels\perfharmony-0.1.0-cp312-cp312-win_amd64.whl`；SHA256：`1E9844B1948B37000EC93C34CE015EF0146CA6C923C6C55A36C2ECD37C2682B2`。真机能力不由 wheel 构建证明。
+- 构建脚本：本轮未修改；Nuitka/安装包编译测试不在本轮交付范围，由用户执行。
 
 ### 本轮补齐的边界契约（2026-07-24）
 
@@ -551,7 +553,7 @@ git commit -m "feat: add probed optional collectors"
 
 在全新、匹配 Worker CPython ABI 的虚拟环境中安装 wheel，运行 import、list_targets mock、Monitor 共享契约测试；记录 wheel 文件名和 SHA256。
 
-- [ ] **Step 3: Commit tag `v0.1.0`（可选，未执行）**
+- [x] **Step 3: Commit tag `v0.1.0`（已创建；发布物编译验收由用户执行）**
 
 ---
 
@@ -644,7 +646,7 @@ ProcessFilter 映射：names/pids 与现逻辑一致，禁止混合。
 
 覆盖：`device_id != device_sn` 正常工作、缺少 device_sn、类型/UDID 不匹配、设备离线、不支持类型、Windows 老请求兼容、鸿蒙请求绝不 import perfwin。
 
-- [x] **Step 5: Worker Windows 发布物集成（构建脚本和 import smoke 配置已完成，实际 Nuitka 发布构建未执行）**
+- [x] **Step 5: Worker Windows 发布物集成（构建脚本和 import smoke 配置已完成；Nuitka/安装包编译验收由用户执行）**
 
 修改 `scripts/build_windows.ps1`：增加 `PerfharmonyWheel` 参数、安装对应 CPython ABI wheel、Nuitka 显式包含 `perfharmony`，最终打包目录执行 `import perfharmony` smoke test。`perfharmony` 延迟导入，缺失时不得影响 Windows perfwin 路径。
 
@@ -714,7 +716,7 @@ git commit -m "feat(performance): support harmony devices via worker"
 
 GPU/句柄按样本能力与数据可用性隐藏；鸿蒙内存明确显示 RSS/PSS 语义；Harmony raw 指标独立分组，不再把所有非 Linux 指标当作 Windows/HWiNFO。
 
-- [ ] **Step 3: 前端测试与响应式视觉检查（真实 Harmony 数据/视觉验收依赖真机；离线类型检查被既有仓库错误阻断）**
+- [ ] **Step 3: 前端测试与响应式视觉检查（真实 Harmony 数据/视觉验收依赖真机；类型检查被既有仓库错误阻断；编译验收由用户执行）**
 
 至少覆盖 Windows、Linux、harmony_pc、harmony_mobile 四种设备，验证进程选择、无 GPU/句柄、指标搜索隔离和跨类型对比提示。
 
@@ -760,7 +762,7 @@ hdc -t <udid> shell "param get const.product.type"
 
 平台选鸿蒙设备 → 选进程 → 采集 2 分钟 → 曲线有 CPU/内存 → 停止终态 stopped；另测设备断开连续 3 轮后 failed、duration 到期 timed_out、停止期间 shell 有界退出、device_id 与 device_sn 不同。
 
-- [x] **Step 4: Windows 路径回归一次（离线相关 Worker 测试已通过，完整发布物回归待实际构建）**
+- [x] **Step 4: Windows 路径回归一次（离线相关 Worker 测试已通过；完整发布物回归由用户编译验收）**
 
 - [ ] **Step 5: Commit（真机校准后执行）**
 
