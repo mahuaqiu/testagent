@@ -35,6 +35,7 @@ from worker.performance_monitor import (
     CollectStopRequest,
     get_collector,
 )
+from worker.platforms.harmony_hdc import _find_hdc_path
 from worker.tools import (
     get_script_version,
     save_script,
@@ -227,18 +228,43 @@ def set_gui_app(app: Any) -> None:
 _PERFORMANCE_DEVICE_TYPES = {"windows", "harmony_pc", "harmony_mobile"}
 
 
+def _resolve_performance_hdc_path(device_type: str) -> str | None:
+    """把配置中的 HDC 路径解析成可执行文件。
+
+    配置可能是 hdc.exe、tools/hdc 相对路径或 SDK 根目录；性能采集不能把
+    未解析的目录字符串直接交给 perfharmony。
+    """
+    if not worker or not worker.config:
+        return _find_hdc_path(None)
+
+    configured = worker.config.get_platform_config(device_type).get("hdc_path")
+    if not configured:
+        configured = worker.config.get_platform_config("harmony").get("hdc_path")
+    return _find_hdc_path(configured)
+
+
 def _prepare_performance_collector(
     device_id: str,
     device_type: str | None,
     device_sn: str | None,
+    *,
+    require_identity: bool = True,
 ):
     """校验性能采集身份并配置 Collector。
 
     ``device_id`` 是 ZQ 的 EnvMachine.id；鸿蒙设备必须用注册表中的 HDC
     UDID（device_sn）定位，不能从 URL 参数猜测或回退到 Windows。
+
+    ``require_identity=False`` 用于 stop/status 兼容旧客户端：缺身份时只
+    按 device_id 取已有 Collector，不把类型默认成 windows 后覆盖配置。
     """
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    collector = get_collector(device_id)
+
+    if not require_identity and not device_type and not device_sn:
+        return collector, collector._device_type or "windows", collector._device_sn
 
     normalized_type = (device_type or "windows").strip().lower()
     if normalized_type not in _PERFORMANCE_DEVICE_TYPES:
@@ -256,12 +282,9 @@ def _prepare_performance_collector(
         if (record.health_status or "").lower() in {"unhealthy", "faulty", "error"}:
             raise HTTPException(status_code=409, detail="鸿蒙设备当前不健康")
 
-    collector = get_collector(device_id)
     hdc_path = None
-    if normalized_type != "windows" and worker.config:
-        hdc_path = worker.config.get_platform_config(normalized_type).get("hdc_path")
-        if not hdc_path:
-            hdc_path = worker.config.get_platform_config("harmony").get("hdc_path")
+    if normalized_type != "windows":
+        hdc_path = _resolve_performance_hdc_path(normalized_type)
     try:
         collector.configure_device(normalized_type, normalized_sn, hdc_path)
     except ValueError as error:
@@ -835,7 +858,10 @@ async def stop_collect(device_id: str, request: CollectStopRequest | None = None
     request_type = request.device_type if request else None
     request_sn = request.device_sn if request else None
     collector, normalized_type, normalized_sn = _prepare_performance_collector(
-        device_id, request_type, request_sn
+        device_id,
+        request_type,
+        request_sn,
+        require_identity=bool(request_type or request_sn),
     )
     result = collector.stop_collect(request)
 
@@ -879,11 +905,12 @@ async def get_collect_status(
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    if device_type or device_sn:
-        collector, _, _ = _prepare_performance_collector(device_id, device_type, device_sn)
-    else:
-        # 兼容旧 Windows 状态轮询；新鸿蒙调用应显式携带身份。
-        collector = get_collector(device_id)
+    collector, _, _ = _prepare_performance_collector(
+        device_id,
+        device_type,
+        device_sn,
+        require_identity=bool(device_type or device_sn),
+    )
     status = collector.get_status()
 
     logger.debug(f"Get collect status: device_id={device_id}, is_collecting={status.is_collecting}")

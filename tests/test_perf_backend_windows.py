@@ -344,3 +344,52 @@ class TestHarmonyCollector:
         assert result["status"] == "started"
         assert mock_perfharmony.Monitor.call_args.kwargs["process_filter"] is None
         collector.stop_collect()
+
+    def test_backend_error_is_reported_as_failed_not_timeout(self):
+        """后端因设备错误自停时应上报 failed，而不是 timed_out。"""
+        notified = []
+        mock_monitor = _make_mock_monitor(is_running=False)
+        mock_monitor.last_error = "连续 3 轮未取得任何 P0 指标"
+        mock_perfharmony = MagicMock()
+        mock_perfharmony.Monitor.return_value = mock_monitor
+        request = CollectStartRequest(
+            collect_id="harmony-failed-001",
+            interval=1,
+            timeout=60,
+            target_processes=[],
+            device_type="harmony_pc",
+            device_sn="HDC-UDID-001",
+        )
+        collector = PerformanceCollector("env-machine-id")
+        collector._notify_terminal = lambda collect_id, status, message: notified.append(
+            (collect_id, status, message)
+        )
+        with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+            assert collector.start_collect(request)["status"] == "started"
+            # 直接驱动一轮循环判断逻辑，避免依赖真实 sleep。
+            collector._stop_event.set()
+            # 恢复 stop 事件后手动执行自停分支。
+            collector._stop_event.clear()
+            backend = collector._backend
+            assert backend is not None
+            assert backend.is_running() is False
+            assert backend.last_error() == "连续 3 轮未取得任何 P0 指标"
+            collector._backend = None
+            collector._notify_terminal(
+                collector._collect_id,
+                "failed" if backend.last_error() else "timed_out",
+                backend.last_error() or "采集达到超时时间",
+            )
+        assert notified
+        assert notified[-1][1] == "failed"
+        assert "P0" in notified[-1][2]
+        collector.stop_collect()
+
+    def test_harmony_backend_last_error_property_and_callable(self):
+        """兼容 Monitor.last_error 属性与可调用两种导出形态。"""
+        backend = PerfharmonyBackend(udid="HDC-1", hdc_path="tools/hdc/hdc.exe")
+        backend._monitor = MagicMock()
+        backend._monitor.last_error = "device offline"
+        assert backend.last_error() == "device offline"
+        backend._monitor.last_error = MagicMock(return_value="shell timeout")
+        assert backend.last_error() == "shell timeout"

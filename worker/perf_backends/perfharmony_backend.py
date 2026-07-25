@@ -75,6 +75,18 @@ class PerfharmonyBackend:
         """读取并排空增量采样结果。"""
         return self._monitor.get_result() if self._monitor else _EmptyResult()
 
+    def last_error(self) -> str | None:
+        """读取 Monitor 最近一次设备/采集错误。"""
+        if not self._monitor:
+            return None
+        error = getattr(self._monitor, "last_error", None)
+        if callable(error):
+            error = error()
+        if error is None:
+            return None
+        text = str(error).strip()
+        return text or None
+
     def list_processes(self, search: str | None = None) -> list[tuple[int, str]]:
         """读取 Harmony 设备进程列表。"""
         perfharmony = self._module()

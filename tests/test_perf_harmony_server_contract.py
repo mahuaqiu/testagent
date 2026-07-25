@@ -40,6 +40,11 @@ def test_harmony_uses_hdc_udid_independent_of_database_id():
     with (
         patch.object(server_module, "worker", worker),
         patch.object(server_module, "get_collector", return_value=collector),
+        patch.object(
+            server_module,
+            "_find_hdc_path",
+            return_value="tools/hdc/hdc.exe",
+        ),
     ):
         result, device_type, device_sn = server_module._prepare_performance_collector(
             "env-machine-id", "harmony_mobile", "HDC-UDID-001"
@@ -115,3 +120,50 @@ def test_legacy_windows_request_defaults_to_windows():
     assert device_type == "windows"
     assert device_sn is None
     collector.configure_device.assert_called_once_with("windows", None, None)
+
+
+def test_stop_without_identity_keeps_existing_collector():
+    """stop/status 缺身份时不应把正在运行的鸿蒙 Collector 重新配成 Windows。"""
+    worker = _worker_with_record()
+    collector = MagicMock()
+    collector._device_type = "harmony_pc"
+    collector._device_sn = "HDC-UDID-001"
+    with (
+        patch.object(server_module, "worker", worker),
+        patch.object(server_module, "get_collector", return_value=collector),
+    ):
+        result, device_type, device_sn = server_module._prepare_performance_collector(
+            "env-machine-id",
+            None,
+            None,
+            require_identity=False,
+        )
+    assert result is collector
+    assert device_type == "harmony_pc"
+    assert device_sn == "HDC-UDID-001"
+    collector.configure_device.assert_not_called()
+
+
+def test_harmony_hdc_path_is_resolved_before_configure():
+    """性能路径应先把 SDK 根/相对路径解析成 hdc 可执行文件。"""
+    record = _harmony_record()
+    worker = _worker_with_record(record)
+    collector = MagicMock()
+    with (
+        patch.object(server_module, "worker", worker),
+        patch.object(server_module, "get_collector", return_value=collector),
+        patch.object(
+            server_module,
+            "_find_hdc_path",
+            return_value="D:/resolved/tools/hdc/hdc.exe",
+        ) as find_hdc,
+    ):
+        server_module._prepare_performance_collector(
+            "env-machine-id", "harmony_mobile", "HDC-UDID-001"
+        )
+    find_hdc.assert_called_once_with("tools/hdc/hdc.exe")
+    collector.configure_device.assert_called_once_with(
+        "harmony_mobile",
+        "HDC-UDID-001",
+        "D:/resolved/tools/hdc/hdc.exe",
+    )

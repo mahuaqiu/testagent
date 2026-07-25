@@ -86,3 +86,7 @@ class PerfwinBackend:
         if self._monitor:
             return self._monitor.get_result()
         return _EmptyResult()
+
+    def last_error(self) -> str | None:
+        """Windows 后端目前不暴露可辨识错误，统一返回 None。"""
+        return None

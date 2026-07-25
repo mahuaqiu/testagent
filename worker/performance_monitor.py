@@ -444,15 +444,28 @@ class PerformanceCollector:
                     self._start_time = None
                 break
 
-            # 检查后端是否仍在运行（timeout 后自动停止）
+            # 后端自停：有 last_error 视为设备/采集失败，否则视为 duration 到期。
             if self._backend and not self._backend.is_running():
                 collect_id = self._collect_id
-                logger.info("采集后端已停止（timeout 达到）: %s", collect_id)
-                self._stop_event.set()
                 backend = self._backend
                 self._backend = None
+                terminal_error = None
+                try:
+                    terminal_error = backend.last_error()
+                except Exception as error:
+                    logger.warning("读取采集后端 last_error 失败: %s", error)
+                self._stop_event.set()
                 self._drain_backend_buffer(backend)
-                self._notify_terminal(collect_id, "timed_out", "采集达到超时时间")
+                if terminal_error:
+                    logger.error(
+                        "采集后端因错误停止: collect_id=%s error=%s",
+                        collect_id,
+                        terminal_error,
+                    )
+                    self._notify_terminal(collect_id, "failed", terminal_error)
+                else:
+                    logger.info("采集后端已停止（timeout 达到）: %s", collect_id)
+                    self._notify_terminal(collect_id, "timed_out", "采集达到超时时间")
                 with self._lock:
                     self._collecting = False
                     self._stopping = False

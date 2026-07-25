@@ -28,6 +28,11 @@ Windows perfwin。旧 Windows 请求可以在 API 边界补齐 `device_type=wind
 | 旧 Windows 请求缺类型 | 显式兼容为 Windows | 同上 |
 | 空目标进程列表 | 不创建空 `ProcessFilter`，只采系统指标 | `tests/test_perf_backend_windows.py` |
 | 鸿蒙不加载 perfwin | 只延迟导入 `perfharmony` | `tests/test_perf_backend_windows.py` |
+| 后端 `last_error` 自停 | Worker 上报 `failed`，不是 `timed_out` | `tests/test_perf_backend_windows.py` |
+| stop/status 缺身份 | 不把现有鸿蒙 Collector 重配成 Windows | `tests/test_perf_harmony_server_contract.py` |
+| HDC 路径 | 先 `_find_hdc_path` 解析再注入 Monitor | 同上 |
+| 进程 shell 失败 | 保留系统 CPU/内存样本，仅降级 processes | `perfharmony` monitor 单测 |
+| `ps -ef` 带参数 CMD | 保留包名，不只取 last token | `perfharmony` parse/ps 单测 |
 
 ## 设备命令门禁
 

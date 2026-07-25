@@ -58,3 +58,11 @@ class CollectBackend(Protocol):
             采集结果对象
         """
         ...
+
+    def last_error(self) -> str | None:
+        """返回后端最近一次可辨识的采集错误，无错误时为 None。
+
+        Worker 用它区分 duration 到期（timed_out）与设备断连/连续无 P0
+        （failed）。Windows 后端可恒返回 None。
+        """
+        ...
