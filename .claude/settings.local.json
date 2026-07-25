@@ -360,7 +360,9 @@
       "PowerShell($hdc = \"D:\\\\code\\\\commandline-tools-windows-x64-6.1.0.850\\\\command-line-tools\\\\sdk\\\\default\\\\openharmony\\\\toolchains\\\\hdc.exe\")",
       "PowerShell(& \"D:\\\\code\\\\commandline-tools-windows-x64-6.1.0.850\\\\command-line-tools\\\\sdk\\\\default\\\\hms\\\\native\\\\BinXO\\\\binxo.exe\" -h 2>&1 | Select-Object -First 60; Write-Host \"====\"; Get-Content \"D:\\\\code\\\\commandline-tools-windows-x64-6.1.0.850\\\\command-line-tools\\\\sdk\\\\default\\\\hms\\\\native\\\\BinXO\\\\binxo.conf\" | Select-Object -First 80; Write-Host \"==== perf2bolt ====\"; & \"D:\\\\code\\\\commandline-tools-windows-x64-6.1.0.850\\\\command-line-tools\\\\sdk\\\\default\\\\hms\\\\native\\\\BiSheng\\\\bin\\\\perf2bolt.exe\" --help 2>&1 | Select-Object -First 30)",
       "WebFetch(domain:gitee.com)",
-      "PowerShell(Get-ChildItem \"D:\\\\code\\\\developtools\" -Force | Select-Object Name, Mode, Length; Write-Host \"====\"; Get-ChildItem \"D:\\\\code\\\\developtools\" -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host \"`n### $\\($_.FullName\\)\"; Get-ChildItem $_.FullName -Force | Select-Object Name, Mode | Format-Table -AutoSize })"
+      "PowerShell(Get-ChildItem \"D:\\\\code\\\\developtools\" -Force | Select-Object Name, Mode, Length; Write-Host \"====\"; Get-ChildItem \"D:\\\\code\\\\developtools\" -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host \"`n### $\\($_.FullName\\)\"; Get-ChildItem $_.FullName -Force | Select-Object Name, Mode | Format-Table -AutoSize })",
+      "Bash(Get-ChildItem -Path \"worker\" -Directory)",
+      "Bash(Select-Object Name)"
     ]
   }
 }
