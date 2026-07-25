@@ -70,7 +70,7 @@ if ($nuitkaInstalled -ne "ok") {
 Write-Host "[2/6] Installing dependencies..."
 & $VenvPip install --upgrade pip
 & $VenvPip install nuitka ordered-set zstandard
-& $VenvPip install -e ".[all]"
+& $VenvPip install -e "."
 
 # Install perfwin wheel
 if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
@@ -81,7 +81,7 @@ if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
     Write-Warning "Performance monitoring may not work!"
 }
 
-# 安装可选的 perfharmony wheel；没有 wheel 时保留 Windows perfwin 路径。
+# 安装 perfharmony wheel；构建环境包含 Harmony 性能采集能力。
 $PerfharmonyInstalled = $false
 if ($PerfharmonyWheel -ne "" -and (Test-Path $PerfharmonyWheel)) {
     Write-Host "  Installing perfharmony wheel: $PerfharmonyWheel"
