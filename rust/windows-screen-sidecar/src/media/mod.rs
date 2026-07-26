@@ -13,6 +13,6 @@ pub use packet::{
     packet_from_encoded_frames, MediaPacket, MediaPacketDecoder, FLAG_CONFIG, FLAG_KEYFRAME,
     HEADER_LEN, MAGIC, MESSAGE_NAL, VERSION,
 };
-pub use recording_worker::{FrameSink, RecordingWorkerHandle, RecordingWorkerStats};
+pub use recording_worker::{FrameSink, RecordingWorkerHandle, RecordingWorkerStats, WriteFrame};
 pub use stream_worker::{push_frame_to_stderr, StreamWorkerHandle, StreamWorkerStats};
 pub use types::{CapturedFrame, FrameHubStats, MediaSessionStats, RecorderStats, StreamStats};

@@ -1,5 +1,4 @@
 use crate::win_recorder::error::RecorderError;
-use crate::win_recorder::logical_time::sample_timing_for_frame_index;
 use windows::core::PCWSTR;
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
@@ -241,13 +240,19 @@ impl MFSinkWriter {
 
     /// 写入一帧
     ///
-    /// 使用逻辑帧索引计算时间戳，确保视频播放时间连续且不受抓帧抖动影响
-    pub fn write_sample(&mut self, sample: &IMFSample) -> Result<(), RecorderError> {
-        let (timestamp, duration) = sample_timing_for_frame_index(self.frame_count, self.fps);
+    /// 时间戳由调用方根据 capture_pts 状态机计算后传入；
+    /// frame_count 仅作统计，不再参与时间计算。
+    pub fn write_sample(
+        &mut self,
+        sample: &IMFSample,
+        timestamp_100ns: i64,
+        duration_100ns: i64,
+    ) -> Result<(), RecorderError> {
+        let duration = duration_100ns.max(1);
 
         unsafe {
             sample
-                .SetSampleTime(timestamp)
+                .SetSampleTime(timestamp_100ns)
                 .map_err(|e| RecorderError::MFError(format!("设置样本时间失败: {}", e)))?;
 
             sample

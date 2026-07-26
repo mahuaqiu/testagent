@@ -1,17 +1,19 @@
 //! 纯 Rust 屏幕录制器 - 从 win_recorder 移植，移除 PyO3 依赖
 use crate::win_recorder::d3d11::D3D11TextureManager;
 use crate::win_recorder::error::RecorderError;
-use crate::win_recorder::logical_time::{logical_time_for_frame_index, ClockTime};
+use crate::win_recorder::logical_time::{
+    local_hms_ms_from_pts_100ns, next_sample_timing, SampleTimingState,
+};
 use crate::win_recorder::mf_writer::{log_process_memory, MFSinkWriter};
 use crate::win_recorder::watermark::WatermarkRenderer;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use windows::Win32::Media::MediaFoundation::*;
-use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// Windows 录屏器
 ///
-/// 使用 D3D11 纹理和 Media Foundation SinkWriter 进行硬件编码
+/// 使用 D3D11 纹理和 Media Foundation SinkWriter 进行硬件编码。
+/// 水印与 sample PTS 均由抓帧 `capture_pts_100ns` 派生。
 pub struct WinRecorder {
     texture_manager: Option<Arc<D3D11TextureManager>>,
     sink_writer: Option<Arc<Mutex<MFSinkWriter>>>,
@@ -24,19 +26,8 @@ pub struct WinRecorder {
     recording: bool,
     watermark: bool,
     watermark_renderer: Option<WatermarkRenderer>,
-    recording_start_time: Option<ClockTime>,
-}
-
-fn current_local_clock_time() -> ClockTime {
-    unsafe {
-        let st = GetLocalTime();
-        ClockTime::new(
-            st.wHour as u8,
-            st.wMinute as u8,
-            st.wSecond as u8,
-            st.wMilliseconds,
-        )
-    }
+    /// 相对首帧 capture 的容器时间轴状态
+    timing: SampleTimingState,
 }
 
 impl WinRecorder {
@@ -69,7 +60,7 @@ impl WinRecorder {
             recording: false,
             watermark,
             watermark_renderer,
-            recording_start_time: None,
+            timing: SampleTimingState::default(),
         })
     }
 
@@ -97,8 +88,8 @@ impl WinRecorder {
 
         sink_writer.begin_writing()?;
 
-        // 记录录制开始时的本地时钟，后续水印按逻辑时间推进
-        self.recording_start_time = Some(current_local_clock_time());
+        // 锚点在首帧写入时设定，不在 start 时拍墙钟
+        self.timing = SampleTimingState::default();
 
         // 更新内部尺寸为对齐后的尺寸
         self.width = aligned_width;
@@ -111,8 +102,16 @@ impl WinRecorder {
         Ok(())
     }
 
-    /// 写入一帧 (纯 Rust 版本，接收 &[u8])
-    pub fn write_frame(&mut self, frame_data: &[u8]) -> Result<(), RecorderError> {
+    /// 写入一帧
+    ///
+    /// - `capture_pts_100ns`: 该帧抓取墙钟（Unix epoch 100ns）
+    /// - `duplicated`: 是否为 tick 重复上一帧（水印冻结，容器 PTS 仍前进）
+    pub fn write_frame(
+        &mut self,
+        frame_data: &[u8],
+        capture_pts_100ns: i64,
+        duplicated: bool,
+    ) -> Result<(), RecorderError> {
         if !self.recording {
             return Err(RecorderError::NotRecording);
         }
@@ -130,14 +129,10 @@ impl WinRecorder {
         // 上传到 staging（不拷贝到 GPU）
         texture_manager.upload_bgra_to_staging(frame_data)?;
 
-        // 如果开启水印，绘制水印到 staging 纹理
+        // 水印：始终使用该帧 capture 本地墙钟（duplicate 时调用方传入原 pts → 冻结）
         if self.watermark {
             if let Some(renderer) = &mut self.watermark_renderer {
-                let frame_index = sink_writer.lock().frame_count();
-                let start_time = self
-                    .recording_start_time
-                    .unwrap_or_else(current_local_clock_time);
-                let time_str = logical_time_for_frame_index(start_time, frame_index, self.fps);
+                let time_str = local_hms_ms_from_pts_100ns(capture_pts_100ns);
                 if let Err(e) = renderer.render(
                     texture_manager.context(),
                     texture_manager.staging_texture(),
@@ -153,9 +148,12 @@ impl WinRecorder {
         // 直接从 staging 纹理创建 MF Sample（跳过 GPU 纹理，避免冗余拷贝）
         let sample = texture_manager.create_sample_from_staging()?;
 
+        let (timestamp, duration) =
+            next_sample_timing(&mut self.timing, capture_pts_100ns, duplicated, self.fps);
+
         // 写入 SinkWriter
         let mut writer = sink_writer.lock();
-        writer.write_sample(&sample)?;
+        writer.write_sample(&sample, timestamp, duration)?;
 
         Ok(())
     }
@@ -175,13 +173,13 @@ impl WinRecorder {
         // 清理资源
         self.sink_writer = None;
         self.texture_manager = None;
-        self.recording_start_time = None;
+        self.timing = SampleTimingState::default();
         self.recording = false;
 
         // 关闭 Media Foundation
         unsafe {
             let _ = MFShutdown();
-        log_process_memory("after_recorder_resources_dropped");
+            log_process_memory("after_recorder_resources_dropped");
         }
 
         Ok(())

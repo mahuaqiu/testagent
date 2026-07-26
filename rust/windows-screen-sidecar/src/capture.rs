@@ -160,11 +160,13 @@ pub fn capture_rect(rect: &MonitorRect) -> Result<CapturedFrame, String> {
         let _ = DeleteDC(mem_dc);
         let _ = ReleaseDC(HWND(std::ptr::null_mut()), screen_dc);
 
+        // 抓帧墙钟：仅在 BitBlt 成功并读完像素后取时，作为录制水印/PTS 权威源
+        let captured_at_ms = current_timestamp_ms();
         Ok(CapturedFrame {
             width: rect.width as u32,
             height: rect.height as u32,
             bgra,
-            captured_at_ms: current_timestamp_ms(),
+            captured_at_ms,
         })
     }
 }

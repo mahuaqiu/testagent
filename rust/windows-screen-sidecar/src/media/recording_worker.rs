@@ -5,9 +5,17 @@ use std::time::{Duration, Instant};
 
 use super::{CapturedFrame, FrameHub};
 
+/// 单次写入：像素借用 + 抓帧时间 + 是否重复 tick。
+/// 禁止为传时间戳而 clone bgra。
+pub struct WriteFrame<'a> {
+    pub bgra: &'a [u8],
+    pub capture_pts_100ns: i64,
+    pub duplicated: bool,
+}
+
 /// 录制 worker 使用的帧写入抽象，生产环境由 RecordingContext 实现。
 pub trait FrameSink: Send + 'static {
-    fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String>;
+    fn write_frame(&mut self, frame: WriteFrame<'_>) -> Result<(), String>;
     fn stop(&mut self) -> Result<(), String>;
 }
 
@@ -86,7 +94,11 @@ impl RecordingWorkerHandle {
                     };
 
                     let write_started = Instant::now();
-                    sink.write_frame(&frame.bgra)?;
+                    sink.write_frame(WriteFrame {
+                        bgra: &frame.bgra,
+                        capture_pts_100ns: frame.capture_pts_100ns,
+                        duplicated,
+                    })?;
                     stats.last_write_ms = write_started.elapsed().as_millis();
                     stats.written_frames = stats.written_frames.saturating_add(1);
                     if duplicated {
@@ -136,12 +148,17 @@ mod tests {
     use std::time::{Duration, Instant};
 
     struct TestSink {
-        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        writes: Arc<Mutex<Vec<(Vec<u8>, i64, bool)>>>,
     }
 
     impl FrameSink for TestSink {
-        fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String> {
-            self.writes.lock().unwrap().push(bgra.to_vec());
+        fn write_frame(&mut self, frame: WriteFrame<'_>) -> Result<(), String> {
+            // 仅测试收集允许 to_vec
+            self.writes.lock().unwrap().push((
+                frame.bgra.to_vec(),
+                frame.capture_pts_100ns,
+                frame.duplicated,
+            ));
             Ok(())
         }
 
@@ -179,10 +196,11 @@ mod tests {
             written.len() >= 2,
             "expected fixed ticks to write multiple frames"
         );
-        assert!(written.iter().all(|frame| frame == &vec![7; 4]));
+        assert!(written.iter().all(|(frame, _, _)| frame == &vec![7; 4]));
         assert_eq!(stats.written_frames as usize, written.len());
         assert!(stats.duplicated_frames >= 1, "expected a duplicated tick");
     }
+
     #[test]
     fn worker_accepts_new_frame_after_capture_producer_restarts() {
         let hub = Arc::new(FrameHub::new());
@@ -212,8 +230,45 @@ mod tests {
         worker.stop().expect("worker should stop");
 
         assert!(
-            writes.lock().unwrap().iter().any(|frame| frame == &vec![9; 4]),
+            writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(frame, _, _)| frame == &vec![9; 4]),
             "worker should consume the restarted producer frame instead of repeating the stale frame"
+        );
+    }
+
+    #[test]
+    fn worker_forwards_capture_pts_and_duplicated_flag() {
+        let hub = Arc::new(FrameHub::new());
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let sink = TestSink {
+            writes: writes.clone(),
+        };
+        let worker = RecordingWorkerHandle::start(hub.clone(), 50, Box::new(sink))
+            .expect("worker should start");
+
+        hub.publish(CapturedFrame {
+            seq: 0,
+            capture_pts_100ns: 420_000,
+            width: 1,
+            height: 1,
+            bgra: vec![1; 4],
+        });
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = worker.stop().expect("worker should stop");
+
+        let w = writes.lock().unwrap();
+        assert!(!w.is_empty());
+        assert!(
+            w.iter().any(|(_, pts, _)| *pts == 420_000),
+            "expected capture_pts forwarded, got {:?}",
+            w.iter().map(|(_, p, _)| *p).collect::<Vec<_>>()
+        );
+        assert!(
+            w.iter().any(|(_, _, dup)| *dup),
+            "expected at least one duplicated tick at high fps"
         );
     }
 }

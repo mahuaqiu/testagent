@@ -70,9 +70,14 @@ impl RecordingContext {
         }
     }
 
-    pub fn write_frame(&mut self, bgra_data: &[u8]) -> Result<(), RecorderError> {
+    pub fn write_frame(
+        &mut self,
+        bgra_data: &[u8],
+        capture_pts_100ns: i64,
+        duplicated: bool,
+    ) -> Result<(), RecorderError> {
         if let Some(ref mut recorder) = self.recorder {
-            recorder.write_frame(bgra_data)
+            recorder.write_frame(bgra_data, capture_pts_100ns, duplicated)
         } else {
             Err(RecorderError::NotRecording)
         }
@@ -96,8 +101,14 @@ impl RecordingContext {
 }
 
 impl crate::media::FrameSink for RecordingContext {
-    fn write_frame(&mut self, bgra: &[u8]) -> Result<(), String> {
-        RecordingContext::write_frame(self, bgra).map_err(|e| e.to_string())
+    fn write_frame(&mut self, frame: crate::media::WriteFrame<'_>) -> Result<(), String> {
+        RecordingContext::write_frame(
+            self,
+            frame.bgra,
+            frame.capture_pts_100ns,
+            frame.duplicated,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn stop(&mut self) -> Result<(), String> {
