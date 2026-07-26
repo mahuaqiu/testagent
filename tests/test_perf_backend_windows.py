@@ -421,10 +421,52 @@ class TestHarmonyCollector:
         collector.stop_collect()
 
     def test_harmony_backend_last_error_property_and_callable(self):
-        """兼容 Monitor.last_error 属性与可调用两种导出形态。"""
+        """兼容 Monitor.last_error 为属性或可调用两种形态。"""
         backend = PerfharmonyBackend(udid="HDC-1", hdc_path="tools/hdc/hdc.exe")
         backend._monitor = MagicMock()
         backend._monitor.last_error = "device offline"
         assert backend.last_error() == "device offline"
         backend._monitor.last_error = MagicMock(return_value="shell timeout")
         assert backend.last_error() == "shell timeout"
+
+
+class TestHarmonyBundleCollapse:
+    """鸿蒙进程列表按包名归组为应用粒度。"""
+
+    def test_collapse_merges_colon_subprocesses(self):
+        """主进程 + 冒号子进程归组为一行，PID 取主进程。"""
+        rows = [
+            (100, "com.huawei.it.works"),
+            (101, "com.huawei.it.works:Native_libadapter0"),
+            (102, "com.huawei.it.works:Native_libadapter1"),
+            (103, "com.huawei.it.works:Native_libadapter2"),
+            (104, "com.huawei.it.works:Native_libadapter3"),
+            (200, "com.other.app"),
+        ]
+        result = PerformanceCollector._collapse_harmony_bundles(rows)
+        assert result == [(100, "com.huawei.it.works"), (200, "com.other.app")]
+
+    def test_collapse_prefers_main_pid_even_if_listed_later(self):
+        """子进程行先出现时，后续主进程行的 PID 仍胜出。"""
+        rows = [
+            (301, "com.huawei.it.works:render"),
+            (300, "com.huawei.it.works"),
+        ]
+        result = PerformanceCollector._collapse_harmony_bundles(rows)
+        assert result == [(300, "com.huawei.it.works")]
+
+    def test_collapse_keeps_non_bundle_names(self):
+        """冒号前缀不含点号或含斜杠的进程不归组。"""
+        rows = [
+            (1, "kworker/0:1"),
+            (2, "init:zygote"),
+        ]
+        result = PerformanceCollector._collapse_harmony_bundles(rows)
+        assert result == rows
+
+    def test_bundle_base_normalizes_subprocess_package(self):
+        """传入子进程名时归一为包名（-PKG 兜底）。"""
+        base = PerformanceCollector._harmony_bundle_base(
+            "com.huawei.it.works:Native_libadapter0"
+        )
+        assert base == "com.huawei.it.works"

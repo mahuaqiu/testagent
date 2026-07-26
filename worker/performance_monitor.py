@@ -299,6 +299,9 @@ class PerformanceCollector:
                 if request.target_processes
                 else None
             )
+            # 兜底归一：若传入「包名:子进程」则取包名，SP_daemon -PKG 仅认包名。
+            if package:
+                package = self._harmony_bundle_base(package)
             backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
             backend.start(
                 interval=float(request.interval),
@@ -913,6 +916,10 @@ class PerformanceCollector:
                 raise ValueError("鸿蒙进程列表必须提供 device_sn（HDC UDID）")
             hdc_path = getattr(self, "_hdc_path", None)
             all_processes = PerfharmonyBackend(udid=device_sn, hdc_path=hdc_path).list_processes(search)
+            # ps -ef 是进程粒度，同一应用会出现主进程 + 「包名:子进程」多行；
+            # SP_daemon -PKG 按包名采集时已含全部子进程，选择器应展示应用粒度，
+            # 归组规则与 Rust bundle_base_name 一致：冒号前缀含点号且不含斜杠才视为包名。
+            all_processes = self._collapse_harmony_bundles(all_processes)
         else:
             raise ValueError(f"不支持的性能采集设备类型: {device_type}")
 
@@ -933,6 +940,39 @@ class PerformanceCollector:
             ))
 
         return process_list
+
+    @staticmethod
+    def _harmony_bundle_base(name: str) -> str:
+        """取鸿蒙进程名的包名部分（与 Rust bundle_base_name 语义对齐）。
+
+        「包名:子进程」形式且冒号前缀含点号、不含斜杠时返回包名，
+        否则原样返回（内核线程/系统进程不归组）。
+        """
+        base, sep, _ = name.partition(":")
+        if sep and "." in base and "/" not in base:
+            return base
+        return name
+
+    @classmethod
+    def _collapse_harmony_bundles(
+        cls, processes: list[tuple[int, str]]
+    ) -> list[tuple[int, str]]:
+        """将 ps -ef 进程行按包名归组为应用粒度。
+
+        同一包名只保留一行：PID 优先取主进程（进程名恰为包名），
+        无主进程行时取首个子进程 PID；保持首次出现的顺序。
+        """
+        order: list[str] = []
+        chosen: dict[str, tuple[int, bool]] = {}  # base -> (pid, 是否主进程)
+        for pid, name in processes:
+            base = cls._harmony_bundle_base(name)
+            is_main = name == base
+            if base not in chosen:
+                order.append(base)
+                chosen[base] = (pid, is_main)
+            elif is_main and not chosen[base][1]:
+                chosen[base] = (pid, True)
+        return [(chosen[base][0], base) for base in order]
 
 
 # 设备采集器管理（全局单例）
