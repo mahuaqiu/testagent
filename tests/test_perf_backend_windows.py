@@ -236,14 +236,12 @@ class TestPerfharmonyBackend:
                 backend.start(
                     interval=2.0,
                     duration=60.0,
-                    process_filter=None,
-                    top_n_cpu=None,
-                    top_n_gpu=None,
-                    enable_aggregation=True,
+                    package="com.example.app",
                 )
             mock_perfharmony.Monitor.assert_called_once()
             assert mock_perfharmony.Monitor.call_args.kwargs["udid"] == "HDC-UDID-001"
             assert mock_perfharmony.Monitor.call_args.kwargs["hdc_path"] == "tools/hdc/hdc.exe"
+            assert mock_perfharmony.Monitor.call_args.kwargs["package"] == "com.example.app"
         finally:
             if original_perfwin is not None:
                 sys.modules["perfwin"] = original_perfwin
@@ -261,8 +259,6 @@ class TestHarmonyCollector:
         """平台设备 ID 与 HDC UDID 不相等时仍使用 HDC UDID 启动。"""
         mock_monitor = _make_mock_monitor()
         mock_perfharmony = MagicMock()
-        mock_filter = MagicMock()
-        mock_perfharmony.ProcessFilter.return_value = mock_filter
         mock_perfharmony.Monitor.return_value = mock_monitor
         request = CollectStartRequest(
             collect_id="harmony-001",
@@ -277,6 +273,8 @@ class TestHarmonyCollector:
             result = collector.start_collect(request)
         assert result["status"] == "started"
         assert mock_perfharmony.Monitor.call_args.kwargs["udid"] == "HDC-UDID-001"
+        # 0.2.0：目标应用以 package 包名传入 SP_daemon -PKG
+        assert mock_perfharmony.Monitor.call_args.kwargs["package"] == "com.example.app"
         collector.stop_collect()
 
     def test_harmony_sample_dict_is_converted(self):
@@ -325,8 +323,8 @@ class TestHarmonyCollector:
         assert result["status"] == "error"
         assert "device_sn" in result["message"]
 
-    def test_harmony_empty_targets_do_not_create_empty_process_filter(self):
-        """鸿蒙空目标列表只采系统指标，不构造空 ProcessFilter。"""
+    def test_harmony_empty_targets_collect_system_only(self):
+        """鸿蒙空目标列表只采系统指标，package 为 None。"""
         mock_monitor = _make_mock_monitor()
         mock_perfharmony = MagicMock()
         mock_perfharmony.Monitor.return_value = mock_monitor
@@ -342,8 +340,45 @@ class TestHarmonyCollector:
         with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
             result = collector.start_collect(request)
         assert result["status"] == "started"
-        assert mock_perfharmony.Monitor.call_args.kwargs["process_filter"] is None
+        assert mock_perfharmony.Monitor.call_args.kwargs["package"] is None
         collector.stop_collect()
+
+    def test_harmony_rejects_multiple_target_apps(self):
+        """0.2.0：鸿蒙一次采集仅支持一个应用。"""
+        mock_perfharmony = MagicMock()
+        request = CollectStartRequest(
+            collect_id="harmony-multi-app",
+            interval=2,
+            timeout=60,
+            target_processes=[
+                TargetProcess(name="com.example.app"),
+                TargetProcess(name="com.example.other"),
+            ],
+            device_type="harmony_mobile",
+            device_sn="HDC-UDID-001",
+        )
+        collector = PerformanceCollector("env-machine-id")
+        with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+            result = collector.start_collect(request)
+        assert result["status"] == "error"
+        assert "一个应用" in result["message"]
+
+    def test_harmony_rejects_pid_filter(self):
+        """0.2.0：鸿蒙不支持按 PID 筛选。"""
+        mock_perfharmony = MagicMock()
+        request = CollectStartRequest(
+            collect_id="harmony-pid-filter",
+            interval=2,
+            timeout=60,
+            target_processes=[TargetProcess(name="com.example.app", pids=[123])],
+            device_type="harmony_pc",
+            device_sn="HDC-UDID-001",
+        )
+        collector = PerformanceCollector("env-machine-id")
+        with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
+            result = collector.start_collect(request)
+        assert result["status"] == "error"
+        assert "PID" in result["message"]
 
     def test_backend_error_is_reported_as_failed_not_timeout(self):
         """后端因设备错误自停时应上报 failed，而不是 timed_out。"""

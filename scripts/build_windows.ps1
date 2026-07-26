@@ -4,7 +4,7 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
-    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.1.4-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
+    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.2.0-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
     [switch]$Clean,
     [switch]$BuildInstaller
@@ -253,7 +253,7 @@ Copy-Item -Path "$ProjectRoot\tools" -Destination "$PackageDir\tools" -Recurse -
 # Verify the bundled Harmony module can be imported with the matching CPython ABI.
 $oldPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$PackageDir;$PackageDir\perfharmony"
-& "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '0.1.4'; print('perfharmony import smoke test passed')"
+& "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '0.2.0'; print('perfharmony import smoke test passed')"
 $smokeExit = $LASTEXITCODE
 $env:PYTHONPATH = $oldPythonPath
 if ($smokeExit -ne 0) {

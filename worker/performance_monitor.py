@@ -285,17 +285,34 @@ class PerformanceCollector:
         if device_type is None:
             raise ValueError("性能采集内部请求缺少 device_type")
 
-        if device_type in ("harmony_pc", "harmony_mobile") and not request.device_sn:
-            raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+        # 鸿蒙 0.2.0：SP_daemon 唯一数据源，-PKG 单应用采集（含子进程），
+        # 不再支持 ProcessFilter/多应用/PID 筛选。
+        if device_type in ("harmony_pc", "harmony_mobile"):
+            if not request.device_sn:
+                raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+            if len(request.target_processes) > 1:
+                raise ValueError("鸿蒙采集一次仅支持一个应用（SP_daemon 单应用限制）")
+            if any(tp.pids for tp in request.target_processes):
+                raise ValueError("鸿蒙采集不支持按 PID 筛选，请传应用包名")
+            package = (
+                request.target_processes[0].name.strip()
+                if request.target_processes
+                else None
+            )
+            backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
+            backend.start(
+                interval=float(request.interval),
+                duration=float(request.timeout),
+                package=package or None,
+            )
+            self._backend = backend
+            return
 
-        if device_type == "windows":
-            backend_module = __import__("perfwin")
-            filter_type = backend_module.ProcessFilter
-        elif device_type in ("harmony_pc", "harmony_mobile"):
-            backend_module = __import__("perfharmony")
-            filter_type = backend_module.ProcessFilter
-        else:
+        if device_type != "windows":
             raise ValueError(f"不支持的性能采集设备类型: {device_type}")
+
+        backend_module = __import__("perfwin")
+        filter_type = backend_module.ProcessFilter
 
         # 根据 target_processes 构建 ProcessFilter（不支持混合模式）
         all_have_pids = bool(request.target_processes) and all(tp.pids for tp in request.target_processes)
@@ -315,28 +332,14 @@ class PerformanceCollector:
             names = [tp.name for tp in request.target_processes]
             process_filter = filter_type(names=names) if names else None
 
-        # 按设备类型选择后端，鸿蒙永远使用 device_sn，不把 URL 中的 device_id 当 UDID。
-        if device_type == "windows":
-            backend = PerfwinBackend()
-            extra_kwargs: dict[str, Any] = {}
-        else:
-            backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
-            # 鸿蒙真机已验证 /proc/net/dev、hidumper --cpufreq/--storage <pid> 可用，
-            # GPU/温度/功耗在非 root shell 无权限，保持默认关闭。
-            extra_kwargs = {
-                "enable_network": True,
-                "enable_cpu_freq": True,
-                "enable_disk_io": True,
-            }
+        backend = PerfwinBackend()
         backend.start(
             interval=float(request.interval),
             duration=float(request.timeout),
             process_filter=process_filter,
-            # Harmony PC 已确认单次 top 可返回全量进程；Mobile 仍待真机冻结。
-            top_n_cpu=10 if device_type in ("windows", "harmony_pc") else None,
-            top_n_gpu=10 if device_type == "windows" else None,
+            top_n_cpu=10,
+            top_n_gpu=10,
             enable_aggregation=True,
-            **extra_kwargs,
         )
         self._backend = backend
 

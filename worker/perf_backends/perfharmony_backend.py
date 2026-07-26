@@ -39,28 +39,20 @@ class PerfharmonyBackend:
         *,
         interval: float,
         duration: float | None,
-        process_filter: Any,
-        top_n_cpu: int | None,
-        top_n_gpu: int | None,
-        enable_aggregation: bool,
-        enable_network: bool = False,
-        enable_cpu_freq: bool = False,
-        enable_disk_io: bool = False,
+        package: str | None = None,
     ) -> None:
-        """创建并启动 Harmony Monitor。"""
+        """创建并启动 Harmony Monitor。
+
+        0.2.0：唯一数据源 SP_daemon，指标白名单制无逐项开关；
+        一次采集限一个应用（-PKG 包名，含主进程+子进程）。
+        """
         perfharmony = self._module()
         self._monitor = perfharmony.Monitor(
             udid=self.udid,
             hdc_path=self.hdc_path,
             interval=interval,
             duration=duration,
-            process_filter=process_filter,
-            top_n_cpu=top_n_cpu,
-            top_n_gpu=top_n_gpu,
-            enable_aggregation=enable_aggregation,
-            enable_network=enable_network,
-            enable_cpu_freq=enable_cpu_freq,
-            enable_disk_io=enable_disk_io,
+            package=package,
         )
         self._monitor.start()
 
