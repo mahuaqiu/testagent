@@ -363,7 +363,9 @@
       "PowerShell(Get-ChildItem \"D:\\\\code\\\\developtools\" -Force | Select-Object Name, Mode, Length; Write-Host \"====\"; Get-ChildItem \"D:\\\\code\\\\developtools\" -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host \"`n### $\\($_.FullName\\)\"; Get-ChildItem $_.FullName -Force | Select-Object Name, Mode | Format-Table -AutoSize })",
       "Bash(Get-ChildItem -Path \"worker\" -Directory)",
       "Bash(Select-Object Name)",
-      "Skill(code-review)"
+      "Skill(code-review)",
+      "PowerShell(cargo test *)",
+      "Bash(cargo test *)"
     ]
   }
 }
