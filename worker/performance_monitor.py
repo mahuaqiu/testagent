@@ -318,8 +318,16 @@ class PerformanceCollector:
         # 按设备类型选择后端，鸿蒙永远使用 device_sn，不把 URL 中的 device_id 当 UDID。
         if device_type == "windows":
             backend = PerfwinBackend()
+            extra_kwargs: dict[str, Any] = {}
         else:
             backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
+            # 鸿蒙真机已验证 /proc/net/dev、hidumper --cpufreq/--storage <pid> 可用，
+            # GPU/温度/功耗在非 root shell 无权限，保持默认关闭。
+            extra_kwargs = {
+                "enable_network": True,
+                "enable_cpu_freq": True,
+                "enable_disk_io": True,
+            }
         backend.start(
             interval=float(request.interval),
             duration=float(request.timeout),
@@ -328,6 +336,7 @@ class PerformanceCollector:
             top_n_cpu=10 if device_type in ("windows", "harmony_pc") else None,
             top_n_gpu=10 if device_type == "windows" else None,
             enable_aggregation=True,
+            **extra_kwargs,
         )
         self._backend = backend
 

@@ -43,6 +43,9 @@ class PerfharmonyBackend:
         top_n_cpu: int | None,
         top_n_gpu: int | None,
         enable_aggregation: bool,
+        enable_network: bool = False,
+        enable_cpu_freq: bool = False,
+        enable_disk_io: bool = False,
     ) -> None:
         """创建并启动 Harmony Monitor。"""
         perfharmony = self._module()
@@ -55,6 +58,9 @@ class PerfharmonyBackend:
             top_n_cpu=top_n_cpu,
             top_n_gpu=top_n_gpu,
             enable_aggregation=enable_aggregation,
+            enable_network=enable_network,
+            enable_cpu_freq=enable_cpu_freq,
+            enable_disk_io=enable_disk_io,
         )
         self._monitor.start()
 
