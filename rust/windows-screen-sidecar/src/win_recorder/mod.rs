@@ -13,7 +13,10 @@ mod watermark;
 
 pub use error::RecorderError;
 pub use h264_encoder::{EncodedFrame, FrameType, H264Encoder};
-pub use logical_time::{frame_index_to_pts_100ns, sample_timing_for_frame_index};
+pub use logical_time::{
+    frame_duration_100ns, frame_index_to_pts_100ns, local_hms_ms_from_pts_100ns,
+    next_sample_timing, now_as_pts_100ns, sample_timing_for_frame_index, SampleTimingState,
+};
 pub use recorder::WinRecorder;
 
 /// 全局 Media Foundation 初始化
