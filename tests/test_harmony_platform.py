@@ -12,6 +12,8 @@ from worker.platforms.harmony_hdc import (
     HdcCommandError,
     HarmonyHdcWrapper,
     classify_harmony_device,
+    parse_harmony_display_size,
+    parse_harmony_screen_state,
 )
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.config import PlatformConfig, WorkerConfig
@@ -29,6 +31,7 @@ mobile-001 USB Ready hdc
 pc-001 TCP Ready hdc
 offline-001 USB Offline hdc
 unauthorized-001 USB Unauthorized hdc
+3QC0124A10000066\t\tUSB\tConnected\tlocalhost\thdc
 """
 
     targets = harmony_hdc.parse_target_lines(output)
@@ -38,7 +41,15 @@ unauthorized-001 USB Unauthorized hdc
         ("pc-001", "TCP", "Ready"),
         ("offline-001", "USB", "Offline"),
         ("unauthorized-001", "USB", "Unauthorized"),
+        ("3QC0124A10000066", "USB", "Connected"),
     ]
+
+
+def test_hdc_target_treats_connected_as_ready() -> None:
+    # 真机（华为 MateBook 2in1）状态列为 Connected，必须视为可用
+    assert harmony_hdc.HdcTarget(udid="a", status="Connected").is_ready
+    assert harmony_hdc.HdcTarget(udid="a", status="Ready").is_ready
+    assert not harmony_hdc.HdcTarget(udid="a", status="Offline").is_ready
 
 
 def test_list_target_info_filters_non_ready_targets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,12 +58,18 @@ def test_list_target_info_filters_non_ready_targets(monkeypatch: pytest.MonkeyPa
         harmony_hdc,
         "_execute_hdc_command",
         lambda *args, **kwargs: CommandResult(
-            "ready-001 USB Ready\noffline-001 USB Offline\n", "", 0
+            "ready-001 USB Ready\n"
+            "offline-001 USB Offline\n"
+            "connected-001 USB Connected\n"
+            "COM1 UART Ready\n",
+            "",
+            0,
         ),
     )
 
     assert [target.udid for target in harmony_hdc.list_target_info("configured-hdc.exe")] == [
-        "ready-001"
+        "ready-001",
+        "connected-001",
     ]
 
 
@@ -141,11 +158,89 @@ def test_harmony_keycodes_have_single_correct_direction_mapping() -> None:
     assert [HARMONY_KEY_MAP[key] for key in ("DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT", "DPAD_CENTER")] == [2012, 2013, 2014, 2015, 2016]
 
 
+def test_shell_passes_bare_command_without_wrapping_quotes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 真机回归：shell() 手工包裹的双引号会透传到设备端，
+    # /bin/sh 把整段字符串当单个命令名报 inaccessible or not found，
+    # 导致 device_category/display_size 全部失败、设备不入池。
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    executed: list[list[str]] = []
+    monkeypatch.setattr(
+        wrapper,
+        "_execute",
+        lambda args, timeout=30: executed.append(args) or CommandResult("ok", "", 0),
+    )
+
+    wrapper.shell("param get const.product.devicetype")
+    wrapper.shell("hidumper -s 10 -a screen")
+    # 旧调用方若自带包裹引号，剥掉后再传递
+    wrapper.shell('"param get const.product.model"')
+
+    assert executed == [
+        ["shell", "param get const.product.devicetype"],
+        ["shell", "hidumper -s 10 -a screen"],
+        ["shell", "param get const.product.model"],
+    ]
+
+
 def test_harmony_device_classification_uses_exact_property_values() -> None:
     assert classify_harmony_device({"const.product.type": "tablet"}) == "mobile"
     assert classify_harmony_device({"const.product.device_type": "desktop"}) == "pc"
     assert classify_harmony_device({"const.product.name": "my-pc-phone-shell"}) == "unknown"
     assert classify_harmony_device({"const.product.type": "smartphone-pro"}) == "unknown"
+    # 真机（华为 MateBook Pro）只有 const.product.devicetype=2in1
+    assert classify_harmony_device({"const.product.devicetype": "2in1"}) == "pc"
+    assert classify_harmony_device({"const.product.devicetype": "phone"}) == "mobile"
+
+
+def test_harmony_device_category_reads_real_pc_property_and_skips_missing_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    outputs = {
+        "param get const.product.devicetype": "2in1\n",
+        "param get const.product.type": "[Fail]Get parameter fail! errNum is:106\n",
+        "param get const.product.device_type": "[Fail]Get parameter fail! errNum is:106\n",
+        "param get const.product.form": "[Fail]Get parameter fail! errNum is:106\n",
+        "param get const.product.family": "[Fail]Get parameter fail! errNum is:106\n",
+    }
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command: CommandResult(outputs[command], "", 0),
+    )
+
+    assert wrapper.device_category() == "pc"
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("width: 3120, height: 2080", (3120, 2080)),
+        ("screenWidth=3120\nscreenHeight=2080", (3120, 2080)),
+        ("Display 0: 3120x2080", (3120, 2080)),
+        ("resolution: 3120 * 2080", (3120, 2080)),
+        ("bounds: [0, 0, 3120, 2080]", (3120, 2080)),
+        ("no display metrics", (0, 0)),
+    ],
+)
+def test_harmony_display_size_accepts_realistic_hidumper_formats(
+    output: str, expected: tuple[int, int]
+) -> None:
+    assert parse_harmony_display_size(output) == expected
+
+
+def test_harmony_display_and_state_parse_real_had_w32_output() -> None:
+    output = (
+        "screen[0]: id=0, powerStatus=POWER_STATUS_ON, "
+        "screenType=EXTERNAL_TYPE, render resolution=3120x2080, "
+        "physical resolution=3120x2080, isVirtual=false"
+    )
+
+    assert parse_harmony_display_size(output) == (3120, 2080)
+    assert parse_harmony_screen_state(output) == "AWAKE"
+    assert parse_harmony_screen_state("powerStatus=POWER_STATUS_OFF") == "SLEEP"
 
 
 def test_harmony_input_action_uses_located_coordinates() -> None:

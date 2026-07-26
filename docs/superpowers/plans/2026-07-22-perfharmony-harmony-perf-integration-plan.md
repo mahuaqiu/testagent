@@ -52,7 +52,7 @@
 
 | # | 问题 | 影响范围 | 状态 |
 |---|------|----------|------|
-| ISSUE-001 | **批量全量 CPU 快照可行性待验证**：当前无真实设备，无法确认鸿蒙是否有单次命令获取全量进程 CPU 的方式（如 `top -n 1` 或 `hidumper -p` 格式）。如不可行且单轮超出 6 次 shell 预算，则 TopN 功能降级为 P2 可选，首期仅采目标进程，不提供 TopN。 | Task 0 Step 3、Task 4 Step 2、Task 5 TopN | ⏳ 待真机验证 |
+| ISSUE-001 | **批量全量 CPU 快照可行性**：Harmony PC 真机已确认 `top -n 1 -b` 可在单次命令返回全量进程 CPU；Harmony Mobile 仍需单独验证。 | Task 0 Step 3、Task 4 Step 2、Task 5 TopN | 🟡 PC 已验证，Mobile 待验证 |
 
 > **ISSUE-001 解决方案**（真机到位后执行）：
 > ```bat
@@ -128,13 +128,13 @@ D:\code\zq-platform\
 - Worker 以 `DeviceRegistry.get(device_type, device_sn)` 验证在线状态；不匹配、离线或不支持时返回 4xx，绝不回退为 perfwin。
 - CPU 全部按整机容量归一化为 `[0,100]`，记录逻辑 CPU 数/来源。
 
-- [ ] **Step 1: 获取 PC 和 Mobile 的 P0 真机输出并归档（真机依赖）**
+- [ ] **Step 1: 获取 PC 和 Mobile 的 P0 真机输出并归档（PC 已完成，Mobile 待完成）**
 
 每个设备至少归档：`hdc list targets -v`、`param get const.product.type`、`hidumper -h`、`hidumper --cpuusage`、`hidumper --mem`、`ps -ef`、`cat /proc/stat`、`cat /proc/meminfo`，以及目标应用运行前后两次 CPU 快照。
 
 - [x] **Step 2: 在 command-contract.md 固化命令、样例、解析器、字段、权限和 CPU 归一化规则（离线文档完成；真实样例和语义仍为真机依赖）**
 
-- [ ] **Step 3: 决定批量全量 CPU 快照命令（真机依赖）**
+- [ ] **Step 3: 决定批量全量 CPU 快照命令（PC 已确认 `top -n 1 -b`，Mobile 待确认）**
 
 必须能在有限 HDC 往返内获得全量进程 CPU；不能做到则首期不提供 TopN，只采目标进程。
 
@@ -174,7 +174,7 @@ Set-Location D:\code\perfharmony
 git init
 ```
 
-- [ ] **Step 1.1: 将 Task 0 已评审的命令样例复制到新仓 fixtures，并保留来源说明与设备版本指纹（真机依赖；已创建归档目录）**
+- [ ] **Step 1.1: 将 Task 0 已评审的命令样例复制到新仓 fixtures，并保留来源说明与设备版本指纹（PC 已完成，Mobile 待完成）**
 
 - [x] **Step 2: 写 `Cargo.toml`**
 
@@ -397,13 +397,13 @@ git commit -m "feat: add HdcClient and list targets"
 - 内存系统：`MemTotal/MemFree/MemAvailable` 同 hidebug 注释。
 - 进程内存：`hidumper --mem <pid>` 解析（参考 SmartPerf `GetPssRamInfo` 字段名 pss 等；fixture 用合成文本）。
 
-- [ ] **Step 1: 接入 Task 0 的 PC/Mobile 真实 P0 fixtures，并补合成边界 fixtures（真机依赖；合成 fixture 已完成）**
+- [ ] **Step 1: 接入 Task 0 的 PC/Mobile 真实 P0 fixtures，并补合成边界 fixtures（PC 已完成并建立契约测试，Mobile 待完成）**
 
 `proc_stat.txt` 两段（t0/t1）写在 `proc_stat_t0.txt` / `proc_stat_t1.txt`。
 
 `proc_net_dev.txt` 含 wlan0/eth0/lo。
 
-- [x] **Step 2: 为每个 parse 写测试（合成 fixture 已完成，真实 fixture 待真机）**
+- [x] **Step 2: 为每个 parse 写测试（合成 fixture 与 Harmony PC 真机 fixture 已完成，Mobile 待补）**
 
 ```rust
 #[test]

@@ -120,11 +120,11 @@ Section Uninstall
   nsExec::Exec $1
   Pop $0
 
-  ; PowerShell: kill ios, adb, ffmpeg by install path (use nsExec for synchronous execution)
+  ; PowerShell: kill ios, adb, ffmpeg, hdc by install path (use nsExec for synchronous execution)
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"
   StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg,hdc -ErrorAction SilentlyContinue; "
   StrCpy $1 "$1foreach ($$x in $$p) { "
   StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
   StrCpy $1 "$1    $$x.Kill() "
@@ -174,12 +174,12 @@ Function KillProcessesAndCleanup
   StrCpy $2 "$INSTDIR"
   StrCpy $3 "$2\"  ; Add trailing separator
 
-  ; 3. PowerShell: kill ios, adb, ffmpeg by install path
+  ; 3. PowerShell: kill ios, adb, ffmpeg, hdc by install path
   ; Use nsExec::ExecToStack for synchronous execution (wait for completion, hide window)
   ; Build command in segments: double-quote for NSIS var expansion, $$ for PowerShell $
   DetailPrint "Killing device service processes..."
   StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg,hdc -ErrorAction SilentlyContinue; "
   StrCpy $1 "$1foreach ($$x in $$p) { "
   StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
   StrCpy $1 "$1    $$x.Kill() "

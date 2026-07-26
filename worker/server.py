@@ -232,14 +232,13 @@ def _resolve_performance_hdc_path(device_type: str) -> str | None:
     """把配置中的 HDC 路径解析成可执行文件。
 
     配置可能是 hdc.exe、tools/hdc 相对路径或 SDK 根目录；性能采集不能把
-    未解析的目录字符串直接交给 perfharmony。
+    未解析的目录字符串直接交给 perfharmony。未配置时由 _find_hdc_path
+    自动搜索 tools/hdc 兜底。
     """
     if not worker or not worker.config:
         return _find_hdc_path(None)
 
     configured = worker.config.get_platform_config(device_type).get("hdc_path")
-    if not configured:
-        configured = worker.config.get_platform_config("harmony").get("hdc_path")
     return _find_hdc_path(configured)
 
 

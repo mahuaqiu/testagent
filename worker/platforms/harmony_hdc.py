@@ -29,6 +29,7 @@ def classify_harmony_device(properties: Dict[str, str]) -> str:
     mobile_values = {"phone", "tablet", "watch", "wearable", "mobile"}
     pc_values = {"pc", "desktop", "laptop", "notebook", "computer", "2in1", "2-in-1"}
     for key in (
+        "const.product.devicetype",
         "const.product.type",
         "const.product.device_type",
         "const.product.form",
@@ -40,6 +41,39 @@ def classify_harmony_device(properties: Dict[str, str]) -> str:
         if value in pc_values:
             return "pc"
     return "unknown"
+
+
+def parse_harmony_display_size(output: str) -> Tuple[int, int]:
+    """从不同版本的 hidumper 窗口信息中解析屏幕宽高。"""
+    patterns = (
+        r"(?:screen)?width\s*[:=]\s*(\d+).*?(?:screen)?height\s*[:=]\s*(\d+)",
+        r"(?:resolution|display(?:\s+\d+)?)?\s*[:=]?\s*(\d+)\s*[xX*×]\s*(\d+)",
+        r"(?:bounds|rect)\s*[:=]\s*[\[(]\s*0\s*[, ]+\s*0\s*[, ]+\s*(\d+)\s*[, ]+\s*(\d+)\s*[\])]",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, output, re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        width, height = int(match.group(1)), int(match.group(2))
+        if width > 0 and height > 0:
+            return (width, height)
+    return (0, 0)
+
+
+def parse_harmony_screen_state(output: str) -> str:
+    """解析 RenderService screen 输出中的屏幕电源状态。"""
+    match = re.search(r"powerStatus\s*=\s*POWER_STATUS_([A-Z_]+)", output, re.IGNORECASE)
+    if match:
+        state = match.group(1).upper()
+        if state == "ON":
+            return "AWAKE"
+        if state == "OFF":
+            return "SLEEP"
+    upper = output.upper()
+    for state in ("AWAKE", "INACTIVE", "SLEEP"):
+        if state in upper:
+            return state
+    return "UNKNOWN"
 
 
 # ============================================================================
@@ -67,8 +101,12 @@ class HdcTarget:
 
     @property
     def is_ready(self) -> bool:
-        """判断 target 是否处于可执行状态。"""
-        return self.status.lower() == "ready"
+        """判断 target 是否处于可执行状态。
+
+        真机 HDC 输出的状态列是 Connected（如华为 MateBook 2in1），
+        部分版本/模拟器是 Ready，两者都视为可用。
+        """
+        return self.status.lower() in {"ready", "connected"}
 
 
 class HarmonyError(Exception):
@@ -277,7 +315,7 @@ def parse_target_lines(output: str) -> List[HdcTarget]:
 
 
 def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
-    """列出 Ready 状态的 HDC target。"""
+    """列出可用状态的 HDC target（排除 UART 串口，避免把 COM 口当设备）。"""
     hdc_path = _find_hdc_path(hdc_path)
     if hdc_path is None:
         raise HdcCommandError("未找到 HDC 工具")
@@ -288,7 +326,11 @@ def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
     )
     if result.exit_code != 0 or _has_error_text(result, include_device_states=False):
         raise HdcCommandError(f"HDC 列出设备失败: {result.error or result.output}")
-    return [target for target in parse_target_lines(result.output) if target.is_ready]
+    return [
+        target
+        for target in parse_target_lines(result.output)
+        if target.is_ready and target.connection_type.upper() != "UART"
+    ]
 
 
 def list_devices(hdc_path: Optional[str] = None) -> List[str]:
@@ -413,14 +455,16 @@ class HarmonyHdcWrapper:
             CommandResult: 命令执行结果
 
         Note:
-            命令会自动用双引号包裹，确保正确执行。
+            命令作为单个 list 参数交给 subprocess，不能手工包裹双引号。
+            Windows 下 list2cmdline 会自动加引号且被 hdc.exe 的 C runtime
+            消费；若再手工包一层，literal 引号会透传到设备端，导致
+            /bin/sh 把整段字符串当成单个命令名（inaccessible or not found）。
         """
-        # HDC 在 Windows 下需要把完整 shell 命令作为一个参数传递。
-        # 同时转义命令内部的双引号，避免设备端命令被截断。
         if not cmd:
             return CommandResult("", "Empty command", -1)
-        if not (cmd.startswith('"') and cmd.endswith('"')):
-            cmd = f'"{cmd.replace(chr(34), chr(92) + chr(34))}"'
+        # 兼容旧调用方：如果调用方已经把整条命令包了双引号，剥掉它。
+        if len(cmd) >= 2 and cmd.startswith('"') and cmd.endswith('"'):
+            cmd = cmd[1:-1].replace(chr(92) + chr(34), chr(34))
 
         result = self._execute(["shell", cmd], timeout)
 
@@ -668,14 +712,17 @@ class HarmonyHdcWrapper:
         """根据系统属性判断设备形态，无法确认时返回 unknown。"""
         properties: Dict[str, str] = {}
         for key in (
+            "const.product.devicetype",
             "const.product.type",
             "const.product.device_type",
             "const.product.form",
             "const.product.family",
         ):
             result = self.shell(f"param get {key}")
-            if result.exit_code == 0 and result.output.strip():
-                properties[key] = result.output.strip()
+            value = result.output.strip()
+            # param get 对不存在的键返回 exit_code=0 + 失败文案（errNum 106），需要跳过
+            if result.exit_code == 0 and value and "fail" not in value.lower():
+                properties[key] = value
         return classify_harmony_device(properties)
 
     # ========================================================================
@@ -742,22 +789,13 @@ class HarmonyHdcWrapper:
                 - "INACTIVE": 屏幕变暗但未关闭
                 - "SLEEP": 屏幕关闭
         """
-        result = self.shell("hidumper -s 10", timeout=10)
+        result = self.shell("hidumper -s 10 -a screen", timeout=10)
 
         if result.exit_code != 0:
             logger.warning(f"获取屏幕状态失败: {result.error}")
             return "UNKNOWN"
 
-        # 解析输出，查找屏幕状态
-        output = result.output.upper()
-        if "AWAKE" in output:
-            return "AWAKE"
-        elif "INACTIVE" in output:
-            return "INACTIVE"
-        elif "SLEEP" in output:
-            return "SLEEP"
-        else:
-            return "UNKNOWN"
+        return parse_harmony_screen_state(result.output)
 
     def is_screen_on(self) -> bool:
         """
@@ -780,27 +818,17 @@ class HarmonyHdcWrapper:
         Returns:
             Tuple[int, int]: (宽度, 高度)
         """
-        result = self.shell("hidumper -s 10", timeout=10)
+        result = self.shell("hidumper -s 10 -a screen", timeout=10)
 
         if result.exit_code != 0:
             logger.warning(f"获取屏幕分辨率失败: {result.error}")
             return (0, 0)
 
-        # 解析输出，查找分辨率信息
-        # 格式示例: "width: 1080, height: 1920" 或 "Display 0: 1080x1920"
-        output = result.output
+        size = parse_harmony_display_size(result.output)
+        if size != (0, 0):
+            return size
 
-        # 尝试匹配 "width: X, height: Y" 格式
-        match = re.search(r"width:\s*(\d+).*height:\s*(\d+)", output, re.IGNORECASE)
-        if match:
-            return (int(match.group(1)), int(match.group(2)))
-
-        # 尝试匹配 "XxY" 格式
-        match = re.search(r"(\d+)\s*x\s*(\d+)", output)
-        if match:
-            return (int(match.group(1)), int(match.group(2)))
-
-        logger.warning("未能解析屏幕分辨率")
+        logger.warning("未能解析屏幕分辨率，保留未知值但不影响设备入池")
         return (0, 0)
 
     def model(self) -> str:

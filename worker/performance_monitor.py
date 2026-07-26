@@ -324,8 +324,8 @@ class PerformanceCollector:
             interval=float(request.interval),
             duration=float(request.timeout),
             process_filter=process_filter,
-            # 鸿蒙批量 CPU/GPU 输出尚未经过 PC/Mobile 真机冻结，先关闭 TopN。
-            top_n_cpu=10 if device_type == "windows" else None,
+            # Harmony PC 已确认单次 top 可返回全量进程；Mobile 仍待真机冻结。
+            top_n_cpu=10 if device_type in ("windows", "harmony_pc") else None,
             top_n_gpu=10 if device_type == "windows" else None,
             enable_aggregation=True,
         )

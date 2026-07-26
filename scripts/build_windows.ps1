@@ -4,7 +4,7 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
-    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.1.0-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
+    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.1.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
     [switch]$Clean,
     [switch]$BuildInstaller
@@ -82,19 +82,17 @@ if ($PerfwinWheel -ne "" -and (Test-Path $PerfwinWheel)) {
 }
 
 # 安装 perfharmony wheel；构建环境包含 Harmony 性能采集能力。
-$PerfharmonyInstalled = $false
 if ($PerfharmonyWheel -ne "" -and (Test-Path $PerfharmonyWheel)) {
     Write-Host "  Installing perfharmony wheel: $PerfharmonyWheel"
     & $VenvPip install $PerfharmonyWheel
-    if ($LASTEXITCODE -eq 0) {
-        $PerfharmonyInstalled = $true
-    } else {
+    if ($LASTEXITCODE -ne 0) {
         Write-Error "perfharmony wheel install failed"
         exit 1
     }
 } else {
-    Write-Warning "perfharmony wheel not found at: $PerfharmonyWheel"
-    Write-Warning "Harmony performance collection will not be included in this build"
+    Write-Error "perfharmony wheel not found at: $PerfharmonyWheel"
+    Write-Error "Build the matching CPython wheel before packaging the Worker"
+    exit 1
 }
 
 # Install win-control wheel
@@ -161,6 +159,8 @@ $nuitkaArgs = @(
     "--include-data-dir=tools=tools"
     "--enable-plugin=pyqt5"
     "--include-package-data=perfwin"
+    "--include-package=perfharmony"
+    "--include-package-data=perfharmony"
     "--include-package-data=win_control"
     # uiautomator2 assets (u2.jar, app-uiautomator.apk)
     "--include-package-data=uiautomator2"
@@ -218,12 +218,6 @@ $nuitkaArgs = @(
     "--show-progress"
 )
 
-# 只有安装了 wheel 才让 Nuitka 收集 perfharmony，避免旧 Windows 构建被阻断。
-if ($PerfharmonyInstalled) {
-    $nuitkaArgs += "--include-package=perfharmony"
-    $nuitkaArgs += "--include-package-data=perfharmony"
-}
-
 & $VenvPython -m nuitka $nuitkaArgs
 
 if ($LASTEXITCODE -ne 0) {
@@ -257,16 +251,14 @@ if (Test-Path "$PackageDir\tools") { Remove-Item -Recurse -Force "$PackageDir\to
 Copy-Item -Path "$ProjectRoot\tools" -Destination "$PackageDir\tools" -Recurse -Force
 
 # Verify the bundled Harmony module can be imported with the matching CPython ABI.
-if ($PerfharmonyInstalled) {
-    $oldPythonPath = $env:PYTHONPATH
-    $env:PYTHONPATH = "$PackageDir;$PackageDir\perfharmony"
-    & "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '0.1.0'; print('perfharmony import smoke test passed')"
-    $smokeExit = $LASTEXITCODE
-    $env:PYTHONPATH = $oldPythonPath
-    if ($smokeExit -ne 0) {
-        Write-Error "Bundled perfharmony import smoke test failed"
-        exit 1
-    }
+$oldPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = "$PackageDir;$PackageDir\perfharmony"
+& "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '0.1.2'; print('perfharmony import smoke test passed')"
+$smokeExit = $LASTEXITCODE
+$env:PYTHONPATH = $oldPythonPath
+if ($smokeExit -ne 0) {
+    Write-Error "Bundled perfharmony import smoke test failed"
+    exit 1
 }
 
 # Also ensure assets and config are complete

@@ -89,21 +89,17 @@ platforms:
 
   harmony_mobile:
     enabled: null                   # Only on Windows
-    hdc_path: D:/code/commandline-tools-windows-x64-6.1.0.850/command-line-tools  # HDC SDK root
+    hdc_path: tools/hdc/hdc.exe     # HDC 路径，空则自动搜索 tools/hdc
     screenshot_method: snapshot_display  # Screenshot method
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   harmony_pc:
     enabled: null                   # Only on Windows
-    hdc_path: D:/code/commandline-tools-windows-x64-6.1.0.850/command-line-tools  # HDC SDK root
+    hdc_path: tools/hdc/hdc.exe     # HDC 路径，空则自动搜索 tools/hdc
     screenshot_method: snapshot_display  # Screenshot method
     session_timeout: 300
     screenshot_dir: data/screenshots
-
-  harmony:
-    enabled: null                   # 鸿蒙性能采集的通用 HDC 回退配置
-    hdc_path: tools/hdc/hdc.exe
 
 # Image Matching Settings
 image_matching:

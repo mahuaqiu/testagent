@@ -365,7 +365,9 @@
       "Bash(Select-Object Name)",
       "Skill(code-review)",
       "PowerShell(cargo test *)",
-      "Bash(cargo test *)"
+      "Bash(cargo test *)",
+      "Bash(./hdc.exe list *)",
+      "Bash(echo \"===EXIT: $?===\")"
     ]
   }
 }
