@@ -165,6 +165,68 @@ def test_harmony_keycodes_have_single_correct_direction_mapping() -> None:
     assert [HARMONY_KEY_MAP[key] for key in ("DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT", "DPAD_CENTER")] == [2012, 2013, 2014, 2015, 2016]
 
 
+def _make_command_capture_wrapper(
+    monkeypatch: pytest.MonkeyPatch, output: str = "", exit_code: int = 0
+) -> tuple[HarmonyHdcWrapper, list[str]]:
+    """构造只记录 shell 命令的 wrapper，用于断言 uiInput 命令模板。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult(output, "", exit_code),
+    )
+    return wrapper, commands
+
+
+def test_double_tap_uses_native_double_click_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 真机风险预防：两次 tap 模拟的间隔不受控，可能超出系统双击判定窗口，
+    # 必须用 uitest 原生 doubleClick（awesome-hdc uiInput 官方命令表）
+    wrapper, commands = _make_command_capture_wrapper(monkeypatch)
+
+    assert wrapper.double_tap(100, 200) is True
+    assert commands == ["uitest uiInput doubleClick 100 200"]
+
+
+def test_long_tap_uses_native_long_click_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # uitest uiInput 官方签名是 longClick x y（无时长参数）；
+    # 旧实现的 click x y duration 不在官方命令表内，真机可能被当普通点击
+    wrapper, commands = _make_command_capture_wrapper(monkeypatch)
+
+    assert wrapper.long_tap(30, 40) is True
+    assert wrapper.long_tap(30, 40, duration=2500) is True
+    assert commands == [
+        "uitest uiInput longClick 30 40",
+        "uitest uiInput longClick 30 40",
+    ]
+    assert wrapper.long_tap(30, 40, duration=0) is False
+
+
+def test_has_app_rejects_error_output_even_when_exit_code_is_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # bm dump -n 对未安装包仍会输出失败文案且 exit_code 可能为 0，
+    # 不能只用“输出非空”判定已安装
+    wrapper, _ = _make_command_capture_wrapper(
+        monkeypatch, output="error: failed to get information"
+    )
+    assert wrapper.has_app("com.example.app") is False
+
+    wrapper, _ = _make_command_capture_wrapper(
+        monkeypatch, output='{"name": "com.example.app", "versionName": "1.0"}'
+    )
+    assert wrapper.has_app("com.example.app") is True
+
+    # 输出非空但不含包名（异常回显）同样判未安装
+    wrapper, _ = _make_command_capture_wrapper(monkeypatch, output="OK")
+    assert wrapper.has_app("com.example.app") is False
+
+
 def test_shell_passes_bare_command_without_wrapping_quotes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -698,7 +760,7 @@ def test_harmony_frame_source_raises_when_stream_stops() -> None:
     source = HarmonyFrameSource("dev-001", SimpleNamespace())
     source._capture = SimpleNamespace(is_running=False)
 
-    # 帧流中途断开抛 ConnectionError，交由 get_frame_with_reconnect 重建
+    # 帧流中途断开抛 ConnectionError，由 ScreenManager 捕获循环按错误计数处理
     with pytest.raises(ConnectionError):
         source.get_frame()
 

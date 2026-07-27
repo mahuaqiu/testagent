@@ -697,15 +697,9 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        # 执行两次快速点击
-        result1 = self.tap(x, y)
-        if not result1:
-            return False
-
-        time.sleep(0.1)  # 短暂延迟
-
-        result2 = self.tap(x, y)
-        return result2
+        # uitest 原生双击命令，比两次 tap 模拟更接近系统双击判定间隔
+        result = self.shell(f"uitest uiInput doubleClick {x} {y}")
+        return self._check_result(result, "双击")
 
     def long_tap(self, x: int, y: int, duration: int = 1000) -> bool:
         """
@@ -714,17 +708,19 @@ class HarmonyHdcWrapper:
         Args:
             x: X 坐标
             y: Y 坐标
-            duration: 长按时长（毫秒），默认 1000ms
+            duration: 长按时长（毫秒），仅作语义保留；uitest longClick
+                不支持自定义时长（固定约 1.5s），click 带第三参数不是官方签名
 
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        # 验证 duration 参数
         if duration <= 0:
             logger.error(f"长按时长必须大于 0: {duration}")
             return False
+        if duration != 1000:
+            logger.debug(f"uitest longClick 不支持自定义时长，忽略 duration={duration}")
 
-        result = self.shell(f"uitest uiInput click {x} {y} {duration}")
+        result = self.shell(f"uitest uiInput longClick {x} {y}")
         return self._check_result(result, "长按")
 
     def swipe(
@@ -1063,15 +1059,12 @@ class HarmonyHdcWrapper:
         # 使用 hdc install 命令
         result = self._execute(["install", hap_path], timeout=120)
 
+        # _check_result 已保证 exit_code==0 且无 error/[fail] 文案，无需再验 success 字样
         if not self._check_result(result, "安装应用"):
             return False
 
-        # 检查输出中是否包含成功标识
-        if "success" in result.output.lower() or result.exit_code == 0:
-            logger.info(f"应用安装成功: {hap_path}")
-            return True
-
-        return False
+        logger.info(f"应用安装成功: {hap_path}")
+        return True
 
     def uninstall(self, package: str) -> bool:
         """
@@ -1091,12 +1084,8 @@ class HarmonyHdcWrapper:
         if not self._check_result(result, "卸载应用"):
             return False
 
-        # 检查输出中是否包含成功标识
-        if "success" in result.output.lower() or result.exit_code == 0:
-            logger.info(f"应用卸载成功: {package}")
-            return True
-
-        return False
+        logger.info(f"应用卸载成功: {package}")
+        return True
 
     def start_app(self, package: str, ability: str) -> bool:
         """
@@ -1117,17 +1106,8 @@ class HarmonyHdcWrapper:
         if not self._check_result(result, "启动应用"):
             return False
 
-        # 检查输出中是否包含成功标识
-        # 成功的输出通常包含 "start ability successfully" 或类似标识
-        if (
-            "success" in result.output.lower()
-            or "successfully" in result.output.lower()
-            or result.exit_code == 0
-        ):
-            logger.info(f"应用启动成功: {package}/{ability}")
-            return True
-
-        return False
+        logger.info(f"应用启动成功: {package}/{ability}")
+        return True
 
     def stop_app(self, package: str) -> bool:
         """
@@ -1248,14 +1228,13 @@ class HarmonyHdcWrapper:
         """
         logger.debug(f"检查应用是否安装: {package}")
 
-        # 使用 bm dump -n 查询指定包名
+        # 使用 bm dump -n 查询指定包名；未安装时 bm 仍会输出失败文案且 exit_code 可能为 0，
+        # 因此要求输出包含包名本身且无 error/fail 标识
         result = self.shell(f"bm dump -n {package}")
 
-        # 如果命令成功执行且输出不为空，则应用已安装
-        if result.exit_code == 0 and result.output.strip():
-            return True
-
-        return False
+        if result.exit_code != 0 or _has_error_text(result):
+            return False
+        return package in result.output
 
     def current_app(self) -> Tuple[Optional[str], Optional[str]]:
         """
