@@ -47,7 +47,7 @@ class HarmonyPlatformManager(PlatformManager):
     }
     PC_ACTIONS: set[str] = {
         "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
-        "start_app", "stop_app",
+        "start_app", "stop_app", "unlock_screen",
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_double_click",
         "ocr_exist", "ocr_get_position", "image_click", "image_wait", "image_assert",
         "image_double_click", "image_exist", "image_get_position", "image_click_near_text",

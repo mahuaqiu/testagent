@@ -76,6 +76,18 @@ def parse_harmony_screen_state(output: str) -> str:
     return "UNKNOWN"
 
 
+def parse_harmony_lock_state(output: str) -> Optional[bool]:
+    """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。"""
+    match = re.search(
+        r"(?:is)?screen[_\s]?locked\b\s*[:=]?\s*(true|false|yes|no|1|0)",
+        output,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group(1).lower() in ("true", "yes", "1")
+
+
 # ============================================================================
 # 数据类和异常类
 # ============================================================================
@@ -776,7 +788,11 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        # 发送 POWER 键唤醒屏幕
+        # power-shell wakeup 幂等亮屏（POWER 键在亮屏状态会反向熄屏），失败再回退 POWER 键
+        result = self.shell("power-shell wakeup")
+        if result.exit_code == 0 and "fail" not in (result.output or "").lower():
+            return True
+        logger.warning("power-shell wakeup 失败，回退 POWER 键唤醒")
         return self.press_key("POWER")
 
     def screen_state(self) -> str:
@@ -806,6 +822,41 @@ class HarmonyHdcWrapper:
         """
         state = self.screen_state()
         return state in ("AWAKE", "INACTIVE")
+
+    def lock_state(self) -> Optional[bool]:
+        """
+        查询锁屏状态。
+
+        通过 hidumper dump ScreenlockService（服务 ID 3704）解析
+        screenLocked 字段；服务不可 dump 或解析失败时返回 None。
+
+        Returns:
+            Optional[bool]: True 已锁屏，False 未锁屏，None 无法判断
+        """
+        for dump_cmd in (
+            "hidumper -s 3704 -a -all",
+            "hidumper -s ScreenlockService -a -all",
+        ):
+            result = self.shell(dump_cmd, timeout=10)
+            if result.exit_code != 0:
+                continue
+            state = parse_harmony_lock_state(result.output)
+            if state is not None:
+                return state
+        logger.warning("未能从 ScreenlockService 解析锁屏状态")
+        return None
+
+    def is_locked(self) -> bool:
+        """
+        检查设备是否锁屏（锁屏服务查不到时退化为熄屏代理）。
+
+        Returns:
+            bool: True 表示锁屏，False 表示未锁屏
+        """
+        state = self.lock_state()
+        if state is not None:
+            return state
+        return not self.is_screen_on()
 
     # ========================================================================
     # 设备信息

@@ -1,7 +1,7 @@
 """
 解锁屏幕 Action 执行器。
 
-用于 iOS/Android 移动设备解锁屏幕。
+用于 iOS/Android/鸿蒙（移动与 PC）设备解锁屏幕。
 """
 
 import logging
@@ -74,6 +74,12 @@ class UnlockScreenAction(ActionExecutor):
         "9": {"x": 900, "y": 1050},
         "0": {"x": 540, "y": 1150},
     }
+
+    # 鸿蒙平台双形态（手机九宫格点坐标，PC 文本框输入）
+    HARMONY_PLATFORMS = ("harmony_mobile", "harmony_pc")
+
+    # 鸿蒙 PC 锁屏密码框坐标（占位值，按 3120x2080 真机预估，后期校准或走配置）
+    DEFAULT_HARMONY_PC_PASSWORD_BOX = {"x": 1560, "y": 1300}
 
     def execute(
         self,
@@ -175,23 +181,27 @@ class UnlockScreenAction(ActionExecutor):
                     )
 
             # 有密码场景：输入密码
-            # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
-            keypad_coords = self._get_keypad_coords(platform, context)
+            if platform.platform == "harmony_pc":
+                # 鸿蒙 PC 锁屏是文本密码框：点击聚焦后整串输入并回车
+                self._input_password_pc(platform, context, password)
+            else:
+                # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
+                keypad_coords = self._get_keypad_coords(platform, context)
 
-            for digit in password:
-                if digit not in keypad_coords:
-                    logger.warning(f"Invalid password digit: {digit}, skipping")
-                    continue
+                for digit in password:
+                    if digit not in keypad_coords:
+                        logger.warning(f"Invalid password digit: {digit}, skipping")
+                        continue
 
-                coord = keypad_coords[digit]
-                x, y = coord["x"], coord["y"]
+                    coord = keypad_coords[digit]
+                    x, y = coord["x"], coord["y"]
 
-                # 点击数字（使用缩放因子转换坐标）
-                self._tap_digit(platform, context, x, y, scale_factor)
-                logger.info(f"Tapped password digit '{digit}' at physical ({x}, {y}), logical ({x//scale_factor}, {y//scale_factor})")
+                    # 点击数字（使用缩放因子转换坐标）
+                    self._tap_digit(platform, context, x, y, scale_factor)
+                    logger.info(f"Tapped password digit '{digit}' at physical ({x}, {y}), logical ({x//scale_factor}, {y//scale_factor})")
 
-                # 点击间隔
-                time.sleep(click_interval / 1000.0)
+                    # 点击间隔
+                    time.sleep(click_interval / 1000.0)
 
             # 6. 等待解锁完成
             time.sleep(1.0)
@@ -264,7 +274,7 @@ class UnlockScreenAction(ActionExecutor):
             logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
             return coords
         else:
-            logger.warning(f"Unsupported platform for unlock: {platform_type}")
+            logger.warning(f"Unsupported platform for unlock keypad: {platform_type}")
             return {}
 
     def _get_device_resolution(self, platform: "PlatformManager", context: object) -> tuple[int, int] | None:
@@ -296,7 +306,7 @@ class UnlockScreenAction(ActionExecutor):
                 except Exception as e:
                     logger.warning(f"Failed to get Android screen size: {e}")
 
-        elif platform_type == "harmony_mobile":
+        elif platform_type in self.HARMONY_PLATFORMS:
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 try:
@@ -348,7 +358,7 @@ class UnlockScreenAction(ActionExecutor):
             # Android 不需要缩放
             return 1
 
-        elif platform_type == "harmony_mobile":
+        elif platform_type in self.HARMONY_PLATFORMS:
             # Harmony 不需要缩放
             return 1
 
@@ -373,18 +383,12 @@ class UnlockScreenAction(ActionExecutor):
                 return not info.get("screenOn", True)
             return True
 
-        elif platform_type == "harmony_mobile":
-            # Harmony: 通过 HDC 检测屏幕状态
+        elif platform_type in self.HARMONY_PLATFORMS:
+            # Harmony: 通过 ScreenlockService dump 查询锁屏状态（查不到时退化为熄屏代理）
             hdc = context or platform._device_clients.get(platform._current_device)
-            if hdc:
+            if hdc and hasattr(hdc, "is_locked"):
                 try:
-                    result = hdc.shell("dumpsys display | grep 'mScreenState'")
-                    output = result.output if hasattr(result, "output") else str(result)
-                    output = output.upper()
-                    if "ON" in output:
-                        return False  # 已解锁
-                    elif "OFF" in output:
-                        return True  # 已锁屏
+                    return hdc.is_locked()
                 except Exception as e:
                     logger.warning(f"Failed to check Harmony lock status: {e}")
             return True
@@ -403,8 +407,16 @@ class UnlockScreenAction(ActionExecutor):
                 return info.get("screenOn", True)
             return True
 
-        if platform_type == "harmony_mobile":
-            # Harmony: 通过截图亮度判断（与 iOS 相同）
+        if platform_type in self.HARMONY_PLATFORMS:
+            # Harmony: 优先通过 hidumper powerStatus 判断，失败时退化为截图亮度
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc and hasattr(hdc, "is_screen_on"):
+                try:
+                    return hdc.is_screen_on()
+                except Exception as e:
+                    logger.warning(f"Failed to check Harmony screen state via hidumper: {e}")
+
+            # 回退：通过截图亮度判断（与 iOS 相同）
             try:
                 screenshot_bytes = platform.take_screenshot(context)
                 if not screenshot_bytes:
@@ -476,11 +488,13 @@ class UnlockScreenAction(ActionExecutor):
                 device.screen_on()
                 logger.info("Android screen awakened")
 
-        elif platform_type == "harmony_mobile":
+        elif platform_type in self.HARMONY_PLATFORMS:
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
-                hdc.shell("input keyevent POWER")
-                logger.info("Harmony screen awakened via POWER key")
+                # power-shell wakeup 幂等亮屏（失败时封装内部回退 POWER 键）
+                hdc.wakeup()
+                logger.info("Harmony screen awakened via power-shell wakeup")
+                time.sleep(0.5)  # 等待屏幕点亮
 
     def _swipe_unlock(self, platform: "PlatformManager", context: object) -> None:
         """滑动解锁界面（旧方法，保留兼容）。"""
@@ -510,8 +524,8 @@ class UnlockScreenAction(ActionExecutor):
             logger.info(f"iOS unlock method for {resolution_key}: {method}")
             return method
 
-        # Harmony 默认使用 swipe
-        if platform.platform == "harmony_mobile":
+        # Harmony 默认使用 swipe（手机与 PC 均由上滑唤出密码输入界面）
+        if platform.platform in self.HARMONY_PLATFORMS:
             return "swipe_up"
 
         # Android 默认使用 swipe
@@ -544,9 +558,38 @@ class UnlockScreenAction(ActionExecutor):
         elif platform_type == "harmony_mobile":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
-                # Harmony: 向上滑动解锁
+                # Harmony 手机: 向上滑动解锁
                 hdc.swipe(540, 2000, 540, 500)
                 logger.info("Harmony unlock via swipe up")
+
+        elif platform_type == "harmony_pc":
+            hdc = context or platform._device_clients.get(platform._current_device)
+            if hdc:
+                # Harmony PC: 上滑唤出密码框（占位坐标，按 3120x2080 真机预估，后期校准）
+                hdc.swipe(1560, 1600, 1560, 600)
+                logger.info("Harmony PC unlock via swipe up")
+
+    def _input_password_pc(self, platform: "PlatformManager", context: object, password: str) -> None:
+        """鸿蒙 PC 锁屏密码输入：点击密码框聚焦 → 整串输入 → 回车确认。"""
+        hdc = context or platform._device_clients.get(platform._current_device)
+        if not hdc:
+            raise RuntimeError("No Harmony PC device context for password input")
+
+        unlock_config = getattr(platform, "_unlock_config", {})
+        box = unlock_config.get("harmony_pc_password_box", self.DEFAULT_HARMONY_PC_PASSWORD_BOX)
+        x, y = box["x"], box["y"]
+
+        # 点击密码框获取焦点
+        hdc.tap(x, y)
+        time.sleep(0.5)
+
+        # 在密码框坐标整串输入密码
+        hdc.input_text_at(x, y, password)
+        time.sleep(0.5)
+
+        # 回车确认
+        hdc.press_key("ENTER")
+        logger.info(f"Harmony PC password entered at ({x}, {y}) and confirmed with ENTER")
 
     def _tap_digit(self, platform: "PlatformManager", context: object, x: int, y: int, scale_factor: int = 1) -> None:
         """点击密码数字（配置使用物理坐标，点击时转换）。"""
@@ -566,7 +609,7 @@ class UnlockScreenAction(ActionExecutor):
                 # Android: 直接使用物理坐标
                 device.click(x, y)
 
-        elif platform_type == "harmony_mobile":
+        elif platform_type in self.HARMONY_PLATFORMS:
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 # Harmony: 直接使用物理坐标

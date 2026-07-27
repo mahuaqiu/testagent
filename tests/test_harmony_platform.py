@@ -270,7 +270,7 @@ def test_harmony_action_whitelists_match_device_shapes() -> None:
     pc = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
 
     assert mobile.is_action_supported("unlock_screen")
-    assert not pc.is_action_supported("unlock_screen")
+    assert pc.is_action_supported("unlock_screen")
     assert pc.is_action_supported("double_click")
     assert not pc.is_action_supported("right_click")
     assert not pc.is_action_supported("start_recording")
@@ -375,6 +375,84 @@ def test_harmony_unlock_uses_mobile_branch() -> None:
 
     assert calls == [(540, 2000, 540, 500)]
     assert action._get_keypad_coords(platform, client)
+
+
+def test_harmony_lock_state_parsing_tolerates_dump_variants() -> None:
+    assert harmony_hdc.parse_harmony_lock_state("screenLocked: true") is True
+    assert harmony_hdc.parse_harmony_lock_state(" screenLocked          False") is False
+    assert harmony_hdc.parse_harmony_lock_state("isScreenLocked = 1") is True
+    assert harmony_hdc.parse_harmony_lock_state("screen_locked no") is False
+    assert harmony_hdc.parse_harmony_lock_state("no lock info here") is None
+
+
+def test_harmony_is_locked_prefers_screenlock_service_then_screen_state() -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.shell = lambda cmd, timeout=30: harmony_hdc.CommandResult(  # type: ignore[method-assign]
+        "screenLocked: false" if "3704" in cmd else "", "", 0
+    )
+    assert wrapper.is_locked() is False
+
+    # 锁屏服务 dump 不可用时退化为熄屏代理
+    wrapper.shell = lambda cmd, timeout=30: harmony_hdc.CommandResult("", "", 1)  # type: ignore[method-assign]
+    wrapper.is_screen_on = lambda: False  # type: ignore[method-assign]
+    assert wrapper.is_locked() is True
+
+
+def test_harmony_wakeup_uses_power_shell_and_falls_back_to_power_key() -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+
+    wrapper.shell = lambda cmd, timeout=30: (  # type: ignore[method-assign]
+        commands.append(cmd) or harmony_hdc.CommandResult("", "", 0)
+    )
+    assert wrapper.wakeup() is True
+    assert commands == ["power-shell wakeup"]
+
+    # power-shell 失败时回退 POWER 键
+    wrapper.shell = lambda cmd, timeout=30: harmony_hdc.CommandResult("fail", "", 0)  # type: ignore[method-assign]
+    pressed: list[str] = []
+    wrapper.press_key = lambda key: pressed.append(key) or True  # type: ignore[method-assign]
+    assert wrapper.wakeup() is True
+    assert pressed == ["POWER"]
+
+
+def test_harmony_unlock_pc_branch_swipes_and_inputs_password() -> None:
+    action = UnlockScreenAction()
+    platform = SimpleNamespace(platform="harmony_pc", _unlock_config={})
+    swipes: list[tuple[int, int, int, int]] = []
+    taps: list[tuple[int, int]] = []
+    texts: list[tuple[int, int, str]] = []
+    keys: list[str] = []
+    client = SimpleNamespace(
+        swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
+        tap=lambda x, y: taps.append((x, y)),
+        input_text_at=lambda x, y, text: texts.append((x, y, text)),
+        press_key=lambda key: keys.append(key),
+    )
+
+    action._trigger_password_screen(platform, client, "swipe_up")
+    action._input_password_pc(platform, client, "123456")
+
+    assert swipes == [(1560, 1600, 1560, 600)]
+    box = UnlockScreenAction.DEFAULT_HARMONY_PC_PASSWORD_BOX
+    assert taps == [(box["x"], box["y"])]
+    assert texts == [(box["x"], box["y"], "123456")]
+    assert keys == ["ENTER"]
+
+
+def test_harmony_unlock_check_locked_uses_hdc_is_locked() -> None:
+    action = UnlockScreenAction()
+    for device_type in ("harmony_mobile", "harmony_pc"):
+        platform = SimpleNamespace(platform=device_type)
+        client = SimpleNamespace(is_locked=lambda: False)
+        assert action._check_locked(platform, client) is False
+
+        # 查询异常时保守地视为锁屏
+        def raise_error() -> bool:
+            raise RuntimeError("dump failed")
+
+        client = SimpleNamespace(is_locked=raise_error)
+        assert action._check_locked(platform, client) is True
 
 
 def test_harmony_device_monitor_preserves_metadata_when_marked_online() -> None:
