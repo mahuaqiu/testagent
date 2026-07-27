@@ -533,19 +533,80 @@ impl H264Encoder {
         self.encoder_output_id = self.get_output_stream_id(h264_encoder)?;
 
         // 设置 H264 输出类型。
-        let h264_type = self.create_h264_media_type()?;
-        h264_encoder
-            .SetOutputType(self.encoder_output_id, &h264_type, 0)
-            .map_err(|e| RecorderError::MFError(format!("设置 H264 输出类型失败: {}", e)))?;
+        let level = Self::h264_level_for_width(self.params.width);
+        eprintln!(
+            "[H264Encoder] configure_pipeline: input={}x{}, aligned={}x{}, fps={}, bitrate={}, profile={}, level={}, low_latency={}",
+            self.input_width,
+            self.input_height,
+            self.params.width,
+            self.params.height,
+            self.params.fps,
+            self.params.bitrate,
+            self.params.profile,
+            level,
+            self.low_latency
+        );
+        let h264_type = self.create_h264_media_type(Some(level))?;
+        if let Err(e) = h264_encoder.SetOutputType(self.encoder_output_id, &h264_type, 0) {
+            eprintln!(
+                "[H264Encoder] SetOutputType 失败: hr={:#010X} ({}), 尝试去掉 MF_MT_MPEG2_LEVEL 重试（定位 level 档位与分辨率不匹配问题）",
+                e.code().0 as u32,
+                e
+            );
+            // 定位性重试：不显式设置 level，让编码器按分辨率自行推导。
+            // 若重试成功，基本可实锤是 level 档位（如 720p 配 level 3.0）超出规格导致。
+            let retry_type = self.create_h264_media_type(None)?;
+            match h264_encoder.SetOutputType(self.encoder_output_id, &retry_type, 0) {
+                Ok(()) => eprintln!(
+                    "[H264Encoder] 去掉 MF_MT_MPEG2_LEVEL 后 SetOutputType 成功：确认 level={} 与分辨率 {}x{} 不兼容",
+                    level, self.params.width, self.params.height
+                ),
+                Err(e2) => {
+                    eprintln!(
+                        "[H264Encoder] 去掉 MF_MT_MPEG2_LEVEL 后 SetOutputType 仍失败: hr={:#010X} ({})",
+                        e2.code().0 as u32,
+                        e2
+                    );
+                    return Err(RecorderError::MFError(format!(
+                        "设置 H264 输出类型失败: {} (hr={:#010X}, {}x{}@{}fps bitrate={} profile={} level={})",
+                        e,
+                        e.code().0 as u32,
+                        self.params.width,
+                        self.params.height,
+                        self.params.fps,
+                        self.params.bitrate,
+                        self.params.profile,
+                        level
+                    )));
+                }
+            }
+        }
 
         // 5. 设置 NV12 输入类型。
         //    裸 H264 MFT 不接受 RGB32 直连，统一使用 NV12 输入。
         let nv12_type = self.create_nv12_media_type()?;
         h264_encoder
             .SetInputType(self.encoder_input_id, &nv12_type, 0)
-            .map_err(|e| RecorderError::MFError(format!("设置 NV12 输入类型失败: {}", e)))?;
+            .map_err(|e| {
+                RecorderError::MFError(format!(
+                    "设置 NV12 输入类型失败: {} (hr={:#010X})",
+                    e,
+                    e.code().0 as u32
+                ))
+            })?;
 
         Ok(())
+    }
+
+    /// 根据宽度推导 H264 Level 档位（沿用历史分档逻辑，仅用于显式设置与日志）
+    fn h264_level_for_width(width: u32) -> u32 {
+        if width >= 3840 {
+            52
+        } else if width >= 1920 {
+            40
+        } else {
+            30
+        }
     }
 
     /// 创建 NV12 输入媒体类型
@@ -639,7 +700,13 @@ impl H264Encoder {
     }
 
     /// 创建 H264 输出媒体类型
-    unsafe fn create_h264_media_type(&self) -> Result<IMFMediaType, RecorderError> {
+    ///
+    /// `level` 为 None 时不设置 MF_MT_MPEG2_LEVEL，由编码器按分辨率/帧率自行推导，
+    /// 用于定位（并规避）显式 level 与分辨率不匹配导致 SetOutputType 失败的场景。
+    unsafe fn create_h264_media_type(
+        &self,
+        level: Option<u32>,
+    ) -> Result<IMFMediaType, RecorderError> {
         let media_type = MFCreateMediaType()
             .map_err(|e| RecorderError::MFError(format!("创建 H264 MediaType 失败: {}", e)))?;
 
@@ -680,16 +747,11 @@ impl H264Encoder {
             .SetUINT32(&MF_MT_MPEG2_PROFILE, self.params.profile)
             .map_err(|e| RecorderError::MFError(format!("设置 H264 Profile 失败: {}", e)))?;
 
-        let level = if self.params.width >= 3840 {
-            52
-        } else if self.params.width >= 1920 {
-            40
-        } else {
-            30
-        };
-        media_type
-            .SetUINT32(&MF_MT_MPEG2_LEVEL, level)
-            .map_err(|e| RecorderError::MFError(format!("设置 H264 Level 失败: {}", e)))?;
+        if let Some(level) = level {
+            media_type
+                .SetUINT32(&MF_MT_MPEG2_LEVEL, level)
+                .map_err(|e| RecorderError::MFError(format!("设置 H264 Level 失败: {}", e)))?;
+        }
 
         Ok(media_type)
     }

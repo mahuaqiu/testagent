@@ -332,6 +332,26 @@ impl D3D11TextureManager {
                 .map_err(|e| RecorderError::D3D11Error(format!("获取显示器描述失败: {}", e)))?;
             desc_list.sort_by_key(|d| d.DesktopCoordinates.left);
 
+            // 定位日志：打印枚举到的所有显示器，便于确认远程桌面/多屏场景下的分辨率来源
+            for (idx, d) in desc_list.iter().enumerate() {
+                let name = String::from_utf16_lossy(&d.DeviceName)
+                    .trim_end_matches('\0')
+                    .to_string();
+                let rect = d.DesktopCoordinates;
+                eprintln!(
+                    "[H264Encoder] DXGI output[{}]: name={}, rect=({},{})-({},{}) => {}x{}, attached={}",
+                    idx,
+                    name,
+                    rect.left,
+                    rect.top,
+                    rect.right,
+                    rect.bottom,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    d.AttachedToDesktop.as_bool()
+                );
+            }
+
             match monitor {
                 1 => {
                     // 主屏幕：left=0 的显示器
