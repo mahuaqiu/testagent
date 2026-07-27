@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Optional, TYPE_CHECKING
 
-from common.utils import run_cmd_with_process_tree_timeout
+from common.utils import SUBPROCESS_HIDE_WINDOW, run_cmd_with_process_tree_timeout
 from worker.tools import get_tools_dir
 from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
@@ -58,8 +58,11 @@ class CmdExecAction(BaseActionExecutor):
             "close_fds": True,
         }
         if os.name == "nt":
+            # 用 CREATE_NO_WINDOW 而非 DETACHED_PROCESS：两者互斥（同时传时后者生效），
+            # DETACHED_PROCESS 下 cmd 派生的控制台子程序会自行分配可见控制台导致黑框闪现，
+            # CREATE_NO_WINDOW 则提供一个隐形控制台供子进程继承。
             popen_kwargs["creationflags"] = (
-                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+                subprocess.CREATE_NEW_PROCESS_GROUP | SUBPROCESS_HIDE_WINDOW
             )
         else:
             popen_kwargs["start_new_session"] = True

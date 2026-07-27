@@ -91,9 +91,9 @@ def run_cmd(
         result = run_cmd(["adb", "devices"])
         result = run_cmd("echo hello", shell=True)
     """
-    # 在 Windows 上添加隐藏窗口标志
+    # 在 Windows 上合并隐藏窗口标志（即使调用方已传入其他 creationflags）
     if platform.system().lower() == "windows":
-        kwargs.setdefault("creationflags", SUBPROCESS_HIDE_WINDOW)
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | SUBPROCESS_HIDE_WINDOW
 
     # 以字节模式捕获输出，自行解码以支持自动编码检测
     result = subprocess.run(
