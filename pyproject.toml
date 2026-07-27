@@ -47,7 +47,7 @@ dev = [
 ]
 # 鸿蒙性能内核按 wheel 可选安装，Windows 旧 perfwin 路径不依赖它。
 harmony = [
-    "perfharmony==0.2.1",
+    "perfharmony==0.2.2",
 ]
 
 [project.scripts]
