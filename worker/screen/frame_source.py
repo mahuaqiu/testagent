@@ -2,7 +2,10 @@
 
 import io
 import logging
+import os
+import tempfile
 import time
+import uuid
 from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 
@@ -11,6 +14,7 @@ from PIL import Image
 
 if TYPE_CHECKING:
     from worker.platforms.minicap.minicap import Minicap
+    from worker.platforms.harmony_hdc import HarmonyHdcWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,130 @@ class MacFrameSource(FrameSource):
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""
         width, height = self.get_screen_size()
+        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
+
+
+class HarmonyFrameSource(FrameSource):
+    """鸿蒙: uitest daemon 帧流优先，snapshot_display 轮询兜底。
+
+    帧流模式约 10fps（agent.so + fport 8012 + startCaptureScreen）；
+    启动失败（PC 不支持 daemon、agent.so 不兼容等）时自动降级为
+    snapshot_display + file recv 轮询（约 1-2fps）。
+    """
+
+    # 轮询模式最低截图间隔（秒），避免高频 hdc 命令拖垮设备
+    POLL_MIN_INTERVAL = 0.5
+
+    def __init__(self, device_id: str, hdc_wrapper: "HarmonyHdcWrapper"):
+        self.device_id = device_id
+        self.hdc = hdc_wrapper
+        self._capture = None  # HarmonyScreenCapture 实例（帧流模式）
+        self._polling = False
+        self._screen_size: Optional[tuple[int, int]] = None
+        self._last_poll_ts = 0.0
+        self._last_poll_frame: Optional[bytes] = None
+
+    def start(self) -> None:
+        """尝试建立 uitest 帧流，失败则降级为轮询模式。"""
+        from worker.platforms.harmony_capture import (
+            HarmonyCaptureError,
+            HarmonyScreenCapture,
+        )
+
+        self._polling = False
+        try:
+            self._capture = HarmonyScreenCapture(self.hdc)
+            self._capture.start()
+            logger.info(f"HarmonyFrameSource 帧流模式已启动: {self.device_id}")
+        except HarmonyCaptureError as e:
+            logger.warning(
+                f"uitest 帧流启动失败，降级为 snapshot_display 轮询: {e}"
+            )
+            self._capture = None
+            self._polling = True
+
+    def get_frame(self) -> bytes:
+        """帧流模式取最新 JPEG；轮询模式即时截一张。"""
+        if self._capture is not None:
+            if not self._capture.is_running:
+                # 帧流中途断开，交给 get_frame_with_reconnect 重建（重建
+                # 失败会在 start 中自动降级轮询）
+                raise ConnectionError("Harmony uitest frame stream disconnected")
+            frame = self._capture.get_frame(timeout=2.0)
+            if frame is None:
+                raise ConnectionError("Harmony uitest frame stream timeout")
+            return frame
+        return self._poll_frame()
+
+    def _poll_frame(self) -> bytes:
+        """snapshot_display 轮询截图（控制最低间隔，命中缓存直接复用）。"""
+        now = time.monotonic()
+        if (
+            self._last_poll_frame is not None
+            and now - self._last_poll_ts < self.POLL_MIN_INTERVAL
+        ):
+            return self._last_poll_frame
+
+        local_path = os.path.join(
+            tempfile.gettempdir(), f"harmony_frame_{uuid.uuid4().hex}.jpeg"
+        )
+        try:
+            if not self.hdc.screenshot(local_path):
+                raise ConnectionError("Harmony snapshot_display screenshot failed")
+            with open(local_path, "rb") as f:
+                frame = f.read()
+        finally:
+            try:
+                if os.path.isfile(local_path):
+                    os.remove(local_path)
+            except OSError:
+                pass
+
+        if not frame:
+            raise ConnectionError("Harmony screenshot file is empty")
+        self._last_poll_frame = frame
+        self._last_poll_ts = time.monotonic()
+        return frame
+
+    def get_screen_size(self) -> tuple[int, int]:
+        """获取屏幕尺寸（display_size 优先，首帧 JPEG 解析兜底）。"""
+        if self._screen_size:
+            return self._screen_size
+
+        size = self.hdc.display_size()
+        if size != (0, 0):
+            self._screen_size = size
+            return self._screen_size
+
+        # 兜底：从首帧 JPEG 解析尺寸
+        try:
+            frame = self.get_frame()
+            with Image.open(io.BytesIO(frame)) as img:
+                self._screen_size = img.size
+            return self._screen_size
+        except Exception as e:
+            logger.warning(f"从首帧解析屏幕尺寸失败: {e}")
+            return (0, 0)
+
+    def stop(self) -> None:
+        """停止帧流并清理资源。"""
+        logger.info("HarmonyFrameSource stopping")
+        if self._capture is not None:
+            try:
+                self._capture.stop()
+            except Exception as e:
+                logger.warning(f"停止鸿蒙帧流失败: {e}")
+            self._capture = None
+        self._polling = False
+        self._last_poll_frame = None
+        logger.info("HarmonyFrameSource stopped")
+
+    def get_blank_frame(self) -> bytes:
+        """返回黑屏 JPEG 帧。"""
+        width, height = self.get_screen_size()
+        if width <= 0 or height <= 0:
+            width, height = 1280, 720
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)
 

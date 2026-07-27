@@ -46,6 +46,10 @@ def classify_harmony_device(properties: Dict[str, str]) -> str:
 def parse_harmony_display_size(output: str) -> Tuple[int, int]:
     """从不同版本的 hidumper 窗口信息中解析屏幕宽高。"""
     patterns = (
+        # 手机 RenderService 输出：activeMode: 1260x2720, refreshrate=120
+        r"activeMode\s*[:=]\s*(\d+)\s*[xX*×]\s*(\d+)",
+        # PC 真机输出：render resolution=3120x2080
+        r"render\s+resolution\s*[:=]\s*(\d+)\s*[xX*×]\s*(\d+)",
         r"(?:screen)?width\s*[:=]\s*(\d+).*?(?:screen)?height\s*[:=]\s*(\d+)",
         r"(?:resolution|display(?:\s+\d+)?)?\s*[:=]?\s*(\d+)\s*[xX*×]\s*(\d+)",
         r"(?:bounds|rect)\s*[:=]\s*[\[(]\s*0\s*[, ]+\s*0\s*[, ]+\s*(\d+)\s*[, ]+\s*(\d+)\s*[\])]",
@@ -596,6 +600,75 @@ class HarmonyHdcWrapper:
             return False
 
     # ========================================================================
+    # 端口转发
+    # ========================================================================
+
+    def fport(self, local_port: int, remote_port: int) -> bool:
+        """
+        建立本地 TCP 端口到设备 TCP 端口的转发。
+
+        Args:
+            local_port: 本地端口
+            remote_port: 设备端口
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self._execute(
+            ["fport", f"tcp:{local_port}", f"tcp:{remote_port}"]
+        )
+        # 成功输出形如 "Forwardport result:OK"。
+        if result.exit_code != 0 or "ok" not in result.output.lower():
+            logger.error(
+                f"端口转发失败 tcp:{local_port} -> tcp:{remote_port}: "
+                f"{result.output or result.error}"
+            )
+            return False
+        return True
+
+    def fport_rm(self, local_port: int, remote_port: int) -> bool:
+        """
+        移除端口转发规则。
+
+        Args:
+            local_port: 本地端口
+            remote_port: 设备端口
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self._execute(
+            ["fport", "rm", f"tcp:{local_port}", f"tcp:{remote_port}"]
+        )
+        # 成功输出形如 "Remove forward ruler success, ruler:tcp:X tcp:Y"。
+        if result.exit_code != 0 or "success" not in result.output.lower():
+            logger.warning(
+                f"移除端口转发失败 tcp:{local_port} -> tcp:{remote_port}: "
+                f"{result.output or result.error}"
+            )
+            return False
+        return True
+
+    def fport_ls(self) -> List[str]:
+        """
+        列出当前设备的端口转发规则。
+
+        Returns:
+            List[str]: 转发规则行列表（已去掉空行和 [Empty] 提示）
+        """
+        result = self._execute(["fport", "ls"])
+        if result.exit_code != 0:
+            logger.warning(f"列出端口转发失败: {result.error or result.output}")
+            return []
+        rules = []
+        for raw_line in result.output.splitlines():
+            line = raw_line.strip()
+            if not line or "empty" in line.lower():
+                continue
+            rules.append(line)
+        return rules
+
+    # ========================================================================
     # 点击和滑动
     # ========================================================================
 
@@ -866,18 +939,23 @@ class HarmonyHdcWrapper:
         """
         获取屏幕分辨率。
 
+        优先用 RenderService 数字服务 ID（PC 真机已验证），失败时兼容
+        按服务名 dump 的版本（手机输出 activeMode: WxH）。
+
         Returns:
             Tuple[int, int]: (宽度, 高度)
         """
-        result = self.shell("hidumper -s 10 -a screen", timeout=10)
-
-        if result.exit_code != 0:
-            logger.warning(f"获取屏幕分辨率失败: {result.error}")
-            return (0, 0)
-
-        size = parse_harmony_display_size(result.output)
-        if size != (0, 0):
-            return size
+        for dump_cmd in (
+            "hidumper -s 10 -a screen",
+            "hidumper -s RenderService -a screen",
+        ):
+            result = self.shell(dump_cmd, timeout=10)
+            if result.exit_code != 0:
+                logger.warning(f"获取屏幕分辨率失败({dump_cmd}): {result.error}")
+                continue
+            size = parse_harmony_display_size(result.output)
+            if size != (0, 0):
+                return size
 
         logger.warning("未能解析屏幕分辨率，保留未知值但不影响设备入池")
         return (0, 0)

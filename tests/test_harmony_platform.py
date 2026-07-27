@@ -1,11 +1,18 @@
 """鸿蒙 HDC 和平台管理器的单元测试。"""
 
+import os
 from types import SimpleNamespace
 
 import pytest
 
 from worker.discovery.harmony import HarmonyDeviceInfo
 from worker.platforms import harmony_hdc
+from worker.platforms import harmony_capture
+from worker.platforms.harmony_capture import (
+    HarmonyCaptureError,
+    HarmonyScreenCapture,
+    split_jpeg_frames,
+)
 from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.harmony_hdc import (
     CommandResult,
@@ -547,3 +554,244 @@ def test_harmony_split_discovery_config_takes_priority_over_legacy(tmp_path) -> 
 
 def test_harmony_monitor_keeps_mobile_and_pc_switches_independent() -> None:
     from worker.device_monitor import DeviceMonitor
+
+
+# ============================================================================
+# 投屏帧流：JPEG 魔数切帧
+# ============================================================================
+
+
+def test_split_jpeg_frames_extracts_frames_and_keeps_partial_tail() -> None:
+    frame1 = b"\xff\xd8" + b"a" * 10 + b"\xff\xd9"
+    frame2 = b"\xff\xd8" + b"b" * 5 + b"\xff\xd9"
+    partial = b"\xff\xd8" + b"c" * 3
+
+    # 粘包：两帧完整 + 尾部半包
+    frames, rest = split_jpeg_frames(bytearray(frame1 + frame2 + partial))
+
+    assert frames == [frame1, frame2]
+    assert bytes(rest) == partial
+
+    # 半包补齐后能切出完整帧
+    frames, rest = split_jpeg_frames(rest + b"cc\xff\xd9")
+    assert frames == [b"\xff\xd8" + b"c" * 5 + b"\xff\xd9"]
+    assert bytes(rest) == b""
+
+
+def test_split_jpeg_frames_discards_dirty_data_before_frame_start() -> None:
+    frame = b"\xff\xd8data\xff\xd9"
+
+    # 帧头前的脏数据不进入帧内容
+    frames, rest = split_jpeg_frames(bytearray(b"noise" + frame))
+    assert frames == [frame]
+    assert bytes(rest) == b""
+
+    # 只有帧头没有帧尾时，丢弃帧头前的脏数据避免缓冲膨胀
+    frames, rest = split_jpeg_frames(bytearray(b"junk\xff\xd8xy"))
+    assert frames == []
+    assert bytes(rest) == b"\xff\xd8xy"
+
+
+# ============================================================================
+# 投屏帧流：agent 版本回退
+# ============================================================================
+
+
+def _make_stub_capture(monkeypatch: pytest.MonkeyPatch, failing_agents: set[str]):
+    """构造内部步骤全部打桩的 HarmonyScreenCapture，记录尝试的 agent。"""
+    capture = HarmonyScreenCapture(SimpleNamespace(serial="dev-001"))
+    attempted: list[str] = []
+
+    def fake_setup_agent(path: str) -> None:
+        name = os.path.basename(path)
+        attempted.append(name)
+        if name in failing_agents:
+            raise HarmonyCaptureError(f"{name} incompatible")
+
+    monkeypatch.setattr(capture, "_setup_device_agent", fake_setup_agent)
+    for step in ("_restart_uitest_daemon", "_setup_fport", "_connect_sock",
+                 "_start_capture_screen", "_cleanup", "_recv_worker"):
+        monkeypatch.setattr(capture, step, lambda: None)
+    return capture, attempted
+
+
+def test_harmony_capture_start_falls_back_to_older_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture, attempted = _make_stub_capture(
+        monkeypatch, failing_agents={"uitest_agent_v1.2.2.so"}
+    )
+
+    capture.start()
+
+    # 新版失败后回退旧版，且按 AGENT_CANDIDATES 顺序尝试
+    assert attempted == list(harmony_capture.AGENT_CANDIDATES)
+    assert attempted == ["uitest_agent_v1.2.2.so", "uitest_agent_v1.1.0.so"]
+
+
+def test_harmony_capture_start_raises_when_all_agents_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture, attempted = _make_stub_capture(
+        monkeypatch, failing_agents=set(harmony_capture.AGENT_CANDIDATES)
+    )
+
+    with pytest.raises(HarmonyCaptureError):
+        capture.start()
+
+    assert attempted == list(harmony_capture.AGENT_CANDIDATES)
+
+
+# ============================================================================
+# HarmonyFrameSource：帧流降级轮询
+# ============================================================================
+
+
+def test_harmony_frame_source_degrades_to_polling_when_stream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worker.screen.frame_source import HarmonyFrameSource
+
+    class FailingCapture:
+        def __init__(self, hdc):
+            pass
+
+        def start(self):
+            raise HarmonyCaptureError("daemon not available")
+
+    monkeypatch.setattr(harmony_capture, "HarmonyScreenCapture", FailingCapture)
+
+    source = HarmonyFrameSource("dev-001", SimpleNamespace())
+    source.start()
+
+    assert source._capture is None
+    assert source._polling is True
+
+
+def test_harmony_frame_source_poll_reuses_frame_within_min_interval() -> None:
+    from worker.screen.frame_source import HarmonyFrameSource
+
+    screenshot_calls: list[str] = []
+
+    def fake_screenshot(local_path: str, method: str = "snapshot_display") -> bool:
+        screenshot_calls.append(local_path)
+        with open(local_path, "wb") as f:
+            f.write(b"\xff\xd8frame\xff\xd9")
+        return True
+
+    source = HarmonyFrameSource("dev-001", SimpleNamespace(screenshot=fake_screenshot))
+    source._polling = True
+
+    first = source._poll_frame()
+    second = source._poll_frame()
+
+    # 间隔小于 POLL_MIN_INTERVAL 时命中缓存，只截图一次
+    assert first == second == b"\xff\xd8frame\xff\xd9"
+    assert len(screenshot_calls) == 1
+    # 临时文件用完即删
+    assert not os.path.isfile(screenshot_calls[0])
+
+
+def test_harmony_frame_source_raises_when_stream_stops() -> None:
+    from worker.screen.frame_source import HarmonyFrameSource
+
+    source = HarmonyFrameSource("dev-001", SimpleNamespace())
+    source._capture = SimpleNamespace(is_running=False)
+
+    # 帧流中途断开抛 ConnectionError，交由 get_frame_with_reconnect 重建
+    with pytest.raises(ConnectionError):
+        source.get_frame()
+
+
+# ============================================================================
+# HDC 端口转发（fport）
+# ============================================================================
+
+
+def test_fport_requires_ok_in_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    executed: list[list[str]] = []
+    result_holder = [CommandResult("Forwardport result:OK", "", 0)]
+    monkeypatch.setattr(
+        wrapper,
+        "_execute",
+        lambda args, timeout=30: executed.append(args) or result_holder[0],
+    )
+
+    assert wrapper.fport(50000, 8012) is True
+    assert executed == [["fport", "tcp:50000", "tcp:8012"]]
+
+    # 真机失败输出不含 OK，必须判失败
+    result_holder[0] = CommandResult("[Fail]TCP Port listen failed at 50000", "", 0)
+    assert wrapper.fport(50000, 8012) is False
+
+
+def test_fport_rm_requires_success_in_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    executed: list[list[str]] = []
+    result_holder = [
+        CommandResult("Remove forward ruler success, ruler:tcp:50000 tcp:8012", "", 0)
+    ]
+    monkeypatch.setattr(
+        wrapper,
+        "_execute",
+        lambda args, timeout=30: executed.append(args) or result_holder[0],
+    )
+
+    assert wrapper.fport_rm(50000, 8012) is True
+    assert executed == [["fport", "rm", "tcp:50000", "tcp:8012"]]
+
+    result_holder[0] = CommandResult(
+        "[Fail]Remove forward ruler failed, ruler is not exist", "", 0
+    )
+    assert wrapper.fport_rm(50000, 8012) is False
+
+
+def test_fport_ls_filters_blank_and_empty_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    result_holder = [CommandResult("[Empty]\n", "", 0)]
+    monkeypatch.setattr(
+        wrapper, "_execute", lambda args, timeout=30: result_holder[0]
+    )
+
+    assert wrapper.fport_ls() == []
+
+    result_holder[0] = CommandResult(
+        "tcp:50000 tcp:8012    [Forward]\n\n", "", 0
+    )
+    assert wrapper.fport_ls() == ["tcp:50000 tcp:8012    [Forward]"]
+
+
+# ============================================================================
+# 分辨率解析：新增格式
+# ============================================================================
+
+
+def test_harmony_display_size_parses_phone_render_service_active_mode() -> None:
+    # 手机 hidumper -s RenderService 输出
+    output = "supportedMode: 0, activeMode: 1260x2720, refreshrate=120"
+
+    assert parse_harmony_display_size(output) == (1260, 2720)
+
+
+def test_display_size_falls_back_to_render_service_dump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    outputs = {
+        "hidumper -s 10 -a screen": "no display metrics",
+        "hidumper -s RenderService -a screen": (
+            "activeMode: 1260x2720, refreshrate=120"
+        ),
+    }
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: CommandResult(outputs[command], "", 0),
+    )
+
+    # 数字服务 ID dump 无法解析时，回退按服务名 dump
+    assert wrapper.display_size() == (1260, 2720)
+

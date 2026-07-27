@@ -930,7 +930,7 @@ async def screen_stream(
     """实时屏幕推流。
 
     Args:
-        platform: 设备平台类型 (ios, android, windows, mac, web)
+        platform: 设备平台类型 (ios, android, windows, mac, web, harmony_mobile, harmony_pc)
         device_id: 设备标识符
         monitor: 屏幕索引（mss索引：1=主显示器，2+=副显示器）
 
@@ -954,6 +954,11 @@ async def screen_stream(
     # iOS/Android 不支持 H.264（当前版本）
     if platform in ("ios", "android") and codec == "h264":
         logger.error(f"{platform} does not support H.264 codec, falling back to jpeg")
+        codec = "jpeg"
+
+    # 鸿蒙帧源只产出 JPEG，h264/mjpeg 均降级为 jpeg
+    if platform in ("harmony_mobile", "harmony_pc") and codec != "jpeg":
+        logger.error(f"{platform} only supports JPEG codec, falling back to jpeg")
         codec = "jpeg"
 
     # 从配置读取参数（使用默认值作为 fallback）
@@ -1016,6 +1021,19 @@ async def screen_stream(
                 logger.warning(f"WebSocket rejected: Android device not registered: {device_id}")
                 await websocket.close(code=1008, reason=f"Android device not registered: {device_id}")
                 return
+        elif platform in ("harmony_mobile", "harmony_pc"):
+            harmony_manager = _get_harmony_manager(platform)
+            if not harmony_manager:
+                logger.warning(f"WebSocket rejected: {platform} platform not initialized")
+                await websocket.close(code=1008, reason=f"{platform} platform not initialized")
+                return
+            if not harmony_manager._device_clients.get(device_id):
+                # 未注册时尝试拉起设备服务（与 DeviceMonitor 同一入口）
+                status, message = harmony_manager.ensure_device_service(device_id)
+                if status != "online":
+                    logger.warning(f"WebSocket rejected: Harmony device not available: {device_id}, {message}")
+                    await websocket.close(code=1008, reason=f"Harmony device not available: {device_id}")
+                    return
 
         if platform == "windows":
             from worker.screen.windows_sidecar import get_windows_sidecar_manager
@@ -1233,11 +1251,22 @@ async def screen_stream(
         logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
 
 
+def _get_harmony_manager(platform: str):
+    """按平台类型获取对应的鸿蒙平台管理器。"""
+    if not worker:
+        return None
+    if platform == "harmony_mobile":
+        return worker.harmony_mobile_manager
+    if platform == "harmony_pc":
+        return worker.harmony_pc_manager
+    return None
+
+
 def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
     """根据平台类型创建对应的 FrameSource。
 
     Args:
-        platform: 设备平台类型 (ios, android, windows, mac, web)
+        platform: 设备平台类型 (ios, android, windows, mac, web, harmony_mobile, harmony_pc)
         device_id: 设备标识符
         monitor: 屏幕索引（mss索引：1=主显示器，2+=副显示器）
 
@@ -1245,6 +1274,7 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         FrameSource 实例
     """
     from worker.screen.frame_source import (
+        HarmonyFrameSource,
         MacFrameSource,
         MinicapFrameSource,
         MJPEGFrameSource,
@@ -1272,6 +1302,18 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         minicap = Minicap(device_id)
         minicap.install()
         return MinicapFrameSource(device_id, minicap)
+
+    elif platform in ("harmony_mobile", "harmony_pc"):
+        # 鸿蒙：uitest 帧流优先，snapshot_display 轮询兜底
+        harmony_manager = _get_harmony_manager(platform)
+        if harmony_manager:
+            hdc_client = harmony_manager._device_clients.get(device_id)
+            if hdc_client:
+                return HarmonyFrameSource(device_id, hdc_client)
+        # Fallback: 直接创建 HDC 客户端
+        from worker.platforms.harmony_hdc import HarmonyHdcWrapper
+        hdc_client = HarmonyHdcWrapper(device_id)
+        return HarmonyFrameSource(device_id, hdc_client)
 
     elif platform == "mac":
         # Mac: 使用 pyautogui 截屏
