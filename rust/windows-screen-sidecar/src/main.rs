@@ -326,6 +326,13 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
 }
 
 fn main() {
+    // 将系统定时器精度提到 1ms：抓帧/录制节拍线程都依赖 thread::sleep，
+    // 默认 ~15.6ms 精度会把 20fps 的 50ms 节拍拉长到 55~65ms，
+    // 导致录制 tick 复用旧帧（水印冻结后跳变）。进程退出时系统自动恢复。
+    unsafe {
+        let _ = windows::Win32::Media::timeBeginPeriod(1);
+    }
+
     // 设置 panic 处理器，将 panic 信息输出到 stderr
     std::panic::set_hook(Box::new(|panic_info| {
         let msg = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {

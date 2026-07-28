@@ -55,15 +55,25 @@ impl CaptureProducer {
         let thread = thread::Builder::new()
             .name("capture-producer".to_string())
             .spawn(move || {
-                let mut last_tick = Instant::now();
+                let mut next_tick = Instant::now();
                 while running_thread.load(Ordering::Relaxed) {
                     let fps = target_fps.load(Ordering::Relaxed).max(1);
                     let interval = Duration::from_secs_f64(1.0 / fps as f64);
-                    let elapsed = last_tick.elapsed();
-                    if elapsed < interval {
-                        thread::sleep(interval - elapsed);
+                    let now = Instant::now();
+                    if now < next_tick {
+                        thread::sleep(next_tick.duration_since(now));
                     }
-                    last_tick = Instant::now();
+
+                    // 绝对节拍：sleep 超时由下一拍缩短补偿，不再每帧重置相位
+                    // （旧实现把 sleep 超时逐帧累加进抓帧周期，实际抓帧率低于目标 fps，
+                    // 录制 tick 因此周期性复用旧帧，水印出现冻结后跳变）。
+                    // 抓帧耗时超过整拍时按整数拍跳过，避免积压追赶式连拍。
+                    let late_ticks = Instant::now()
+                        .saturating_duration_since(next_tick)
+                        .as_nanos()
+                        .checked_div(interval.as_nanos().max(1))
+                        .unwrap_or(0) as u32;
+                    next_tick += interval.saturating_mul(late_ticks.saturating_add(1));
 
                     let raw_frame = match capture_fn_thread() {
                         Ok(frame) => frame,

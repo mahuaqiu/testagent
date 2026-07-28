@@ -150,6 +150,10 @@ pub fn capture_rect(rect: &MonitorRect) -> Result<CapturedFrame, String> {
         )
         .map_err(|e| format!("BitBlt failed: {e}"))?;
 
+        // 抓帧墙钟：BitBlt 返回即取时（屏幕内容已读入 DIB），作为录制水印/PTS 权威源；
+        // 不能放在整帧内存拷贝与 GDI 清理之后，否则这段耗时抖动会直接混入相邻帧水印差值。
+        let captured_at_ms = current_timestamp_ms();
+
         let bytes_len = (rect.width as u32 as usize)
             .saturating_mul(rect.height as u32 as usize)
             .saturating_mul(4);
@@ -160,8 +164,6 @@ pub fn capture_rect(rect: &MonitorRect) -> Result<CapturedFrame, String> {
         let _ = DeleteDC(mem_dc);
         let _ = ReleaseDC(HWND(std::ptr::null_mut()), screen_dc);
 
-        // 抓帧墙钟：仅在 BitBlt 成功并读完像素后取时，作为录制水印/PTS 权威源
-        let captured_at_ms = current_timestamp_ms();
         Ok(CapturedFrame {
             width: rect.width as u32,
             height: rect.height as u32,

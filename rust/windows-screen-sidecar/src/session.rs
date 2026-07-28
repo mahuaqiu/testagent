@@ -60,6 +60,20 @@ fn capture_is_needed(recording_running: bool, streaming_running: bool) -> bool {
     recording_running || streaming_running
 }
 
+/// 录制期间的抓帧目标帧率：取 ≥ base 且为录制 fps 整数倍的最小值。
+/// 若抓帧率不是录制率的整数倍（如抓 15fps、录 10fps），录制 tick 取到的
+/// 最新帧抓取时刻会周期性摆动，水印步进呈 67/133ms 交替而非均匀 100ms。
+fn aligned_capture_fps(base: u32, recording_fps: u32) -> u32 {
+    let base = base.max(1);
+    let recording_fps = recording_fps.max(1);
+    let rem = base % recording_fps;
+    if rem == 0 {
+        base
+    } else {
+        base + (recording_fps - rem)
+    }
+}
+
 fn clear_stream_state(state: &mut SessionState) -> Result<Option<BinaryMediaOutput>, String> {
     state.encoder_info = None;
     state.stream_sps.clear();
@@ -220,7 +234,7 @@ impl SessionHandle {
             state.frame_hub.clear_latest();
             state.active_fps = state.active_fps.max(fps);
             state.capture_target_fps.store(
-                state.active_fps.max(state.idle_fps).max(1),
+                aligned_capture_fps(state.active_fps.max(state.idle_fps), fps),
                 Ordering::Relaxed,
             );
             state.frame_hub.clone()
@@ -679,7 +693,7 @@ impl SessionHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_is_needed, clear_stream_state, SessionHandle};
+    use super::{aligned_capture_fps, capture_is_needed, clear_stream_state, SessionHandle};
     use serde_json::json;
 
     #[test]
@@ -688,6 +702,20 @@ mod tests {
         assert!(capture_is_needed(true, false));
         assert!(capture_is_needed(false, true));
         assert!(capture_is_needed(true, true));
+    }
+
+    #[test]
+    fn aligned_capture_fps_rounds_up_to_multiple_of_recording_fps() {
+        // 抓帧基准 15、录 10 → 对齐到 20，保证水印步进均匀
+        assert_eq!(aligned_capture_fps(15, 10), 20);
+        // 已是整数倍时不变
+        assert_eq!(aligned_capture_fps(20, 20), 20);
+        assert_eq!(aligned_capture_fps(30, 30), 30);
+        assert_eq!(aligned_capture_fps(30, 10), 30);
+        // 录制 fps 高于基准时直接对齐到录制 fps
+        assert_eq!(aligned_capture_fps(15, 20), 20);
+        // 非法输入保底
+        assert_eq!(aligned_capture_fps(0, 0), 1);
     }
 
     #[test]

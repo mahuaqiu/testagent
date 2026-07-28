@@ -87,10 +87,20 @@ impl RecordingWorkerHandle {
                             last_frame = Some(frame.clone());
                             (frame, false)
                         }
-                        _ => (
-                            last_frame.as_ref().expect("last frame must exist").clone(),
-                            true,
-                        ),
+                        // tick 时尚无新帧：在半拍预算内短暂等待 producer 发布，
+                        // 避免“tick 恰好赶在新帧发布前几毫秒采样→误判复用旧帧，
+                        // 下一拍水印跳变”的相位问题；等待不影响容器 PTS（由 capture 时间推导）。
+                        _ => match frame_hub.wait_newer_than(last_seq, interval / 2) {
+                            Some(frame) => {
+                                last_seq = frame.seq;
+                                last_frame = Some(frame.clone());
+                                (frame, false)
+                            }
+                            None => (
+                                last_frame.as_ref().expect("last frame must exist").clone(),
+                                true,
+                            ),
+                        },
                     };
 
                     let write_started = Instant::now();
