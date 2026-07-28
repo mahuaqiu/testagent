@@ -239,6 +239,11 @@ class ActivateWindowAction(BaseActionExecutor):
 
         try:
             win32gui.EnumWindows(enum_windows_callback, None)
+        except pywintypes.error as e:
+            # 回调返回 False 主动停止枚举时，pywin32 会把 EnumWindows 返回 0 视为失败
+            # 并抛出 error(2, 'EnumWindows', ...)，此时窗口实际已找到，属预期行为
+            if not exact_match_hwnd:
+                logger.error(f"EnumWindows failed in _find_window_by_class: {e}")
         except Exception as e:
             logger.error(f"EnumWindows failed in _find_window_by_class: {e}")
 

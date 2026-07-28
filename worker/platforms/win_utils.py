@@ -140,6 +140,13 @@ def _do_find_window_handle(
 
     try:
         win32gui.EnumWindows(enum_callback, None)
+    except pywintypes.error as e:
+        # 回调返回 False 主动停止枚举时，pywin32 会把 EnumWindows 返回 0 视为失败
+        # 并抛出 error(2, 'EnumWindows', ...)，此时窗口实际已找到，属预期行为，
+        # 不能返回 None 丢弃已找到的句柄
+        if result[0] is None:
+            logger.error(f"EnumWindows failed: {e}")
+            return None
     except Exception as e:
         logger.error(f"EnumWindows failed: {e}")
         return None
