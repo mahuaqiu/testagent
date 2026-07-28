@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from common.request_context import generate_request_id, reset_request_id, set_request_id
 from worker.config import (
     load_config_version,
-    merge_config_with_ip_protection,
+    merge_config_with_local_protection,
     save_config_with_version,
 )
 from worker.log_query import (
@@ -585,7 +585,7 @@ async def update_worker_config(request: ConfigUpdateRequest):
 
         # 4. 配置合并（保留本地 IP 和设备发现配置）
         try:
-            merged_config = merge_config_with_ip_protection(request.config_content)
+            merged_config = merge_config_with_local_protection(request.config_content)
         except yaml.YAMLError as e:
             logger.warning(f"Config YAML parse failed: {e}")
             return JSONResponse(
@@ -1197,18 +1197,12 @@ async def screen_stream(
                 # 停止推流模式
                 reader.stop_push()
         else:
-            # 非 Windows H.264：使用原有拉模式
+            # 非 Windows：拉模式推流（jpeg/mjpeg；h264 已在 streamer 内降级为 jpeg）
             while streamer.is_running():
                 # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
                 await asyncio.sleep(1.0 / streaming_fps)
 
-                # 根据 codec 获取帧
-                if codec == "h264":
-                    # H.264: 通过 streamer 获取（内部调用 H264Streamer）
-                    frame = await streamer.get_frame_async()
-                else:
-                    # JPEG: 从 streamer 获取
-                    frame = await streamer.get_frame_async()
+                frame = await streamer.get_frame_async()
 
                 if not frame:
                     continue

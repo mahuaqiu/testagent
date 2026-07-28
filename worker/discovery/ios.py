@@ -103,11 +103,6 @@ class iOSDiscoverer:
             return False
 
     @staticmethod
-    def check_tidevice_available() -> bool:
-        """检查 tidevice3 是否可用（已废弃，保留向后兼容）。"""
-        return iOSDiscoverer.check_go_ios_available()
-
-    @staticmethod
     def list_devices() -> List[str]:
         """获取设备 UDID 列表。"""
         if not iOSDiscoverer._go_ios_client:

@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 class FrameSource(ABC):
     """帧获取抽象基类。"""
 
-    MAX_RECONNECT_ATTEMPTS = 3
-    RECONNECT_INTERVAL = 1  # 秒
-
     @abstractmethod
     def get_frame(self) -> bytes:
         """获取单帧（JPEG 格式）。"""
@@ -63,21 +60,6 @@ class FrameSource(ABC):
     def get_blank_frame(self) -> bytes:
         """获取空白帧（连接失败时返回）。"""
         pass
-
-    def get_frame_with_reconnect(self) -> bytes:
-        """获取帧（带自动重连）。"""
-        for attempt in range(self.MAX_RECONNECT_ATTEMPTS + 1):
-            try:
-                return self.get_frame()
-            except ConnectionError:
-                if attempt < self.MAX_RECONNECT_ATTEMPTS:
-                    logger.warning(f"Frame source disconnected, reconnecting (attempt {attempt + 1})")
-                    self.stop()
-                    time.sleep(self.RECONNECT_INTERVAL)
-                    self.start()
-                else:
-                    logger.error("Frame source reconnect failed, returning blank frame")
-                    return self.get_blank_frame()
 
     def _img_to_jpeg(self, img_array: numpy.ndarray, quality: int = 80) -> bytes:
         """将 numpy 数组转换为 JPEG。"""
@@ -346,8 +328,8 @@ class HarmonyFrameSource(FrameSource):
         """帧流模式取最新 JPEG；轮询模式即时截一张。"""
         if self._capture is not None:
             if not self._capture.is_running:
-                # 帧流中途断开，交给 get_frame_with_reconnect 重建（重建
-                # 失败会在 start 中自动降级轮询）
+                # 帧流中途断开抛 ConnectionError，由 ScreenManager 捕获循环
+                # 按连续错误计数处理
                 raise ConnectionError("Harmony uitest frame stream disconnected")
             frame = self._capture.get_frame(timeout=2.0)
             if frame is None:
@@ -424,40 +406,4 @@ class HarmonyFrameSource(FrameSource):
         if width <= 0 or height <= 0:
             width, height = 1280, 720
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
-        return self._img_to_jpeg(img)
-
-
-class WebFrameSource(FrameSource):
-    """Web: Playwright screenshot（仅用于推流，不支持录屏）。"""
-
-    def __init__(self, page):
-        self.page = page
-        self._screen_size: Optional[tuple[int, int]] = None
-
-    def get_frame(self) -> bytes:
-        """Playwright page screenshot。"""
-        return self.page.screenshot(type="jpeg", quality=80)
-
-    def get_screen_size(self) -> tuple[int, int]:
-        """获取页面尺寸。"""
-        if self._screen_size:
-            return self._screen_size
-        viewport = self.page.viewport_size
-        if viewport:
-            self._screen_size = (viewport["width"], viewport["height"])
-        else:
-            self._screen_size = (1280, 720)  # 默认值
-        return self._screen_size
-
-    def start(self) -> None:
-        """Playwright 不需要启动。"""
-        pass
-
-    def stop(self) -> None:
-        """Playwright 不需要停止。"""
-        pass
-
-    def get_blank_frame(self) -> bytes:
-        """返回黑屏 JPEG 帧（固定尺寸 1280x720）。"""
-        img = numpy.zeros((720, 1280, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)

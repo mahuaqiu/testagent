@@ -291,7 +291,7 @@ class HarmonyPlatformManager(PlatformManager):
         with tempfile.NamedTemporaryFile(suffix=".jpeg", delete=False) as f:
             temp_path = f.name
         try:
-            if not client.screenshot(temp_path, self.config.screenshot_method):
+            if not client.screenshot(temp_path):
                 raise HarmonyError("HDC 截图失败")
             with open(temp_path, "rb") as f:
                 data = f.read()

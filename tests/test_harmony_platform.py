@@ -357,7 +357,7 @@ def test_harmony_click_turns_false_hdc_result_into_error() -> None:
 def test_harmony_screenshot_rejects_empty_file(tmp_path) -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
 
-    def screenshot(path: str, method: str) -> bool:
+    def screenshot(path: str) -> bool:
         open(path, "wb").close()
         return True
 
@@ -370,7 +370,7 @@ def test_harmony_screenshot_rejects_empty_file(tmp_path) -> None:
 def test_harmony_screenshot_rejects_invalid_image(tmp_path) -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
 
-    def screenshot(path: str, method: str) -> bool:
+    def screenshot(path: str) -> bool:
         with open(path, "wb") as file:
             file.write(b"not-an-image")
         return True
@@ -735,7 +735,7 @@ def test_harmony_frame_source_poll_reuses_frame_within_min_interval() -> None:
 
     screenshot_calls: list[str] = []
 
-    def fake_screenshot(local_path: str, method: str = "snapshot_display") -> bool:
+    def fake_screenshot(local_path: str) -> bool:
         screenshot_calls.append(local_path)
         with open(local_path, "wb") as f:
             f.write(b"\xff\xd8frame\xff\xd9")

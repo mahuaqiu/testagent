@@ -304,12 +304,12 @@ class Worker:
 
         # iOS 设备
         if self.config.discover_ios_devices:
-            if iOSDiscoverer.check_tidevice_available():
+            if iOSDiscoverer.check_go_ios_available():
                 self.ios_devices = iOSDiscoverer.discover()
                 logger.info(f"Found {len(self.ios_devices)} iOS devices")
                 self._sync_device_registry()
             else:
-                logger.warning("libimobiledevice not available, skipping iOS device discovery")
+                logger.warning("go-ios not available, skipping iOS device discovery")
         else:
             logger.info("iOS device discovery disabled")
 
@@ -566,7 +566,7 @@ class Worker:
             self.android_devices = new_devices
 
         # 检查 iOS 设备
-        if iOSDiscoverer.check_tidevice_available():
+        if iOSDiscoverer.check_go_ios_available():
             new_devices = iOSDiscoverer.discover()
             changes.extend(self._compare_devices("ios", self.ios_devices, new_devices))
             self.ios_devices = new_devices
@@ -682,52 +682,10 @@ class Worker:
             "scripts": get_all_script_versions(),
         }
 
-    def get_devices(self) -> dict[str, Any]:
-        """
-        获取设备信息（已废弃，请使用 get_worker_devices）。
-
-        Returns:
-            Dict: 包含 ip, port, devices 的字典
-        """
-        devices: dict[str, list[str]] = {}
-
-        # 1. 根据操作系统添加桌面平台
-        if self.host_info:
-            if self.host_info.os_type == "windows":
-                devices["windows"] = []
-                devices["web"] = []
-            elif self.host_info.os_type == "macos":
-                devices["mac"] = []
-
-        # 2. Android 设备（返回设备标识列表）
-        if self.android_devices:
-            devices["android"] = [d.udid for d in self.android_devices]
-
-        # 3. iOS 设备（返回 UDID 列表）
-        if self.ios_devices:
-            devices["ios"] = [d.udid for d in self.ios_devices]
-
-        # 4. 鸿蒙设备（优先使用监控器中的 Ready 设备）
-        if self.device_monitor:
-            monitored = self.device_monitor.get_all_devices()
-            for platform in ("harmony_mobile", "harmony_pc"):
-                udids = [d["udid"] for d in monitored.get(platform, []) if d.get("udid")]
-                if udids:
-                    devices[platform] = udids
-
-        # 4. 获取本机 IP（使用配置的 IP 或自动获取）
-        ip = HostDiscoverer.get_preferred_ip(self.config.ip)
-
-        return {
-            "ip": ip,
-            "port": self.port,
-            "devices": devices,
-        }
-
-    def refresh_devices(self) -> dict[str, list]:
-        """刷新设备列表。"""
+    def refresh_devices(self) -> dict[str, Any]:
+        """刷新设备列表并返回最新的 Worker 状态和设备信息。"""
         self._discover_mobile_devices()
-        return self.get_devices()
+        return self.get_worker_devices()
 
     def _validate_task(self, task: Task, manager: PlatformManager) -> TaskResult | None:
         """

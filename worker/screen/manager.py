@@ -14,7 +14,6 @@ from PIL import Image
 from worker.screen.frame_source import FrameSource
 
 if TYPE_CHECKING:
-    from worker.screen.recorder import ScreenRecorder
     from worker.screen.streamer import WebSocketStreamer
 
 logger = logging.getLogger(__name__)
@@ -72,9 +71,6 @@ class ScreenManager:
         self._bgra_queue: Queue[bytearray] = Queue(maxsize=2)  # 录制只需要 1 帧当前 + 1 帧缓冲
         self._capture_thread: threading.Thread | None = None
         self._running: bool = False
-        self._is_recording: bool = False
-        self._recording_lock: threading.Lock = threading.Lock()
-        self._recorder: ScreenRecorder | None = None
         self._streamer: WebSocketStreamer | None = None
         # 消费者计数与延迟释放
         self._active_consumers: int = 0
@@ -93,13 +89,12 @@ class ScreenManager:
         logger.info("Frame capture thread started")
 
     def stop(self) -> None:
-        """停止所有资源（截图线程、录屏、推流）。"""
+        """停止所有资源（截图线程、推流）。"""
         self._running = False
         if self._capture_thread:
             # 如果是当前线程调用 stop（如帧捕获线程检测失败后），则不 join（避免死锁）
             if self._capture_thread != threading.current_thread():
                 self._capture_thread.join(timeout=5)
-        self.stop_recording()
         if self._streamer:
             self._streamer.stop()
         self._frame_source.stop()
@@ -226,7 +221,6 @@ class ScreenManager:
 
         优化：MacFrameSource 每次循环只截屏一次，同时放入两个队列。
         Windows 使用 WindowsSidecarScreenManager，不走此路径。
-        帧率使用录制帧率（如果正在录制），否则默认 10 FPS。
         """
 
         consecutive_errors = 0
@@ -240,11 +234,7 @@ class ScreenManager:
 
         while self._running:
             try:
-                # 动态调整帧率：如果正在录制，使用录制 fps
-                if self._is_recording and self._recorder:
-                    capture_fps = self._recorder.fps
-                else:
-                    capture_fps = default_capture_fps
+                capture_fps = default_capture_fps
 
                 # 帧率控制
                 current_time = time.time()
@@ -327,65 +317,6 @@ class ScreenManager:
                 # 连续错误时增加延迟，避免快速循环
                 if consecutive_errors >= 3:
                     time.sleep(0.5)
-
-    def start_recording(self, output_path: str, fps: int = 10,
-                        timeout_ms: int = 7200000, audio: bool = False,
-                        monitor: int = 1, watermark: bool = True) -> bool:
-        """启动录屏。
-
-        Args:
-            output_path: 输出文件路径
-            fps: 帧率
-            timeout_ms: 超时时间（毫秒），默认 2 小时
-            audio: 是否录制音频（仅 windows-screen-sidecar 支持）
-            monitor: 显示器选择（仅 windows-screen-sidecar 支持）
-            watermark: 是否开启时间水印（默认 True）
-
-        Returns:
-            bool: 是否成功启动（False 表示已有录屏进行中）
-        """
-        from worker.screen.recorder import ScreenRecorder
-
-        # 确保截图线程运行
-        self._ensure_capture_running()
-
-        with self._recording_lock:
-            if self._is_recording:
-                logger.warning("Recording already in progress")
-                return False
-
-            timeout_sec = timeout_ms // 1000
-            self._recorder = ScreenRecorder(self, output_path, fps, timeout_sec, audio, monitor, watermark)
-            self._recorder.start()
-            self._is_recording = True
-            logger.info(f"Recording started: {output_path}, watermark={watermark}")
-            return True
-
-    def set_frame_aligned_size(self, width: int, height: int) -> None:
-        """设置帧对齐尺寸（由 ScreenRecorder 调用）。
-
-        Args:
-            width: 对齐后的宽度
-            height: 对齐后的高度
-        """
-        if self._frame_source:
-            self._frame_source.set_aligned_size(width, height)
-
-    def stop_recording(self) -> str:
-        """停止录屏，返回文件路径。"""
-        with self._recording_lock:
-            if not self._is_recording or not self._recorder:
-                return ""
-
-            output_path = self._recorder.stop()
-            self._recorder = None
-            self._is_recording = False
-            logger.info(f"Recording stopped: {output_path}")
-
-            # 标记消费者离开
-            self._release_capture()
-
-            return output_path
 
     def start_streaming(
         self,

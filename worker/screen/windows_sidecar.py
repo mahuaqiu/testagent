@@ -858,7 +858,7 @@ class WindowsSidecarScreenManager:
         return b""
 
     def set_frame_aligned_size(self, width: int, height: int) -> None:
-        """设置对齐后的分辨率（由 ScreenRecorder 调用）。
+        """设置对齐后的分辨率（由 start_recording 调用）。
 
         Args:
             width: 对齐后的宽度

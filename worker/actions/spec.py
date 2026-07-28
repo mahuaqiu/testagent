@@ -42,10 +42,17 @@ class ExecutionControl:
         if seconds <= 0:
             self.checkpoint()
             return
-        remaining = self.remaining_seconds()
-        timeout = seconds if remaining is None else min(seconds, remaining)
-        if self.cancel_event.wait(timeout):
-            raise ActionCancelled("Task cancelled by user")
+        end = time.monotonic() + seconds
+        # Event.wait 可能因系统定时器精度提前唤醒，循环直到等满或触发截止/取消
+        while True:
+            remaining = self.remaining_seconds()
+            timeout = end - time.monotonic()
+            if timeout <= 0:
+                break
+            if remaining is not None:
+                timeout = min(timeout, remaining)
+            if self.cancel_event.wait(timeout):
+                raise ActionCancelled("Task cancelled by user")
         self.checkpoint()
 
 

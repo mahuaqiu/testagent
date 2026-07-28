@@ -493,15 +493,12 @@ class HarmonyHdcWrapper:
     # 截图和文件操作
     # ========================================================================
 
-    def screenshot(self, local_path: str, method: str = "snapshot_display") -> bool:
+    def screenshot(self, local_path: str) -> bool:
         """
-        截取屏幕并保存到本地。
+        截取屏幕并保存到本地（snapshot_display -f，JPEG 格式）。
 
         Args:
             local_path: 本地保存路径
-            method: 截图方法
-                - "snapshot_display": 使用 snapshot_display -f 命令（默认，快速）
-                - "uitest": 使用 uitest screenCap -p 命令（高质量）
 
         Returns:
             bool: True 表示成功，False 表示失败
@@ -510,19 +507,9 @@ class HarmonyHdcWrapper:
             # 生成设备临时路径
             remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.jpeg"
 
-            if method == "uitest":
-                # 使用 uitest 截图（PNG 格式）
-                remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.png"
-                result = self.shell(f"uitest screenCap -p {remote_path}")
-
-                if not self._check_result(result, "uitest 截图"):
-                    return False
-            else:
-                # 使用 snapshot_display 截图（JPEG 格式，速度更快）
-                result = self.shell(f"snapshot_display -f {remote_path}")
-
-                if not self._check_result(result, "snapshot_display 截图"):
-                    return False
+            result = self.shell(f"snapshot_display -f {remote_path}")
+            if not self._check_result(result, "snapshot_display 截图"):
+                return False
 
             # 拉取到本地
             pull_result = self.pull_file(remote_path, local_path)

@@ -60,21 +60,3 @@ class ResourceScheduler:
         """返回活动任务数。"""
         with self._lock:
             return len(self._leases)
-
-    # 兼容旧 PlatformManager/Worker 调用，新的任务服务使用 try_acquire/release_lease。
-    def acquire(
-        self,
-        platform: str,
-        device_id: str | None = None,
-        blocking: bool = True,
-        timeout: float = -1,
-    ) -> bool:
-        """兼容旧接口的无主租约申请。"""
-        del blocking, timeout
-        return self.try_acquire(platform, device_id, f"legacy:{threading.get_ident()}") is not None
-
-    def release(self, platform: str, device_id: str | None = None) -> None:
-        """兼容旧接口，释放当前资源。"""
-        key = resource_key(platform, device_id)
-        with self._lock:
-            self._leases.pop(key, None)

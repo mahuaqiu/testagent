@@ -242,7 +242,6 @@ class PlatformConfig:
 
     # 鸿蒙专用
     hdc_path: str = "tools/hdc/hdc.exe"
-    screenshot_method: str = "snapshot_display"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlatformConfig":
@@ -274,7 +273,6 @@ class PlatformConfig:
             mjpeg_base_port=data.get("mjpeg_base_port", 9100),
             u2_port=data.get("u2_port", 7912),
             hdc_path=data.get("hdc_path", "tools/hdc/hdc.exe"),
-            screenshot_method=data.get("screenshot_method", "snapshot_display"),
         )
 
 
@@ -537,19 +535,6 @@ def merge_config_with_local_protection(
                     new_data["worker"][field] = bool(legacy_harmony)
 
     return new_data
-
-
-# 兼容旧函数名（保持向后兼容）
-def merge_config_with_ip_protection(
-    new_config_yaml: str,
-    existing_config_path: str = get_user_config_path()
-) -> dict:
-    """
-    合并配置：保留本地 IP 地址和设备发现配置。
-
-    deprecated: 使用 merge_config_with_local_protection 替代。
-    """
-    return merge_config_with_local_protection(new_config_yaml, existing_config_path)
 
 
 def save_config_with_version(
