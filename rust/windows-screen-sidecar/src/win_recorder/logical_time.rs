@@ -45,8 +45,11 @@ pub fn frame_duration_100ns(fps: u32) -> i64 {
 /// 根据抓帧 pts 与 duplicate 标志推进容器 PTS。
 ///
 /// - 首帧：pts=0，anchor=capture
-/// - 真实新帧：pts = capture - anchor（非单调则 last+1）
+/// - 真实新帧：pts = (capture - anchor) 四舍五入到 1/fps 网格（非单调则 last + 1/fps）
 /// - duplicate：pts = last + 1/fps（水印侧应冻结 capture）
+///
+/// 网格量化保证帧间隔恒为帧时长整数倍（编辑器识别为 CFR，不再报 VFR）；
+/// PTS 仍由真实抓取时间推导，与墙钟误差 ≤ 半帧且不随录制时长累积。
 pub fn next_sample_timing(
     state: &mut SampleTimingState,
     capture_pts_100ns: i64,
@@ -62,10 +65,14 @@ pub fn next_sample_timing(
     } else {
         let anchor = state.anchor_pts_100ns.unwrap_or(capture_pts_100ns);
         let raw = capture_pts_100ns.saturating_sub(anchor);
-        if raw <= state.last_pts_100ns {
-            state.last_pts_100ns.saturating_add(1)
+        let quantized = raw
+            .saturating_add(duration / 2)
+            .div_euclid(duration.max(1))
+            .saturating_mul(duration);
+        if quantized <= state.last_pts_100ns {
+            state.last_pts_100ns.saturating_add(duration)
         } else {
-            raw
+            quantized
         }
     };
     state.last_pts_100ns = pts;
@@ -233,13 +240,28 @@ mod tests {
     }
 
     #[test]
-    fn next_sample_timing_new_frame_uses_capture_delta() {
+    fn next_sample_timing_new_frame_snaps_capture_delta_to_grid() {
         let mut state = SampleTimingState::default();
         let _ = next_sample_timing(&mut state, 1_000_000_000, false, 10);
+        // 真实帧 raw=2_500_000 四舍五入到 1/fps 网格 → 3_000_000
         let (pts, dur) = next_sample_timing(&mut state, 1_000_000_000 + 2_500_000, false, 10);
-        assert_eq!(pts, 2_500_000);
+        assert_eq!(pts, 3_000_000);
         assert_eq!(dur, frame_duration_100ns(10));
-        assert_eq!(state.last_pts_100ns, 2_500_000);
+        assert_eq!(state.last_pts_100ns, 3_000_000);
+    }
+
+    #[test]
+    fn next_sample_timing_jittered_captures_yield_constant_frame_deltas() {
+        // 抓帧时刻带抖动（47/103/148ms），量化后帧间隔恒为 50ms 网格倍数 → CFR
+        let mut state = SampleTimingState::default();
+        let base = 1_000_000_000;
+        let _ = next_sample_timing(&mut state, base, false, 20);
+        let (p1, _) = next_sample_timing(&mut state, base + 470_000, false, 20);
+        let (p2, _) = next_sample_timing(&mut state, base + 1_030_000, false, 20);
+        let (p3, _) = next_sample_timing(&mut state, base + 1_480_000, false, 20);
+        assert_eq!(p1, 500_000);
+        assert_eq!(p2, 1_000_000);
+        assert_eq!(p3, 1_500_000);
     }
 
     #[test]
@@ -257,8 +279,9 @@ mod tests {
         let mut state = SampleTimingState::default();
         let _ = next_sample_timing(&mut state, 1_000_000_000, false, 10);
         let _ = next_sample_timing(&mut state, 1_000_000_000 + 5_000_000, false, 10);
+        // 回退的抓帧时刻按整帧步进保单调，维持 CFR 网格
         let (pts, _) = next_sample_timing(&mut state, 1_000_000_000 + 1_000_000, false, 10);
-        assert_eq!(pts, 5_000_000 + 1);
+        assert_eq!(pts, 5_000_000 + frame_duration_100ns(10));
     }
 
     #[test]
