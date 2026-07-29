@@ -1,5 +1,6 @@
 //! Session 管理 - 纯 Rust 实现，不依赖 Python
 use crate::capture::{bgra_to_jpeg, capture_monitor, current_timestamp_ms, CapturedFrame};
+use crate::capture_dxgi::DxgiCaptureSource;
 use crate::media::{
     push_frame_to_stderr, BinaryMediaOutput, CaptureProducer, FrameHub, RecordingWorkerHandle,
     StreamWorkerHandle,
@@ -572,10 +573,13 @@ impl SessionHandle {
         drop(old_producer);
 
         let producer_inner = Arc::downgrade(&self.inner);
+        // 录制/推流热路径用 DXGI Desktop Duplication 抓屏（单帧稳定几 ms），
+        // GDI BitBlt 仅作为 RDP/旋转屏等不支持场景的自动降级路径。
+        let capture_source = DxgiCaptureSource::new(monitor);
         let producer = CaptureProducer::start_with_capture_fn_and_callback(
             frame_hub,
             target_fps,
-            move || capture_monitor(monitor),
+            move || capture_source.capture(),
             move |frame| {
                 if let Some(inner) = producer_inner.upgrade() {
                     if let Ok(mut state) = inner.lock() {

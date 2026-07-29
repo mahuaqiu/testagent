@@ -1,4 +1,5 @@
 mod capture;
+mod capture_dxgi;
 mod protocol;
 mod session;
 mod win_recorder;
