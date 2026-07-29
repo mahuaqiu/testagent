@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -37,6 +38,7 @@ class WorkerRuntime:
         repository: TaskRepository | None = None,
         result_retention_hours: int = 24,
         max_workers: int = 16,
+        cleanup_interval_hours: int = 24,
     ) -> None:
         root = Path(base_dir or get_base_dir()).resolve()
         self.root_dir = root
@@ -57,21 +59,47 @@ class WorkerRuntime:
             max_workers=max_workers,
         )
         self._started = False
+        self._cleanup_interval = max(1, cleanup_interval_hours) * 3600.0
+        self._stop_event = threading.Event()
+        self._cleanup_thread: threading.Thread | None = None
 
     def start(self) -> int:
         """恢复任务并开始接受本地执行请求。"""
         if self._started:
             return 0
         recovered = recover_interrupted_tasks(self.repository)
-        self.task_service.cleanup_expired()
-        self.artifact_service.cleanup_expired()
+        self._run_cleanup()
+        self._stop_event = threading.Event()
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop, name="worker-cleanup", daemon=True
+        )
+        self._cleanup_thread.start()
         self._started = True
         return recovered
+
+    def _run_cleanup(self) -> None:
+        """清理过期数据：先删附件文件再删任务行，避免外键级联
+        先清掉元数据导致附件文件成为孤儿。"""
+        try:
+            self.artifact_service.cleanup_expired()
+            self.task_service.cleanup_expired()
+            self.artifact_service.cleanup_orphans()
+        except Exception:
+            logger.exception("Expired data cleanup failed")
+
+    def _cleanup_loop(self) -> None:
+        """天级后台清理，避免长期不重启时过期数据堆积。"""
+        while not self._stop_event.wait(self._cleanup_interval):
+            self._run_cleanup()
 
     def stop(self) -> None:
         """停止任务服务，等待活动任务完成后关闭当前数据库连接。"""
         if not self._started:
             return
+        self._stop_event.set()
+        if self._cleanup_thread is not None:
+            self._cleanup_thread.join(timeout=5)
+            self._cleanup_thread = None
         self.task_service.shutdown()
         self._started = False
         self.database.close()

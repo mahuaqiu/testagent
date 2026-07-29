@@ -122,11 +122,20 @@ class ArtifactService:
         )
 
     def cleanup_expired(self, now: datetime | None = None) -> int:
-        """删除过期附件，返回删除数量。"""
+        """删除过期附件（含所属任务已过期的附件），返回删除数量。
+
+        必须先于任务清理执行：任务行删除时外键会级联清除 artifacts
+        元数据但不会触碰磁盘文件，因此这里把所属任务已过期的附件也
+        一并按元数据删文件，避免留下孤儿文件。
+        """
         current = now or datetime.now()
         rows = self.database.connection().execute(
-            "SELECT artifact_id, relative_path FROM artifacts WHERE expires_at <= ?",
-            (current.isoformat(),),
+            """
+            SELECT artifact_id, relative_path FROM artifacts
+            WHERE expires_at <= ?
+               OR task_id IN (SELECT task_id FROM worker_tasks WHERE expires_at <= ?)
+            """,
+            (current.isoformat(), current.isoformat()),
         ).fetchall()
         removed = 0
         with self.database.transaction() as conn:
@@ -136,6 +145,38 @@ class ArtifactService:
                     path.unlink()
                 conn.execute("DELETE FROM artifacts WHERE artifact_id = ?", (row["artifact_id"],))
                 removed += 1
+        return removed
+
+    def cleanup_orphans(self, now: datetime | None = None) -> int:
+        """删除没有元数据行的孤儿附件文件，返回删除数量。
+
+        兜底清理历史遗留（级联删除元数据后残留的文件、写入中断的
+        .tmp 文件等）。只删除超过保留期未修改的文件，避免误删刚落盘
+        但元数据尚未提交的附件。
+        """
+        current = now or datetime.now()
+        known = {
+            row["relative_path"]
+            for row in self.database.connection()
+            .execute("SELECT relative_path FROM artifacts")
+            .fetchall()
+        }
+        removed = 0
+        for path in self.root_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            relative = str(path.relative_to(self.root_dir)).replace("\\", "/")
+            if relative in known:
+                continue
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+            if modified + self.retention > current:
+                continue
+            path.unlink()
+            removed += 1
+        # 顺带移除清空后的任务目录
+        for directory in self.root_dir.glob("*"):
+            if directory.is_dir() and not any(directory.iterdir()):
+                directory.rmdir()
         return removed
 
     @staticmethod

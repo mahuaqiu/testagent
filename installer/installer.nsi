@@ -196,9 +196,20 @@ Function KillProcessesAndCleanup
     RMDir /r "$INSTDIR\playwright"
   NoPlaywright:
 
-  ; 5. Delete data directory (clear cache on upgrade install)
+  ; 5. Delete data directory (clear worker.db and artifacts on upgrade install)
   IfFileExists "$INSTDIR\data\*.*" 0 NoData
+    DetailPrint "Removing old data directory (worker.db and artifacts)..."
+    ; Wait for killed processes to release SQLite file handles (WAL locks)
+    Sleep 1000
+    ; Explicitly delete SQLite files first (RMDir /r fails silently on locked files)
+    Delete "$INSTDIR\data\worker.db"
+    Delete "$INSTDIR\data\worker.db-wal"
+    Delete "$INSTDIR\data\worker.db-shm"
     RMDir /r "$INSTDIR\data"
+    ; Retry once if still present (slow handle release)
+    IfFileExists "$INSTDIR\data\*.*" 0 NoData
+      Sleep 1000
+      RMDir /r "$INSTDIR\data"
   NoData:
 FunctionEnd
 
