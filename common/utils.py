@@ -316,8 +316,10 @@ def compress_image_to_jpeg(image_bytes: bytes, quality: int = 80) -> bytes:
     """
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        # 如果是 RGBA 模式，转换为 RGB（JPEG不支持透明通道）
-        if img.mode == "RGBA":
+        # JPEG 仅支持 RGB/L/CMYK；RGBA/P/PA/LA 等模式（透明通道或调色板）需先转换。
+        # 调用方传入的模板小图常为 P（8-bit 索引色）模式 PNG，直接保存会报
+        # "cannot write mode P as JPEG"。
+        if img.mode not in ("RGB", "L", "CMYK"):
             img = img.convert("RGB")
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=quality)
