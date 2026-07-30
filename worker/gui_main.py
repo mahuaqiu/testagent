@@ -234,9 +234,9 @@ class GUIApp:
             on_exit=lambda: self.ui_signals.show_exit_confirm.emit(),
         )
 
-        # 创建升级管理器
+        # 创建升级管理器（check_url 未显式配置时基于 platform_api 自动推导）
         self.upgrade_manager = UpgradeManager(
-            check_url=self.config.upgrade_check_url,
+            check_url=self.config.effective_upgrade_check_url,
             current_version=self._get_current_version(),
             check_timeout=self.config.upgrade_check_timeout,
             download_timeout=self.config.upgrade_download_timeout,
@@ -257,7 +257,7 @@ class GUIApp:
         logger.info(f"Port: {self.config.port}")
         logger.info(f"Platform API: {self.config.platform_api or 'Not configured'}")
         logger.info(f"OCR Service: {self.config.ocr_service or 'Not configured'}")
-        logger.info(f"Upgrade URL: {self.config.upgrade_check_url or 'Not configured'}")
+        logger.info(f"Upgrade URL: {self.config.effective_upgrade_check_url or 'Not configured'}")
         logger.info("=" * 50)
 
     def _get_icon_path(self) -> str:
@@ -443,9 +443,12 @@ class GUIApp:
         try:
             logger.info("Checking for upgrades")
 
-            if not self.config.upgrade_check_url:
-                self._show_info_dialog("升级", "未配置升级检查 URL")
+            if not self.config.effective_upgrade_check_url:
+                self._show_info_dialog("升级", "未配置升级检查 URL（upgrade.check_url）且平台地址（external_services.platform_api）为空")
                 return
+
+            # 同步最新配置，避免运行期修改平台地址后仍用旧 URL
+            self.upgrade_manager.check_url = self.config.effective_upgrade_check_url
 
             upgrade_info = self.upgrade_manager.check_upgrade()
 

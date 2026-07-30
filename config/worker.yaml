@@ -115,7 +115,7 @@ logging:
 
 # Upgrade Settings
 upgrade:
-  check_url: ""                     # Upgrade check API URL
+  check_url: ""                     # Upgrade check API URL (empty = auto: {platform_api}/api/core/env/upgrade/worker/info?device_type=windows)
   check_timeout: 30                 # Upgrade check timeout (seconds)
   download_timeout: 300             # Download timeout (seconds)
 

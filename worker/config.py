@@ -99,6 +99,20 @@ class WorkerConfig:
     # 配置版本号
     config_version: str | None = None
 
+    @property
+    def effective_upgrade_check_url(self) -> str:
+        """升级检查 URL：显式配置优先，否则基于 platform_api 自动推导平台升级接口。
+
+        平台接口：GET {platform_api}/api/core/env/upgrade/worker/info?device_type=<windows|mac>
+        """
+        if self.upgrade_check_url:
+            return self.upgrade_check_url
+        if self.platform_api:
+            device_type = "mac" if sys.platform == "darwin" else "windows"
+            base = self.platform_api.rstrip("/")
+            return f"{base}/api/core/env/upgrade/worker/info?device_type={device_type}"
+        return ""
+
     def __post_init__(self) -> None:
         """兼容旧代码直接传入统一鸿蒙开关的场景。"""
         if self.discover_harmony_devices and not (
