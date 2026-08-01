@@ -5,6 +5,8 @@ HTTP Server。
 """
 
 import asyncio
+import io
+import json
 import logging
 import os
 import re
@@ -12,6 +14,7 @@ import threading
 from typing import Any
 
 import yaml
+from PIL import Image
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -59,6 +62,54 @@ DEFAULT_WS_SEND_TIMEOUT = 30
 DEFAULT_WS_STREAMING_FPS = 10
 DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
 DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
+
+# 鸿蒙 JPEG 推流重编码默认参数（会被 worker.config 覆盖）
+DEFAULT_HARMONY_STREAMING_FPS = 8
+DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
+# 降采样长边上限：流开头已通过 meta 文本帧把真机分辨率下发给前端做坐标
+# 基准（与推流尺寸解耦），故此处缩小不会影响坐标；<=0 表示不缩放。
+DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
+
+
+def _recompress_jpeg(
+    frame: bytes,
+    quality: int,
+    max_long_edge: int,
+) -> tuple[bytes, tuple[int, int] | None, tuple[int, int] | None]:
+    """鸿蒙实时推流帧重编码：解码 JPEG → 可选等比缩小 → 按低质量重编码，压带宽。
+
+    仅用于 WS 实时推流（鸿蒙设备端 agent.so 出高画质大 JPEG，原样转发极费带宽）；
+    截图/录屏不经过此函数（走设备端 snapshot_display），画质不受影响。
+    重编码失败时回退原帧。
+
+    Returns:
+        (重编码后帧, 源尺寸, 目标尺寸)；失败时尺寸为 None。
+    """
+    try:
+        with Image.open(io.BytesIO(frame)) as img:
+            src_size = img.size
+            # === DCT 域直接缩放（新增）===
+            # draft 后直接 resize，省掉一半解码成本，画质几乎无损
+            if max_long_edge and max_long_edge < max(src_size):
+                ratio = max_long_edge / max(src_size)
+                target_w = max(1, int(src_size[0] * ratio))
+                target_h = max(1, int(src_size[1] * ratio))
+                target_size = (target_w, target_h)
+            else:
+                target_size = src_size
+            # draft() 原地设置 JPEG 解码提示，返回值不是图像对象。
+            img.draft("RGB", target_size)
+            img = img.resize(
+                target_size,
+                Image.BILINEAR,
+            )
+            dst_size = img.size
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=quality)
+            return out.getvalue(), src_size, dst_size
+    except Exception as e:
+        logger.error(f"鸿蒙推流帧重编码失败，回退原帧: {e}", exc_info=True)
+        return frame, None, None
 
 
 def _format_actions_summary(actions: list[dict[str, Any]], max_actions: int = 10) -> str:
@@ -967,12 +1018,23 @@ async def screen_stream(
     streaming_fps = DEFAULT_WS_STREAMING_FPS
     streaming_bitrate = DEFAULT_WS_STREAMING_BITRATE
     streaming_profile = DEFAULT_WS_STREAMING_PROFILE
+    harmony_fps = DEFAULT_HARMONY_STREAMING_FPS
+    harmony_jpeg_quality = DEFAULT_HARMONY_STREAMING_JPEG_QUALITY
+    harmony_max_long_edge = DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE
     if worker and worker.config:
         max_connections = worker.config.websocket_max_connections_per_device
         send_timeout = worker.config.websocket_send_timeout_seconds
         streaming_fps = worker.config.websocket_streaming_fps
         streaming_bitrate = worker.config.websocket_streaming_bitrate
         streaming_profile = worker.config.websocket_streaming_profile
+        harmony_fps = worker.config.harmony_streaming_fps
+        harmony_jpeg_quality = worker.config.harmony_streaming_jpeg_quality
+        harmony_max_long_edge = worker.config.harmony_streaming_max_long_edge
+
+    # 鸿蒙推流使用独立帧率（前端只需 <=10fps），不影响其它平台
+    is_harmony = platform in ("harmony_mobile", "harmony_pc")
+    if is_harmony:
+        streaming_fps = harmony_fps
 
     # 连接计数和 ScreenManager key
     # 桌面端设备：key 包含 monitor 参数，支持多屏幕
@@ -1198,6 +1260,33 @@ async def screen_stream(
                 reader.stop_push()
         else:
             # 非 Windows：拉模式推流（jpeg/mjpeg；h264 已在 streamer 内降级为 jpeg）
+            # 鸿蒙：设备端 agent.so 出高画质大 JPEG，转发前在主机重编码（缩小+降质）压带宽
+            harmony_recompress = is_harmony and codec == "jpeg" and harmony_jpeg_quality > 0
+
+            # 鸿蒙降采样会改变推流图像尺寸；前端若仍用推流尺寸做坐标基准会错位。
+            # 参考 Windows（H.264 SPS 带内自描述原生分辨率）的思路：在流开头发一条
+            # JSON 文本帧，把真机原生分辨率带给前端做坐标基准，与推流图像尺寸解耦。
+            # 【安全约束】仅当成功拿到真机分辨率(>0)时才允许降采样；否则强制不缩放，
+            # 宁可多占带宽也绝不让坐标错位。
+            harmony_downscale = 0
+            if harmony_recompress:
+                try:
+                    real_w, real_h = await asyncio.to_thread(frame_source.get_screen_size)
+                except Exception as e:
+                    real_w, real_h = 0, 0
+                    logger.error(f"鸿蒙获取真机分辨率失败，禁用降采样: {e}", exc_info=True)
+                if real_w > 0 and real_h > 0:
+                    await websocket.send_text(
+                        json.dumps({"type": "meta", "width": real_w, "height": real_h})
+                    )
+                    harmony_downscale = harmony_max_long_edge
+                    logger.info(
+                        "鸿蒙推流已下发真机分辨率 meta: %dx%d, 降采样长边上限=%d",
+                        real_w, real_h, harmony_downscale,
+                    )
+                else:
+                    logger.error("鸿蒙未取得真机分辨率，禁用降采样(坐标安全优先)，仅降质")
+            _logged_reencode = False
             while streamer.is_running():
                 # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
                 await asyncio.sleep(1.0 / streaming_fps)
@@ -1206,6 +1295,20 @@ async def screen_stream(
 
                 if not frame:
                     continue
+
+                if harmony_recompress:
+                    # 重编码放在线程中执行，避免阻塞事件循环
+                    frame, src_size, dst_size = await asyncio.to_thread(
+                        _recompress_jpeg, frame, harmony_jpeg_quality, harmony_downscale
+                    )
+                    if not _logged_reencode and src_size:
+                        logger.info(
+                            "鸿蒙推流重编码: 源 %sx%s → 目标 %sx%s, quality=%d, fps=%d, 帧大小=%d bytes",
+                            src_size[0], src_size[1], dst_size[0], dst_size[1],
+                            harmony_jpeg_quality, streaming_fps, len(frame),
+                        )
+                        _logged_reencode = True
+
                 try:
                     await asyncio.wait_for(
                         websocket.send_bytes(frame),
