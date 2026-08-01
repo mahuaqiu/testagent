@@ -350,8 +350,13 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError(f"HDC 双击失败: ({x}, {y})")
 
     def right_click(self, x: int, y: int, context=None) -> None:
-        """鸿蒙 HDC 当前没有稳定的右键命令映射。"""
-        raise NotImplementedError("Harmony HDC 暂不支持右键点击")
+        """鸿蒙 PC 右键：uitest 无鼠标右键命令，但长按（longClick）会触发
+        上下文菜单，真机实测等价于右键，故用 long_tap 映射。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if not client.long_tap(x, y):
+            raise HarmonyError(f"HDC 右键（长按）失败: ({x}, {y})")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
         """
@@ -403,10 +408,20 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("HDC 文本输入失败")
 
     def input_text_at(self, x: int, y: int, text: str, context=None) -> None:
-        """使用 HDC 原生坐标输入，避免已聚焦输入被错误重定向到 (0, 0)。"""
+        """文本输入。
+
+        坐标 (0, 0) 作为哨兵：前端远程输入固定发送 (0, 0)+text，表示
+        "输入到当前聚焦框"，此时走 uitest uiInput text（焦点注入）；
+        有真实坐标时用 uitest uiInput inputText x y（坐标点输入）。
+        """
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
+        # 无有效坐标（哨兵 0,0）：输入到当前聚焦框
+        if x <= 0 and y <= 0:
+            if not client.input_text(text):
+                raise HarmonyError("HDC 文本输入失败（聚焦框）")
+            return
         if not client.input_text_at(x, y, text):
             raise HarmonyError(f"HDC 文本输入失败: ({x}, {y})")
 

@@ -96,6 +96,17 @@ class WorkerConfig:
     websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
     websocket_streaming_profile: int = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
+    # 鸿蒙 JPEG 推流独立参数（仅作用于实时推流，不影响 Windows/iOS/Android/Mac，
+    # 也不影响截图/录屏——截图走设备端 snapshot_display，画质保持高清）
+    harmony_streaming_fps: int = 8  # 鸿蒙推流帧率（前端只需 <=10fps）
+    harmony_streaming_jpeg_quality: int = 60  # 鸿蒙推流重编码质量（0 表示不重编码，原样转发）
+    # 鸿蒙推流长边上限，超过则等比缩小；<=0 表示不缩放。
+    # 【默认 1600 降采样】WS 流开头已通过 meta 文本帧把真机原生分辨率
+    # 下发给前端做坐标基准（与推流图像尺寸解耦，参考 Windows 的 H.264
+    # SPS 带内自描述），故缩小推流不再影响 uitest 坐标。仅当 worker 成功
+    # 拿到真机分辨率并下发 meta 后才实际启用缩放，否则自动回退为不缩放。
+    harmony_streaming_max_long_edge: int = 1600
+
     # 配置版本号
     config_version: str | None = None
 
@@ -199,6 +210,9 @@ class WorkerConfig:
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
             websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
             websocket_streaming_profile=websocket_cfg.get("streaming_profile", 66),
+            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 8),
+            harmony_streaming_jpeg_quality=websocket_cfg.get("harmony_streaming_jpeg_quality", 60),
+            harmony_streaming_max_long_edge=websocket_cfg.get("harmony_streaming_max_long_edge", 1600),
         )
 
     def get_platform_config(self, platform: str) -> dict[str, Any]:

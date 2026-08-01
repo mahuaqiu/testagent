@@ -232,6 +232,9 @@ class ScreenManager:
         # 是否共享单次截屏（MacFrameSource 支持）
         use_shared_capture = type(self._frame_source).__name__ == "MacFrameSource"
 
+        # BGRA 是否不受支持（如 HarmonyFrameSource）——首次探测后置位，避免每轮刷 ERROR
+        bgra_unsupported = False
+
         while self._running:
             try:
                 capture_fps = default_capture_fps
@@ -288,8 +291,8 @@ class ScreenManager:
                         pass
                 self._frame_queue.put(frame, timeout=1)
 
-                # 非共享路径：单独获取 BGRA
-                if not use_shared_capture:
+                # 非共享路径：单独获取 BGRA（不支持 BGRA 的帧源跳过，仅首次记录）
+                if not use_shared_capture and not bgra_unsupported:
                     try:
                         bgra = self._frame_source.get_frame_bgra()
                         if self._bgra_queue.full():
@@ -299,8 +302,11 @@ class ScreenManager:
                                 pass
                         self._bgra_queue.put(bgra, timeout=1)
                     except NotImplementedError:
-                        # FrameSource 不支持 BGRA 时跳过
-                        logger.error(f"BGRA frame not supported by {type(self._frame_source).__name__}, falling back to direct capture")
+                        # FrameSource 不支持 BGRA：置位跳过后续尝试，避免每轮刷 ERROR
+                        bgra_unsupported = True
+                        logger.info(
+                            f"{type(self._frame_source).__name__} 不支持 BGRA 帧，跳过 BGRA 采集"
+                        )
 
             except Exception as e:
                 consecutive_errors += 1

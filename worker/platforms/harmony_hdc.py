@@ -244,7 +244,7 @@ def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
     if configured_path:
         resolved = resolve_candidate(configured_path)
         if resolved:
-            logger.info(f"使用配置中的 HDC: {resolved}")
+            logger.debug(f"使用配置中的 HDC: {resolved}")
             return resolved
         logger.warning(f"配置的 HDC 不存在或无法识别: {configured_path}")
 
@@ -253,7 +253,7 @@ def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
     tools_hdc_path = os.path.join(base_dir, "tools", "hdc", "hdc.exe")
 
     if os.path.isfile(tools_hdc_path):
-        logger.info(f"使用 tools 目录中的 HDC: {tools_hdc_path}")
+        logger.debug(f"使用 tools 目录中的 HDC: {tools_hdc_path}")
         return tools_hdc_path
 
     # 支持通过 SDK 根目录环境变量使用 DevEco/OpenHarmony SDK 自带 HDC。
@@ -268,7 +268,7 @@ def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
         if env_candidate is None:
             env_candidate = env_value if env_value.lower().endswith("hdc.exe") else os.path.join(env_value, sdk_suffix)
         if os.path.isfile(env_candidate):
-            logger.info(f"使用 SDK 环境变量 {env_name} 中的 HDC: {env_candidate}")
+            logger.debug(f"使用 SDK 环境变量 {env_name} 中的 HDC: {env_candidate}")
             return env_candidate
 
     # 查找系统 PATH 中的 hdc
@@ -285,7 +285,7 @@ def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
 
         if result.returncode == 0 and result.stdout.strip():
             hdc_path = result.stdout.strip().splitlines()[0]
-            logger.info(f"使用系统 PATH 中的 HDC: {hdc_path}")
+            logger.debug(f"使用系统 PATH 中的 HDC: {hdc_path}")
             return hdc_path
 
     except Exception as e:
@@ -752,9 +752,11 @@ class HarmonyHdcWrapper:
 
     def input_text(self, text: str) -> bool:
         """
-        输入文本（使用剪贴板粘贴方式）。
+        向当前已聚焦的输入框输入文本。
 
-        注意：调用此方法前应确保输入框已获取焦点。
+        使用 uitest uiInput text（在已聚焦位置输入），不依赖坐标；
+        区别于 inputText <x> <y>（往指定坐标点输入，会把焦点重定向）。
+        调用前需确保目标输入框已获取焦点（远程/设备侧点击）。
 
         Args:
             text: 要输入的文本
@@ -762,15 +764,9 @@ class HarmonyHdcWrapper:
         Returns:
             bool: True 表示成功，False 表示失败
         """
-        # 使用 clipboard 命令设置剪贴板内容
-        # 然后模拟粘贴操作（Ctrl+V 或长按粘贴）
-        # 鸿蒙通过 aa paste 命令粘贴剪贴板内容
         try:
-            # 设置剪贴板内容（通过 param 或直接 shell 命令）
-            # 鸿蒙暂时使用 uitest uiInput inputText 在坐标 (0, 0) 输入
-            # 这需要在输入框已聚焦的情况下使用
             quoted_text = _quote_remote_shell_argument(text)
-            result = self.shell(f"uitest uiInput inputText 0 0 {quoted_text}")
+            result = self.shell(f"uitest uiInput text {quoted_text}")
             return self._check_result(result, "输入文本")
         except Exception as e:
             logger.error(f"输入文本失败: {e}")
