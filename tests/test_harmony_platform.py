@@ -341,9 +341,22 @@ def test_harmony_action_whitelists_match_device_shapes() -> None:
     assert mobile.is_action_supported("unlock_screen")
     assert pc.is_action_supported("unlock_screen")
     assert pc.is_action_supported("double_click")
-    assert not pc.is_action_supported("right_click")
+    assert pc.is_action_supported("right_click")
+    assert not mobile.is_action_supported("right_click")
     assert not pc.is_action_supported("start_recording")
     assert not pc.is_action_supported("cmd_exec")
+
+
+def test_harmony_pc_right_click_uses_long_tap() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        long_tap=lambda x, y: calls.append((x, y)) or True,
+    )
+
+    manager.right_click(123, 456, context=client)
+
+    assert calls == [(123, 456)]
 
 
 def test_harmony_click_turns_false_hdc_result_into_error() -> None:
