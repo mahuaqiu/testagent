@@ -6,9 +6,11 @@ Windows 桌面平台执行引擎。
 """
 
 import base64
+import ctypes
 import io
 import logging
 import subprocess  # 用于 CalledProcessError 异常类型
+import sys
 import time
 from typing import Any
 
@@ -223,11 +225,51 @@ class WindowsPlatformManager(PlatformManager):
 
     def press(self, key: str, context: Any = None) -> None:
         """按键。支持组合键，如 "ctrl+c"。"""
-        keys = key.split("+")
+        keys = [self._normalize_key(item) for item in key.split("+")]
+        normalized_keys = {item.strip().lower() for item in keys}
+
+        # Ctrl+Alt+Delete 是 Windows 安全注意序列，普通 SendInput/pyautogui
+        # 注入会被 Winlogon 丢弃，必须通过系统 SendSAS 接口触发。
+        if len(keys) == 3 and normalized_keys == {"ctrl", "alt", "delete"}:
+            self._send_secure_attention_sequence()
+            return
+
         if len(keys) > 1:
             pyautogui.hotkey(*keys)
         else:
-            pyautogui.press(key)
+            pyautogui.press(keys[0])
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        """将平台通用按键名转换为 PyAutoGUI 的 Windows 按键名。"""
+        key = key.strip()
+        aliases = {
+            "win": "winleft",
+            "windows": "winleft",
+        }
+        return aliases.get(key.lower(), key)
+
+    @staticmethod
+    def _send_secure_attention_sequence() -> None:
+        """触发 Windows Ctrl+Alt+Delete 安全注意序列。"""
+        if not sys.platform.startswith("win"):
+            raise RuntimeError("SendSAS 仅支持 Windows")
+
+        try:
+            sas = ctypes.WinDLL("sas.dll")
+            send_sas = sas.SendSAS
+            send_sas.argtypes = [ctypes.c_bool]
+            send_sas.restype = None
+            # Worker 运行在当前交互用户会话时使用 TRUE，让 Winlogon 将 SAS
+            # 投递到当前用户会话。若系统策略禁止软件触发 SAS，调用会失败。
+            send_sas(True)
+        except (AttributeError, OSError, ctypes.ArgumentError) as exc:
+            raise RuntimeError(
+                "无法发送 Ctrl+Alt+Delete：请确认 Worker 运行在交互用户会话，"
+                "并允许 Windows 软件触发安全注意序列"
+            ) from exc
+
+        logger.info("Sent Windows secure attention sequence (Ctrl+Alt+Delete)")
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图，sidecar 失败时使用同一坐标基准的桌面截图。"""
