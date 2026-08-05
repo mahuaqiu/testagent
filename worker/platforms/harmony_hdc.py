@@ -8,18 +8,24 @@ import logging
 import os
 import subprocess
 import tempfile
-import time
 import uuid
 import re
 import json
 import shutil
 import shlex
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd, run_cmd
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
+from worker.platforms.harmony_hdc_process import (
+    capture_hdc_processes_before_launch,
+    cleanup_stale_records,
+    register_launched_processes,
+    register_process,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +177,8 @@ def _execute_hdc_command(
     last_result = CommandResult("", "命令未执行", -1)
     for attempt in range(max(1, retries + 1)):
         process = None
+        baseline_pids = capture_hdc_processes_before_launch(hdc_path)
+        launched_at = time.time()
         try:
             process = popen_cmd(
                 cmdline,
@@ -178,7 +186,20 @@ def _execute_hdc_command(
                 stderr=subprocess.PIPE,
                 shell=False,
             )
+            try:
+                register_process(process, hdc_path)
+                # HDC 客户端可能在退出前拉起常驻服务，记录其 PID 以便 Worker 退出时回收。
+                if getattr(process, "pid", None):
+                    register_launched_processes(process.pid, hdc_path, baseline_pids, launched_at)
+            except Exception as exc:
+                logger.debug("登记 HDC 进程归属失败，不影响命令执行: %s", exc)
             output, error = process.communicate(timeout=timeout)
+            try:
+                if getattr(process, "pid", None):
+                    register_launched_processes(process.pid, hdc_path, baseline_pids, launched_at)
+                cleanup_stale_records()
+            except Exception as exc:
+                logger.debug("更新 HDC 进程归属失败，不影响命令执行: %s", exc)
             last_result = CommandResult(
                 output.decode("utf-8", errors="ignore"),
                 error.decode("utf-8", errors="ignore"),
@@ -203,6 +224,12 @@ def _execute_hdc_command(
                     process.communicate()
                 except Exception:
                     pass
+                try:
+                    if getattr(process, "pid", None):
+                        register_launched_processes(process.pid, hdc_path, baseline_pids, launched_at)
+                    cleanup_stale_records()
+                except Exception as exc:
+                    logger.debug("超时后更新 HDC 进程归属失败: %s", exc)
             last_result = CommandResult("", "命令执行超时", -1)
             if attempt >= retries:
                 return last_result

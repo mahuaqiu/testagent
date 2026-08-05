@@ -301,6 +301,12 @@ class GUIApp:
             self.worker.start()
         except Exception as e:
             logger.error(f"Failed to start worker: {e}")
+            if self.worker:
+                try:
+                    self.worker.stop()
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up partially started worker: {cleanup_error}")
+                self.worker = None
             self._show_error_dialog("启动 Worker 失败", str(e))
             return
 
@@ -357,7 +363,7 @@ class GUIApp:
 
     def _stop_worker(self) -> None:
         """停止 Worker。"""
-        if not self._server_running:
+        if not self._server_running and not self.worker:
             logger.warning("Worker not running")
             return
 
@@ -504,6 +510,8 @@ class GUIApp:
             return
 
         try:
+            # 先同步停止 Worker，回收本项目启动的 HDC，再交给安装器做兜底清理。
+            self._stop_worker()
             self.upgrade_manager.run_silent_install(downloaded_file)
             self._show_info_dialog("升级", "安装程序已启动，Worker 将退出")
             self._do_exit()

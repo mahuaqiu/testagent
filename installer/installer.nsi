@@ -120,19 +120,11 @@ Section Uninstall
   nsExec::Exec $1
   Pop $0
 
-  ; PowerShell: kill ios, adb, ffmpeg, hdc by install path (use nsExec for synchronous execution)
-  StrCpy $2 "$INSTDIR"
-  StrCpy $3 "$2\"
-  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg,hdc -ErrorAction SilentlyContinue; "
-  StrCpy $1 "$1foreach ($$x in $$p) { "
-  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
-  StrCpy $1 "$1    $$x.Kill() "
-  StrCpy $1 "$1  } "
-  StrCpy $1 "$1}$\""
-  nsExec::ExecToStack $1
-  Pop $0
-  Pop $0
+  ; 保留原有设备服务清理：ios、adb、ffmpeg 仍按安装目录过滤
+  Call KillDeviceServiceProcesses
+
+  ; HDC 只能清理 Worker 自己启动并登记的实例，不能按进程名或路径批量杀用户的 HDC
+  Call KillOwnedHdcProcesses
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -170,33 +162,18 @@ Function KillProcessesAndCleanup
   nsExec::Exec $1
   Pop $0
 
-  ; 2. Prepare path variables (ensure trailing slash to avoid matching other paths)
-  StrCpy $2 "$INSTDIR"
-  StrCpy $3 "$2\"  ; Add trailing separator
+  ; 3. 保留原有 ios、adb、ffmpeg 清理逻辑
+  Call KillDeviceServiceProcesses
 
-  ; 3. PowerShell: kill ios, adb, ffmpeg, hdc by install path
-  ; Use nsExec::ExecToStack for synchronous execution (wait for completion, hide window)
-  ; Build command in segments: double-quote for NSIS var expansion, $$ for PowerShell $
-  DetailPrint "Killing device service processes..."
-  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg,hdc -ErrorAction SilentlyContinue; "
-  StrCpy $1 "$1foreach ($$x in $$p) { "
-  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
-  StrCpy $1 "$1    $$x.Kill() "
-  StrCpy $1 "$1  } "
-  StrCpy $1 "$1}$\""
-  ; Show the command being executed (for debugging)
-  DetailPrint "Executing: $1"
-  nsExec::ExecToStack $1
-  Pop $0  ; Return code
-  Pop $0  ; Output (discard)
+  ; 4. 按项目归属记录回收 HDC
+  Call KillOwnedHdcProcesses
 
-  ; 4. Delete playwright directory (avoid upgrade incompatibility)
+  ; 5. Delete playwright directory (avoid upgrade incompatibility)
   IfFileExists "$INSTDIR\playwright\*.*" 0 NoPlaywright
     RMDir /r "$INSTDIR\playwright"
   NoPlaywright:
 
-  ; 5. Delete data directory (clear worker.db and artifacts on upgrade install)
+  ; 6. Delete data directory (clear worker.db and artifacts on upgrade install)
   IfFileExists "$INSTDIR\data\*.*" 0 NoData
     DetailPrint "Removing old data directory (worker.db and artifacts)..."
     ; Wait for killed processes to release SQLite file handles (WAL locks)
@@ -211,6 +188,46 @@ Function KillProcessesAndCleanup
       Sleep 1000
       RMDir /r "$INSTDIR\data"
   NoData:
+FunctionEnd
+
+; 保持原有设备服务清理行为，只处理安装目录中的 ios、adb、ffmpeg。
+; HDC 不在这里处理，避免误杀非本项目启动的 HDC。
+Function KillDeviceServiceProcesses
+  StrCpy $2 "$INSTDIR"
+  StrCpy $3 "$2\"
+  DetailPrint "Killing device service processes..."
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1foreach ($$x in $$p) { "
+  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
+  StrCpy $1 "$1    $$x.Kill() "
+  StrCpy $1 "$1  } "
+  StrCpy $1 "$1}$\""
+  nsExec::ExecToStack $1
+  Pop $0
+  Pop $0
+FunctionEnd
+
+; 只终止 data\hdc_processes.json 中由本项目启动的 HDC。
+; 每个 PID 同时校验可执行文件路径和启动时间，避免 PID 重用或外部 HDC 被误杀。
+Function KillOwnedHdcProcesses
+  StrCpy $2 "$INSTDIR\data\hdc_processes.json"
+  IfFileExists "$2" 0 done_owned_hdc
+  DetailPrint "Killing Worker-owned HDC processes..."
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$path = '$2'; "
+  StrCpy $1 "$1try { $$records = @(Get-Content -Raw -LiteralPath $$path | ConvertFrom-Json) } catch { $$records = @() }; "
+  StrCpy $1 "$1foreach ($$record in $$records) { "
+  StrCpy $1 "$1  $$p = Get-Process -Id ([int]$$record.pid) -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1  if ($$null -eq $$p) { continue }; "
+  StrCpy $1 "$1  try { $$samePath = ([IO.Path]::GetFullPath($$p.Path) -ieq [IO.Path]::GetFullPath([string]$$record.exe_path)) } catch { $$samePath = $$false }; "
+  StrCpy $1 "$1  try { $$expected = [DateTimeOffset]::FromUnixTimeSeconds([int64][double]$$record.create_time).UtcDateTime; $$sameStart = ([Math]::Abs(($$p.StartTime.ToUniversalTime() - $$expected).TotalSeconds) -le 2) } catch { $$sameStart = $$false }; "
+  StrCpy $1 "$1  if ($$samePath -and $$sameStart) { try { $$p.Kill() } catch {} }; "
+  StrCpy $1 "$1}; Remove-Item -LiteralPath $$path -Force -ErrorAction SilentlyContinue$\""
+  nsExec::ExecToStack $1
+  Pop $0
+  Pop $0
+  done_owned_hdc:
 FunctionEnd
 
 ; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)

@@ -184,6 +184,13 @@ class Worker:
     def stop(self) -> None:
         """停止 Worker。"""
         if not self._started:
+            # 启动过程可能已经创建 HDC，但尚未来得及将 Worker 标记为 started。
+            # 即使处于半初始化状态，也必须回收本项目登记的 HDC。
+            try:
+                from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
+                stop_owned_hdc_processes()
+            except Exception as e:
+                logger.warning(f"清理项目启动的 HDC 失败: {e}")
             return
 
         logger.info(f"Stopping Worker {self.worker_id}...")
@@ -207,6 +214,14 @@ class Worker:
                 manager.stop()
             except Exception as e:
                 logger.error(f"Failed to stop {platform} platform: {e}\n{traceback.format_exc()}")
+
+        # 即使 Harmony 平台未启用，WebSocket 或性能路径也可能创建过 HDC 客户端。
+        # 统一在 Worker 生命周期结束时回收本项目登记的 HDC。
+        try:
+            from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
+            stop_owned_hdc_processes()
+        except Exception as e:
+            logger.warning(f"清理项目启动的 HDC 失败: {e}")
 
         # 关闭上报客户端
         if self.reporter:

@@ -21,6 +21,7 @@ from worker.platforms.harmony_hdc import (
     list_devices,
     _find_hdc_path,
 )
+from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.task import Action, ActionResult, ActionStatus
 
@@ -118,6 +119,7 @@ class HarmonyPlatformManager(PlatformManager):
         """
         self._device_clients.clear()
         self._current_device = None
+        stop_owned_hdc_processes()
         self._started = False
         logger.info("Harmony platform stopped")
 

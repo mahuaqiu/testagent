@@ -41,6 +41,17 @@ def _stop_device_monitor() -> None:
         logger.warning(f"停止设备监控失败: {e}")
 
 
+def _stop_worker() -> None:
+    """升级退出前停止 Worker，确保项目启动的 HDC 已登记并回收。"""
+    try:
+        from worker.server import worker
+        if worker:
+            logger.info("升级退出前停止 Worker 及其 HDC 进程")
+            worker.stop()
+    except Exception as e:
+        logger.warning(f"升级退出前停止 Worker 失败: {e}")
+
+
 def get_current_version() -> str | None:
     """
     获取当前版本号。
@@ -142,8 +153,9 @@ def _execute_upgrade_background(
 
         logger.info(f"下载完成: {installer_path}")
 
-        # 2. 开始安装（安装包会自动清理进程和 playwright 目录）
+        # 2. 安装前先释放 Worker 自己持有的资源；安装器还会按归属记录做兜底清理。
         _status_manager.update_status("installing")
+        _stop_worker()
 
         run_silent_install(installer_path)
 
