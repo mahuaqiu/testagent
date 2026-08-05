@@ -5,7 +5,7 @@ openapi: "3.0.0"
 info:
   title: "Test Worker API"
   description: "多端自动化测试执行基建 API"
-  version: "4.0.0"
+  version: "5.0.0"
 
 servers:
   - url: "http://{host}:{port}"
@@ -25,20 +25,41 @@ paths:
           description: "成功"
           content:
             application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerDevicesResponse"
               example:
-                worker_id: "worker_abc123"
-                status: "running"
+                status: "online"
                 started_at: "2026-03-14T10:00:00.000000"
-                supported_platforms: ["web", "windows", "android", "ios"]
+                supported_platforms: ["web", "windows", "android", "ios", "harmony_mobile", "harmony_pc"]
+                ip: "192.168.1.10"
+                port: 8080
+                version: "3.0.0"
                 devices:
                   web: []
                   windows: []
+                  mac: []
                   android:
-                    - id: "emulator-5554"
-                      status: "idle"
+                    - device_id: "emulator-5554"
+                      platform: "android"
+                      connection_status: "connected"
+                      service_status: "ready"
+                      health_status: "healthy"
                   ios:
-                    - id: "00008030-001234567890ABCD"
-                      status: "idle"
+                    - device_id: "00008030-001234567890ABCD"
+                      platform: "ios"
+                      connection_status: "connected"
+                      service_status: "ready"
+                      health_status: "healthy"
+                  harmony_mobile: []
+                  harmony_pc: []
+                faulty_devices:
+                  android: []
+                  ios: []
+                  harmony_mobile: []
+                  harmony_pc: []
+                namespace: ""
+                config_version: "20260805-120000"
+                scripts: {}
         "503":
           description: "Worker 未初始化"
 
@@ -69,6 +90,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TaskResult"
+        "400":
+          description: "任务参数、平台或动作不合法"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
+        "409":
+          description: "目标设备或平台忙碌"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
         "503":
           description: "Worker 未初始化"
 
@@ -79,11 +112,11 @@ paths:
       parameters:
         - name: Idempotency-Key
           in: header
-          required: true
+          required: false
           schema:
             type: string
             minLength: 1
-          description: "同一次逻辑提交及其网络重试必须复用同一个幂等键；不同主动调用必须使用不同键"
+          description: "可选幂等键；提供后，同一次逻辑提交及其网络重试必须复用同一个键，不同主动调用必须使用不同键"
       requestBody:
         required: true
         content:
@@ -105,16 +138,25 @@ paths:
               example:
                 task_id: "task_20260317_120000_abc123"
                 status: "running"
+                request_id: "req_20260317_120000_abc123"
         "409":
           description: "设备/平台冲突"
           content:
             application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
               example:
                 detail:
                   code: "DEVICE_BUSY"
                   message: "Device/Platform is busy"
                   retryable: true
                   details: {}
+        "400":
+          description: "任务参数、平台或动作不合法"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
         "503":
           description: "Worker 未初始化"
 
@@ -139,6 +181,7 @@ paths:
                   value:
                     task_id: "task_20260317_120000_abc123"
                     status: "running"
+                    request_id: "req_20260317_120000_abc123"
                 terminal:
                   summary: "执行完成"
                   value:
@@ -147,8 +190,9 @@ paths:
                     platform: "web"
                     duration_ms: 1500
                     actions: []
-                    screenshots: []
                     metadata: {}
+                    artifacts: []
+                    request_id: "req_20260317_120000_abc123"
                     started_at: "2026-03-17T12:00:00.000000"
                     finished_at: "2026-03-17T12:00:01.500000"
         "404":
@@ -202,6 +246,7 @@ paths:
         通过 WebSocket 推送设备屏幕帧。该路由实际使用 WebSocket 握手，OpenAPI 仅用于描述连接参数。
         codec 支持 jpeg、h264、mjpeg；Windows 的 h264 优先使用 RSM1 二进制媒体通道，
         iOS 的 mjpeg 使用设备 MJPEG 透传，Windows 不支持 mjpeg，iOS/Android 不支持 h264 时回退为 jpeg。
+        鸿蒙设备仅支持 jpeg，h264/mjpeg 会回退为 jpeg。
         首帧门控保证新连接先收到解码所需的 SPS/PPS 和可信真实 IDR，丢弃暖机黑帧、暖机 P 帧及不可独立解码的 P 帧。
       x-websocket: true
       parameters:
@@ -210,7 +255,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [ios, android, windows, mac, web]
+            enum: [ios, android, windows, mac, web, harmony_mobile, harmony_pc]
         - name: device_id
           in: path
           required: true
@@ -245,23 +290,682 @@ paths:
           description: "成功"
           content:
             application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerDevicesResponse"
               example:
-                worker_id: "worker_abc123"
-                status: "running"
+                status: "online"
+                supported_platforms: ["web", "windows", "android", "ios", "harmony_mobile", "harmony_pc"]
                 devices:
                   web: []
                   windows: []
-                  android:
-                    - id: "emulator-5554"
-                      status: "idle"
-                  ios:
-                    - id: "00008030-001234567890ABCD"
-                      status: "idle"
+                  mac: []
+                  android: []
+                  ios: []
+                  harmony_mobile: []
+                  harmony_pc: []
+                faulty_devices:
+                  android: []
+                  ios: []
+                  harmony_mobile: []
+                  harmony_pc: []
+                namespace: ""
+                config_version: "20260805-120000"
+                scripts: {}
+        "503":
+          description: "Worker 未初始化"
+
+  /worker/logs:
+    get:
+      summary: "查询 Worker 日志"
+      description: |
+        获取 Worker 日志内容。查询模式互斥：
+        - 仅传 lines：返回最后 N 行，默认 400 行
+        - 仅传 request_id：搜索当前日志及轮转日志中的请求链路
+        - 同时传 start_time 和 end_time：按 ISO 8601 时间区间过滤，区间最长 5 分钟
+      parameters:
+        - name: lines
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 400
+          description: "返回的日志行数"
+        - name: request_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "按请求追踪 ID 查询日志"
+        - name: start_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: "时间区间起始（ISO 8601 格式，必须与 end_time 同时传入）"
+        - name: end_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: "时间区间结束（ISO 8601 格式，必须与 start_time 同时传入）"
+      responses:
+        "200":
+          description: "日志文本"
+          headers:
+            X-Log-Count:
+              description: "返回的日志行数"
+              schema:
+                type: integer
+            X-Files-Scanned:
+              description: "扫描的日志文件数"
+              schema:
+                type: integer
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: "查询参数组合或时间区间无效"
+        "404":
+          description: "日志路径未配置或日志文件不存在"
+        "503":
+          description: "Worker 未初始化"
+
+  /worker/upgrade:
+    post:
+      summary: "异步升级 Worker"
+      description: "接受升级请求后立即返回，升级进度通过 GET /worker/upgrade/status 查询。"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpgradeRequest"
+      responses:
+        "200":
+          description: "升级请求已接受、跳过或拒绝"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeResponse"
+        "503":
+          description: "Worker 未初始化"
+
+  /worker/upgrade/status:
+    get:
+      summary: "查询 Worker 升级状态"
+      description: "查询当前升级任务；没有升级任务时返回 status=none。"
+      responses:
+        "200":
+          description: "升级状态"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeState"
+
+  /worker/config:
+    post:
+      summary: "更新 Worker 配置"
+      description: |
+        更新完整 YAML 配置。版本号必须为 YYYYMMDD-HHMMSS；更新成功后会异步触发 Worker 重启，
+        本地 IP 和设备发现配置由 Worker 保留，不会被远端配置覆盖。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigUpdateRequest"
+      responses:
+        "200":
+          description: "配置版本相同或更新成功"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateResult"
+        "400":
+          description: "版本号或 YAML 配置无效"
+        "409":
+          description: "已有配置更新正在进行"
+        "500":
+          description: "配置保存失败"
+        "503":
+          description: "Worker 未初始化"
+
+  /worker/scripts:
+    post:
+      summary: "更新 Worker 脚本"
+      description: |
+        下发单个 Worker 工具脚本。脚本名只允许 .ps1、.sh、.bat 扩展名且禁止路径穿越；
+        更新脚本不会触发 Worker 重启，成功后会重新上报脚本版本。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScriptUpdateRequest"
+      responses:
+        "200":
+          description: "脚本版本相同或更新成功"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateResult"
+        "400":
+          description: "版本号、脚本名称或脚本内容无效"
+        "409":
+          description: "已有脚本更新正在进行，或 overwrite=false 且脚本已存在"
+        "500":
+          description: "脚本保存失败"
+        "503":
+          description: "Worker 未初始化"
+
+  /api/worker/{device_id}/processes:
+    get:
+      summary: "获取设备进程列表"
+      description: |
+        获取性能采集选择器使用的进程列表。Windows 可用 search 过滤进程名；
+        鸿蒙设备必须同时提供 device_type 和 device_sn，用 HDC UDID 定位设备。
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Worker 注册的设备 ID"
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "Windows 进程名模糊搜索"
+        - name: device_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [windows, harmony_pc, harmony_mobile]
+          description: "性能采集设备类型；不传时兼容 Windows"
+        - name: device_sn
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "设备物理标识；鸿蒙为 HDC UDID"
+      responses:
+        "200":
+          description: "进程列表"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [processes]
+                properties:
+                  processes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProcessInfo"
+        "400":
+          description: "设备类型或进程查询参数无效"
+        "404":
+          description: "鸿蒙设备未在 Worker 注册表中"
+        "409":
+          description: "设备当前不在线或不健康"
+        "503":
+          description: "Worker 未初始化"
+
+  /api/worker/{device_id}/collect/start:
+    post:
+      summary: "开始性能数据采集"
+      description: "启动指定设备的定时性能采集并上报。单台设备同一时间只允许一个采集任务。"
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Worker 注册的设备 ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CollectStartRequest"
+      responses:
+        "200":
+          description: "采集已开始或已存在"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectOperationResult"
+        "409":
+          description: "设备已有不同采集任务或正在停止上一任务"
+        "503":
+          description: "Worker 未初始化或采集后端不可用"
+
+  /api/worker/{device_id}/collect/stop:
+    post:
+      summary: "停止性能数据采集"
+      description: "停止当前采集；请求体可为空，不传 collect_id 时停止该设备当前采集任务。"
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Worker 注册的设备 ID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CollectStopRequest"
+      responses:
+        "200":
+          description: "采集已停止或当前无采集任务"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectOperationResult"
+        "409":
+          description: "collect_id 与当前采集任务不匹配"
+        "503":
+          description: "Worker 未初始化"
+
+  /api/worker/{device_id}/collect/status:
+    get:
+      summary: "查询性能采集状态"
+      description: "查询设备当前采集状态；Worker 重连后可用此接口恢复采集状态。"
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Worker 注册的设备 ID"
+        - name: device_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [windows, harmony_pc, harmony_mobile]
+          description: "设备类型"
+        - name: device_sn
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "设备物理标识；鸿蒙为 HDC UDID"
+      responses:
+        "200":
+          description: "采集状态"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectStatus"
+        "400":
+          description: "设备类型或身份参数无效"
+        "404":
+          description: "鸿蒙设备未在 Worker 注册表中"
+        "409":
+          description: "设备当前不在线、不健康或采集身份冲突"
         "503":
           description: "Worker 未初始化"
 
 components:
   schemas:
+    ConfigUpdateRequest:
+      type: object
+      required: [config_content, config_version]
+      properties:
+        config_content:
+          type: string
+          description: "完整的 YAML 配置文件内容"
+        config_version:
+          type: string
+          pattern: "^\\d{8}-\\d{6}$"
+          description: "配置版本号，格式：YYYYMMDD-HHMMSS"
+
+    ScriptUpdateRequest:
+      type: object
+      required: [name, content, version]
+      properties:
+        name:
+          type: string
+          description: "脚本文件名，只允许 .ps1/.sh/.bat，禁止路径穿越"
+        content:
+          type: string
+          description: "脚本内容"
+        version:
+          type: string
+          pattern: "^\\d{8}-\\d{6}$"
+          description: "脚本版本号，格式：YYYYMMDD-HHMMSS"
+        overwrite:
+          type: boolean
+          default: true
+          description: "是否覆盖已有脚本"
+
+    UpgradeRequest:
+      type: object
+      required: [download_url]
+      properties:
+        download_url:
+          type: string
+          format: uri
+          description: "安装包下载地址"
+        version:
+          type: string
+          nullable: true
+          description: "目标版本号，可选"
+        force:
+          type: boolean
+          default: true
+          description: "是否强制升级"
+
+    UpgradeResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [upgrading, accepted, skipped, rejected]
+        message:
+          type: string
+        current_version:
+          type: string
+          nullable: true
+        target_version:
+          type: string
+          nullable: true
+
+    UpgradeState:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [none, accepted, downloading, installing, completed, failed]
+        message:
+          type: string
+          description: "没有升级任务时返回的提示信息"
+        target_version:
+          type: string
+          nullable: true
+        current_version:
+          type: string
+          nullable: true
+        download_url:
+          type: string
+          nullable: true
+        download_progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        downloaded_bytes:
+          type: integer
+          minimum: 0
+          nullable: true
+        total_bytes:
+          type: integer
+          minimum: 0
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    UpdateResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        message:
+          type: string
+        updated:
+          type: boolean
+        name:
+          type: string
+        version:
+          type: string
+        config_version:
+          type: string
+        path:
+          type: string
+        restart_triggered:
+          type: boolean
+
+    WorkerDevicesResponse:
+      type: object
+      required: [status, started_at, supported_platforms, ip, port, devices, faulty_devices, namespace, config_version, scripts]
+      properties:
+        status:
+          type: string
+          enum: [offline, online, busy]
+        started_at:
+          type: string
+          format: date-time
+        supported_platforms:
+          type: array
+          items:
+            type: string
+          description: "当前宿主机支持的平台"
+        ip:
+          type: string
+        port:
+          type: integer
+        version:
+          type: string
+          nullable: true
+        devices:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+        faulty_devices:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              additionalProperties: true
+        namespace:
+          type: string
+        config_version:
+          type: string
+        scripts:
+          type: object
+          additionalProperties:
+            type: string
+
+    ProcessInfo:
+      type: object
+      required: [name, pid]
+      properties:
+        name:
+          type: string
+          description: "进程名"
+        pid:
+          type: integer
+          description: "进程 ID"
+        cpu_usage:
+          type: number
+          format: float
+          default: 0
+          description: "CPU 使用率（%）"
+        memory_usage:
+          type: number
+          format: float
+          default: 0
+          description: "内存使用量（MB）"
+        gpu_usage:
+          type: number
+          format: float
+          default: 0
+          description: "GPU 使用率（%）"
+
+    TargetProcess:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: "进程名；鸿蒙为应用包名"
+        pids:
+          type: array
+          items:
+            type: integer
+          nullable: true
+          description: "指定 PID 列表；不传或为空时采集该进程名下所有实例"
+
+    CollectStartRequest:
+      type: object
+      required: [collect_id]
+      properties:
+        collect_id:
+          type: string
+          description: "采集记录 ID（由后端生成）"
+        interval:
+          type: integer
+          minimum: 1
+          maximum: 1800
+          default: 5
+          description: "采集频率（秒）"
+        timeout:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 43200
+          description: "采集超时时间（秒），默认 12 小时"
+        target_processes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TargetProcess"
+          description: "目标进程列表；空列表表示只采集系统指标"
+        device_type:
+          type: string
+          nullable: true
+          enum: [windows, harmony_pc, harmony_mobile]
+          description: "设备类型；鸿蒙必须显式传入"
+        device_sn:
+          type: string
+          nullable: true
+          description: "设备物理标识；鸿蒙为 HDC UDID"
+
+    CollectStopRequest:
+      type: object
+      properties:
+        collect_id:
+          type: string
+          nullable: true
+          description: "采集记录 ID；不传则停止当前所有采集"
+        device_type:
+          type: string
+          nullable: true
+          enum: [windows, harmony_pc, harmony_mobile]
+          description: "设备类型"
+        device_sn:
+          type: string
+          nullable: true
+          description: "设备物理标识；鸿蒙为 HDC UDID"
+
+    CollectOperationResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [started, already_started, stopped, conflict, error]
+        message:
+          type: string
+
+    CollectStatus:
+      type: object
+      required: [is_collecting, state]
+      properties:
+        is_collecting:
+          type: boolean
+          description: "是否正在采集"
+        collect_id:
+          type: string
+          nullable: true
+          description: "当前采集 ID"
+        interval:
+          type: integer
+          nullable: true
+          description: "采集频率（秒）"
+        target_processes:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/TargetProcess"
+          description: "目标进程列表"
+        start_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: "采集开始时间"
+        elapsed_seconds:
+          type: integer
+          nullable: true
+          description: "已采集时长（秒）"
+        state:
+          type: string
+          enum: [idle, running]
+          description: "采集状态"
+        last_sequence:
+          type: integer
+          nullable: true
+          description: "最后已读取的采样序号"
+        last_elapsed_ms:
+          type: integer
+          nullable: true
+          description: "最后样本相对时间（毫秒）"
+
+    ArtifactRef:
+      type: object
+      required: [artifact_id, task_id, type, mime_type, path, size, sha256, created_at, expires_at]
+      properties:
+        artifact_id:
+          type: string
+          description: "附件 ID"
+        task_id:
+          type: string
+          description: "所属任务 ID"
+        action_number:
+          type: integer
+          nullable: true
+          description: "所属动作序号"
+        type:
+          type: string
+          description: "附件类型，如 screenshot、recording、error_screenshot"
+        mime_type:
+          type: string
+        path:
+          type: string
+          description: "Worker 附件目录下的相对路径"
+        size:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
     TaskRequest:
       type: object
       required:
@@ -270,14 +974,16 @@ components:
       properties:
         platform:
           type: string
-          enum: [web, android, ios, windows, mac]
+          enum: [web, android, ios, windows, mac, harmony_mobile, harmony_pc]
           description: |
             目标平台，支持以下值：
             - web: Web 浏览器自动化（Playwright）
-            - android: Android 设备自动化（Appium + UiAutomator2）
-            - ios: iOS 设备自动化（Appium + XCUITest）
+            - android: Android 设备自动化（uiautomator2 直连）
+            - ios: iOS 设备自动化（tidevice3 + WDA 直连）
             - windows: Windows 桌面自动化（pyautogui）
             - mac: macOS 桌面自动化（pyautogui）
+            - harmony_mobile: 鸿蒙移动设备自动化（HDC 直连）
+            - harmony_pc: 鸿蒙 PC 设备自动化（HDC 直连）
         actions:
           type: array
           items:
@@ -290,13 +996,9 @@ components:
             - Web/Windows/Mac: 不需要填写
             - Android: 填写设备序列号，如 "emulator-5554"
             - iOS: 填写设备 UDID，如 "00008030-001234567890ABCD"
+            - harmony_mobile/harmony_pc: 填写 Worker 注册的鸿蒙设备 UDID
         window:
           $ref: "#/components/schemas/WindowSpec"
-        user_id:
-          type: string
-          description: "用户标识，用于追溯和日志记录"
-        config:
-          $ref: "#/components/schemas/TaskConfig"
       example:
         platform: "web"
         actions:
@@ -312,36 +1014,6 @@ components:
         # window 参数示例（Windows 平台窗口级截图）
         # window:
         #   title: "华为云会议"
-
-    TaskConfig:
-      type: object
-      properties:
-        timeout:
-          type: integer
-          default: 300000
-          description: "任务总超时时间（毫秒），超过此时间任务将被强制终止"
-        action_timeout:
-          type: integer
-          default: 30000
-          description: "单个动作超时时间（毫秒），超过此时间当前动作将失败"
-        screenshot_on_error:
-          type: boolean
-          default: true
-          description: "任务失败时是否自动截图，截图将以 base64 编码返回"
-        slow_motion:
-          type: integer
-          default: 0
-          description: "慢动作延迟（毫秒），每个动作之间插入延迟，便于观察调试"
-        retry_count:
-          type: integer
-          default: 0
-          description: "失败重试次数，任务失败后自动重试"
-      example:
-        timeout: 60000
-        action_timeout: 5000
-        screenshot_on_error: true
-        slow_motion: 500
-        retry_count: 1
 
     WindowSpec:
       type: object
@@ -405,7 +1077,10 @@ components:
             - ocr_get_position
             - image_get_position
             - cmd_exec
+            - get_token
             - unlock_screen
+            - pinch
+            - drag
             - activate_window
             - close_window
             - set_resolution
@@ -447,6 +1122,7 @@ components:
             - double_click: 双击指定坐标
             - move: 移动鼠标到指定坐标（仅桌面端）
             - swipe: 滑动手势
+            - drag: 拖拽手势（与 swipe 参数相同）
             - input: 在指定坐标输入文本
             - paste: 直接粘贴文本（使用剪贴板 Ctrl+V，不点击坐标）
 
@@ -460,8 +1136,10 @@ components:
             - new_page: 创建新空白标签页（Web 专用）
             - switched_page: 切换到指定页面（Web 专用）
             - close_page: 关闭当前页面（Web 专用）
+            - get_token: 获取 Web 平台捕获的响应头 token
             - cmd_exec: 在宿主机执行 shell/cmd 命令
             - unlock_screen: 解锁屏幕（iOS/Android 专用）
+            - pinch: 移动端双指缩放，value 为 in 或 out
             - activate_window: 激活窗口（Windows/Mac/Web 专用）
             - close_window: 关闭窗口/弹窗（Windows/Web 专用，PostMessage WM_CLOSE）
             - set_resolution: 设置显示器分辨率（Windows 专用）
@@ -498,8 +1176,17 @@ components:
 
             示例：截取第二个显示器上的原生对话框
             {"action_type": "ocr_click", "value": "确认", "level": "system", "monitor": 2}
+        screenshot:
+          type: boolean
+          default: false
+          description: "是否在该动作完成后附加截图附件"
         value:
-          type: string
+          oneOf:
+            - type: string
+            - type: integer
+            - type: array
+              items:
+                type: string
           description: |
             动作核心值，根据 action_type 不同含义不同：
             - ocr_click/ocr_input/ocr_wait/ocr_assert/ocr_exist: 要识别的文字内容
@@ -512,6 +1199,9 @@ components:
             - swipe: 此字段不使用
             - screenshot: 截图名称/标识
             - wait: 等待的毫秒数，如 "1000"
+            - ocr_assert/ocr_exist: 单个文字或文字列表
+            - pinch: 缩放方向，"in" 表示缩小，"out" 表示放大
+            - set_volume: 音量百分比（0-100）
             - start_app: 应用包名或浏览器类型
               - Web: "chromium"、"firefox"、"webkit"
               - Android: 应用包名，如 "com.example.app"
@@ -525,6 +1215,12 @@ components:
             - unlock_screen: 解锁密码（数字密码，如 "123456"）
             - activate_window: 窗口标题或窗口类名（支持包含匹配）
             - close_window: 窗口标题（match_by=title）或窗口类名（match_by=class）
+        match_mode:
+          type: string
+          default: exact
+          description: |
+            OCR 匹配模式。默认使用精确匹配并按 OCR 服务策略降级为包含匹配；
+            使用 regex 时会自动为未带前缀的表达式添加 reg_ 前缀。
         match_by:
           type: string
           enum: [title, class]
@@ -537,6 +1233,9 @@ components:
             平台支持：
             - Windows/Web: 支持 title 和 class 模式
             - Mac: 仅 activate_window 支持 class 模式（通过应用名激活）
+        class:
+          type: string
+          description: "window_class 的兼容别名，仅用于 close_window 窗口类名定位"
         window_class:
           type: string
           description: |
@@ -609,6 +1308,12 @@ components:
         text:
           type: string
           description: "输入/粘贴的文本内容，仅 ocr_input、input、paste 动作必填"
+        wait:
+          type: integer
+          description: "动作前等待时间（毫秒）"
+        time:
+          type: integer
+          description: "等待时间（秒），用于 ocr_wait/wait；优先使用 timeout 或 value 的动作参数"
         image_base64:
           type: string
           description: |
@@ -686,8 +1391,8 @@ components:
               description: "纵向偏移（像素）"
         threshold:
           type: number
-          default: 0.8
-          description: "图像匹配阈值（0.0-1.0），仅用于 image_* 动作。值越高匹配越严格，默认 0.8"
+          default: 0.9
+          description: "图像匹配阈值（0.0-1.0），仅用于 image_* 动作。值越高匹配越严格，默认 0.9"
         negate:
           type: boolean
           default: false
@@ -701,9 +1406,33 @@ components:
         params:
           type: object
           description: |
-            扩展参数，用于自定义动作。当前仅 pinch 手势动作使用：
+            扩展参数，用于自定义动作。当前用于 pinch 手势动作：
             - scale: 缩放比例（默认 0.5）
             - duration: 持续时间（毫秒，默认 500）
+        direction:
+          type: string
+          description: "滑动方向（部分平台兼容使用）；坐标滑动优先使用 x/y/end_x/end_y"
+        app_path:
+          type: string
+          description: "应用路径，仅 Windows/Mac start_app 动作使用；不传时使用 value"
+        restart:
+          type: boolean
+          default: false
+          description: "是否先关闭再启动应用，仅 Windows/Mac start_app 动作使用"
+        bundle_id:
+          type: string
+          description: "iOS 应用 Bundle ID；不传时使用 value"
+        package_name:
+          type: string
+          description: "Android 应用包名；不传时使用 value"
+        permissions:
+          description: "Web start_app 的权限配置，例如 [camera, microphone] 或 false"
+          oneOf:
+            - type: boolean
+            - type: string
+            - type: array
+              items:
+                type: string
         fps:
           type: integer
           default: 10
@@ -774,7 +1503,7 @@ components:
               description: "结束点 Y 坐标"
         duration:
           type: integer
-          description: "滑动持续时间（毫秒），仅 swipe 动作可选，默认 500ms"
+          description: "滑动/拖拽/缩放持续时间（毫秒），默认 500ms"
         click_duration:
           type: integer
           description: |
@@ -818,6 +1547,10 @@ components:
             - 不支持的按键: Back、Enter、Escape、Lock 等（iOS 无物理键）
               → Back: 请使用 OCR 点击导航栏返回按钮
               → Enter: 请使用 OCR 点击键盘上的完成/搜索按钮
+        background:
+          type: boolean
+          default: false
+          description: "仅 cmd_exec 使用；为 true 时后台启动命令并立即返回，不等待命令完成"
       example:
         action_type: "ocr_wait"
         value: "加载完成"
@@ -869,14 +1602,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ActionResult"
-        screenshots:
-          type: array
-          items:
-            type: string
-          description: "截图列表（base64 编码）"
         metadata:
           type: object
           description: "任务元数据（扩展信息）"
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactRef"
+          description: "截图、录屏和失败附件的引用；附件按 Worker 保留策略自动清理"
         error:
           type: string
           description: "错误信息"
@@ -904,17 +1637,10 @@ components:
           type: integer
           description: "执行耗时(ms)"
         output:
-          type: object
+          type: string
+          nullable: true
           description: |
-            输出内容，根据动作类型返回不同的对象：
-            - ocr_get_text: {"text": "识别到的文字内容"}
-            - ocr_get_position: {"positions": [[x1,y1], [x2,y2], ...]}
-            - image_get_position: {"positions": [[x1,y1], [x2,y2], ...]}
-            - ocr_exist: {"exists": true} 或 {"exists": false}
-            - image_exist: {"exists": true} 或 {"exists": false}
-            - ocr_check_same_row_text: {"exists": true, "position": [x,y]} 或 {"exists": false}
-            - ocr_check_same_row_image: {"exists": true, "position": [x,y]} 或 {"exists": false}
-            - 其他动作: null 或空对象
+            输出内容；当前运行时以字符串返回，部分动作会将结构化结果序列化为 JSON 字符串。
         error:
           type: string
           description: "错误信息"
@@ -930,6 +1656,24 @@ components:
         stderr:
           type: string
           description: "命令标准错误输出（仅 cmd_exec 动作返回）"
+        request_id:
+          type: string
+          description: "请求追踪 ID"
+        ocr_info:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: "OCR 失败时返回的识别信息"
+        timestamp:
+          type: number
+          format: double
+          description: "点击类动作执行时间（Unix 时间戳）"
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactRef"
+          description: "该动作生成的附件引用"
 
   # ==================== 动作类型详细示例 ====================
   # 以下为各动作类型的完整传参示例，供调用方参考
@@ -1109,6 +1853,10 @@ components:
   # 示例 3: 更平滑的滑动（steps=10）
   # {"action_type": "swipe", "from": {"x": 800, "y": 500}, "to": {"x": 200, "y": 500}, "steps": 10}
 
+  # drag - 拖拽（与 swipe 使用相同的坐标参数）
+  # 示例：从 (500, 500) 拖拽到 (800, 500)，耗时 800ms
+  # {"action_type": "drag", "x": 500, "y": 500, "end_x": 800, "end_y": 500, "duration": 800}
+
   # input - 在指定坐标输入文本
   # 示例: 在 (300, 400) 位置输入 "hello world"
   # {"action_type": "input", "x": 300, "y": 400, "text": "hello world"}
@@ -1200,6 +1948,10 @@ components:
   # 示例: 关闭当前页面
   # {"action_type": "close_page"}
 
+  # get_token - 获取 Web 平台捕获的响应头 token
+  # 示例：无需额外参数
+  # {"action_type": "get_token"}
+
   # ---------- 系统级操作示例（仅 Web 平台，level: system） ----------
   # 使用场景：Web 会议共享桌面弹出的原生选择框、文件上传原生对话框等
   # Playwright 无法截取浏览器外部的原生对话框，需使用系统级操作
@@ -1265,9 +2017,11 @@ components:
   # 启动PPT幻灯片放映，启动成功后立即返回（不等待播放完成）
   # 示例 6: 仅打开PPT编辑模式（不进入放映）
   # {"action_type": "cmd_exec", "value": "powershell -ExecutionPolicy Bypass -File \"@tools/play_ppt.ps1\" -FilePath \"C:\\demo.pptx\" -AutoPlay false"}
+  # 示例 7: 后台启动命令，立即返回
+  # {"action_type": "cmd_exec", "value": "powershell -File script.ps1", "background": true}
 
-  # ---------- 移动端解锁动作 ----------
-  # unlock_screen - 解锁屏幕（仅 iOS/Android 平台）
+  # ---------- 移动端解锁和缩放动作 ----------
+  # unlock_screen - 解锁屏幕（iOS/Android/Harmony 平台）
   # 检测设备锁屏状态并自动解锁，使用固定坐标点击密码键盘
   # 配置：密码键盘坐标在 config/worker.yaml 的 unlock 配置中设置
   # iOS 锁屏检测：GET /wda/locked
@@ -1277,6 +2031,13 @@ components:
   # {"action_type": "unlock_screen", "value": "123456"}
   # 示例 2: 解锁 Android 设备，密码 123456
   # {"action_type": "unlock_screen", "value": "123456"}
+  # 示例 3: 解锁鸿蒙设备，密码 123456
+  # {"action_type": "unlock_screen", "value": "123456"}
+
+  # pinch - 移动端双指缩放（Android/iOS）
+  # value: "in" 表示缩小，"out" 表示放大
+  # params.scale: 缩放比例，默认 0.5；params.duration: 持续时间，默认 500ms
+  # {"action_type": "pinch", "value": "out", "params": {"scale": 0.5, "duration": 500}}
 
   # ---------- 窗口激活动作 ----------
   # activate_window - 激活窗口（Windows/Mac/Web 平台）
