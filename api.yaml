@@ -746,7 +746,7 @@ components:
 
     WorkerDevicesResponse:
       type: object
-      required: [status, started_at, supported_platforms, ip, port, devices, faulty_devices, namespace, config_version, scripts]
+      required: [status, started_at, supported_platforms, ip, port, devices, faulty_devices, device_namespaces, config_version, scripts]
       properties:
         status:
           type: string
@@ -780,8 +780,6 @@ components:
             items:
               type: object
               additionalProperties: true
-        namespace:
-          type: string
         device_namespaces:
           type: object
           description: "设备实际注册的命名空间；桌面平台为字符串，移动设备为 device_id 到 namespace 的映射"

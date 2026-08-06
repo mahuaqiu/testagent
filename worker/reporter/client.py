@@ -30,7 +30,6 @@ class Reporter:
         self.config = config
         self.platform_api = config.platform_api
         self.worker_id = config.id
-        self.namespace = config.namespace
 
         self._client = httpx.Client(timeout=10.0,trust_env=False)
         self._enabled = bool(self.platform_api)
@@ -48,7 +47,7 @@ class Reporter:
         ip: str,
         port: int,
         devices: Dict[str, List[str]],
-        namespace: Optional[str] = None,
+        namespace: str,
         version: Optional[str] = None,
         config_version: Optional[str] = None,
         scripts: Optional[Dict[str, str]] = None,
@@ -76,7 +75,7 @@ class Reporter:
             payload = {
                 "ip": ip,
                 "port": str(port),
-                "namespace": namespace or self.namespace,
+                "namespace": namespace,
                 "version": version,
                 "devices": devices,
                 "config_version": config_version,

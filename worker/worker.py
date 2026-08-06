@@ -724,7 +724,6 @@ class Worker:
                 "harmony_mobile": devices.get("faulty_harmony_mobile", []),
                 "harmony_pc": devices.get("faulty_harmony_pc", []),
             },
-            "namespace": self.reporter.namespace if self.reporter else self.config.namespace,
             "device_namespaces": device_namespaces,
             "config_version": self.config.config_version,
             "scripts": get_all_script_versions(),

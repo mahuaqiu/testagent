@@ -6,6 +6,15 @@ from worker.config import WorkerConfig
 from worker.worker import Worker
 
 
+def test_namespace_defaults_to_worker_namespace_without_overrides() -> None:
+    """未配置覆盖规则时，所有平台和设备使用默认 namespace。"""
+    config = WorkerConfig(namespace="meeting_public")
+
+    assert config.get_namespace("windows") == "meeting_public"
+    assert config.get_namespace("android", "device-001") == "meeting_public"
+    assert config.get_namespace("harmony_pc", "pc-001") == "meeting_public"
+
+
 def test_namespace_overrides_use_device_then_platform_then_default() -> None:
     """具体设备覆盖应优先于平台覆盖与默认值。"""
     config = WorkerConfig(
