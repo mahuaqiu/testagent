@@ -7,6 +7,11 @@ worker:
   ip: null                          # Specify IP address, null means auto-detect
   port: 8088                        # HTTP service port
   namespace: meeting_public         # Namespace for categorizing Workers
+  # 默认使用 namespace；支持平台覆盖（android）和设备精确覆盖（android/serial）。
+  # namespace_overrides:
+  #   android: meeting_app
+  #   harmony_pc: meeting_av
+  #   android/serial-001: meeting_gamma
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
   discover_harmony_mobile_devices: false  # 是否发现鸿蒙移动设备

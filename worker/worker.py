@@ -519,38 +519,52 @@ class Worker:
         # 获取本机 IP
         ip = HostDiscoverer.get_preferred_ip(self.config.ip)
 
-        devices_payload: dict[str, list[str]] = {}
+        device_ids = {
+            "android": android_udids,
+            "ios": ios_udids,
+            "harmony_mobile": harmony_mobile_udids,
+            "harmony_pc": harmony_pc_udids,
+        }
 
-        # 1. 根据操作系统添加桌面平台
+        # 同一 Worker 可以将不同平台或具体设备注册到不同命名空间。
+        for namespace, devices_payload in self._build_registration_payloads(device_ids).items():
+            self.reporter.register_env(
+                ip=ip,
+                port=self.port,
+                devices=devices_payload,
+                namespace=namespace,
+                version=self._get_version(),
+                config_version=self.config.config_version,
+                scripts=get_all_script_versions(),
+            )
+
+    def _build_registration_payloads(
+        self,
+        device_ids: dict[str, list[str]],
+    ) -> dict[str, dict[str, list[str]]]:
+        """按设备实际命名空间拆分平台注册请求。"""
+        payloads: dict[str, dict[str, list[str]]] = {}
+
+        def add(namespace: str, platform: str, device_id: str | None = None) -> None:
+            payload = payloads.setdefault(namespace, {})
+            values = payload.setdefault(platform, [])
+            if device_id and device_id not in values:
+                values.append(device_id)
+
         if self.host_info:
             if self.host_info.os_type == "windows":
-                devices_payload["windows"] = []
-                devices_payload["web"] = []
+                namespace = self.config.get_namespace("windows")
+                add(namespace, "windows")
+                # Web 由 Windows Worker 提供，始终随 Windows 设备归属注册。
+                add(namespace, "web")
             elif self.host_info.os_type == "macos":
-                devices_payload["mac"] = []
+                add(self.config.get_namespace("mac"), "mac")
 
-        # 2. Android 设备
-        if android_udids:
-            devices_payload["android"] = android_udids
+        for platform, ids in device_ids.items():
+            for device_id in ids:
+                add(self.config.get_namespace(platform, device_id), platform, device_id)
 
-        # 3. iOS 设备
-        if ios_udids:
-            devices_payload["ios"] = ios_udids
-
-        if harmony_mobile_udids:
-            devices_payload["harmony_mobile"] = harmony_mobile_udids
-        if harmony_pc_udids:
-            devices_payload["harmony_pc"] = harmony_pc_udids
-
-        # 调用新的注册接口
-        self.reporter.register_env(
-            ip=ip,
-            port=self.port,
-            devices=devices_payload,
-            version=self._get_version(),
-            config_version=self.config.config_version,
-            scripts=get_all_script_versions(),
-        )
+        return payloads
 
     def _start_device_monitor(self) -> None:
         """启动设备监控（已由 DeviceMonitor 模块接管）。"""
@@ -670,6 +684,32 @@ class Worker:
         # 使用配置的 IP 或自动获取
         ip = HostDiscoverer.get_preferred_ip(self.config.ip)
 
+        visible_devices = {
+            "windows": [],
+            "web": [],
+            "mac": [],
+            "android": [d for d in devices.get("android", []) if d.get("connection_status") != "disconnected"],
+            "ios": [d for d in devices.get("ios", []) if d.get("connection_status") != "disconnected"],
+            "harmony_mobile": devices.get("harmony_mobile", []),
+            "harmony_pc": devices.get("harmony_pc", []),
+        }
+
+        device_namespaces: dict[str, str | dict[str, str]] = {}
+        if self.host_info:
+            if self.host_info.os_type == "windows":
+                windows_namespace = self.config.get_namespace("windows")
+                device_namespaces["windows"] = windows_namespace
+                device_namespaces["web"] = windows_namespace
+            elif self.host_info.os_type == "macos":
+                device_namespaces["mac"] = self.config.get_namespace("mac")
+
+        for platform in ("android", "ios", "harmony_mobile", "harmony_pc"):
+            device_namespaces[platform] = {
+                device_id: self.config.get_namespace(platform, device_id)
+                for item in visible_devices[platform]
+                if (device_id := item.get("udid") or item.get("device_id"))
+            }
+
         return {
             "status": self._status,
             "started_at": self._started_at,
@@ -677,22 +717,15 @@ class Worker:
             "ip": ip,
             "port": self.port,
             "version": self._get_version(),
-            "devices": {
-                "windows": [],
-                "web": [],
-                "mac": [],
-                "android": [d for d in devices.get("android", []) if d.get("connection_status") != "disconnected"],
-                "ios": [d for d in devices.get("ios", []) if d.get("connection_status") != "disconnected"],
-                "harmony_mobile": devices.get("harmony_mobile", []),
-                "harmony_pc": devices.get("harmony_pc", []),
-            },
+            "devices": visible_devices,
             "faulty_devices": {
                 "android": devices.get("faulty_android", []),
                 "ios": devices.get("faulty_ios", []),
                 "harmony_mobile": devices.get("faulty_harmony_mobile", []),
                 "harmony_pc": devices.get("faulty_harmony_pc", []),
             },
-            "namespace": self.reporter.namespace if self.reporter else "",
+            "namespace": self.reporter.namespace if self.reporter else self.config.namespace,
+            "device_namespaces": device_namespaces,
             "config_version": self.config.config_version,
             "scripts": get_all_script_versions(),
         }

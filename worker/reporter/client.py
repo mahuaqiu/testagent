@@ -48,6 +48,7 @@ class Reporter:
         ip: str,
         port: int,
         devices: Dict[str, List[str]],
+        namespace: Optional[str] = None,
         version: Optional[str] = None,
         config_version: Optional[str] = None,
         scripts: Optional[Dict[str, str]] = None,
@@ -75,7 +76,7 @@ class Reporter:
             payload = {
                 "ip": ip,
                 "port": str(port),
-                "namespace": self.namespace,
+                "namespace": namespace or self.namespace,
                 "version": version,
                 "devices": devices,
                 "config_version": config_version,

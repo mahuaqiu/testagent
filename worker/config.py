@@ -49,6 +49,7 @@ class WorkerConfig:
     ip: str | None = None  # 指定 IP 地址，None 表示自动获取
     port: int = 8080
     namespace: str = "public"               # 命名空间，用于分类 Worker
+    namespace_overrides: dict[str, str] = field(default_factory=dict)
     device_check_interval: int = 300        # 设备检测间隔(秒)，改为5分钟
     service_retry_count: int = 3            # 服务启动重试次数
     service_retry_interval: int = 10        # 重试间隔(秒)
@@ -132,6 +133,22 @@ class WorkerConfig:
             self.discover_harmony_mobile_devices = True
             self.discover_harmony_pc_devices = True
 
+        self.namespace_overrides = {
+            str(key).strip(): str(value).strip()
+            for key, value in (self.namespace_overrides or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+
+    def get_namespace(self, platform: str, device_id: str | None = None) -> str:
+        """获取平台或设备实际注册的命名空间。"""
+        if device_id:
+            device_key = f"{platform}/{device_id}"
+            namespace = self.namespace_overrides.get(device_key)
+            if namespace:
+                return namespace
+
+        return self.namespace_overrides.get(platform) or self.namespace
+
     @classmethod
     def from_yaml(cls, path: str) -> "WorkerConfig":
         """从 YAML 文件加载配置。
@@ -180,6 +197,7 @@ class WorkerConfig:
             ip=worker_data.get("ip"),
             port=worker_data.get("port", 8080),
             namespace=worker_data.get("namespace", "public"),
+            namespace_overrides=worker_data.get("namespace_overrides") or {},
             device_check_interval=worker_data.get("device_check_interval", 300),
             service_retry_count=worker_data.get("service_retry_count", 3),
             service_retry_interval=worker_data.get("service_retry_interval", 10),
