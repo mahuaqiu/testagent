@@ -238,7 +238,7 @@ class BaseActionExecutor(ActionExecutor):
         platform: "PlatformManager",
         source_bytes: bytes,
         template_base64: str,
-        threshold: float = 0.8,
+        threshold: float = 0.9,
         index: int = 0
     ) -> tuple[int, int] | None:
         """

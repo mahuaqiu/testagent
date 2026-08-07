@@ -112,9 +112,9 @@ autotest/
 | `ocr_wait` | 等待文字出现 | `{"action_type": "ocr_wait", "value": "确认", "timeout": 10000}` |
 | `ocr_assert` | 断言文字存在 | `{"action_type": "ocr_assert", "value": "成功", "timeout": 5000}` |
 | `ocr_get_text` | 获取屏幕文字 | `{"action_type": "ocr_get_text", "value": ""}` |
-| `image_click` | 点击匹配的图像 | `{"action_type": "image_click", "value": "button.png", "threshold": 0.8}` |
+| `image_click` | 点击匹配的图像 | `{"action_type": "image_click", "value": "button.png", "threshold": 0.9}` |
 | `image_wait` | 等待图像出现 | `{"action_type": "image_wait", "value": "icon.png", "timeout": 10000}` |
-| `image_assert` | 断言图像存在 | `{"action_type": "image_assert", "value": "logo.png", "threshold": 0.8}` |
+| `image_assert` | 断言图像存在 | `{"action_type": "image_assert", "value": "logo.png", "threshold": 0.9}` |
 | `click` | 坐标点击 | `{"action_type": "click", "x": 500, "y": 300}` |
 | `swipe` | 滑动 | `{"action_type": "swipe", "from": {"x": 500, "y": 1000}, "to": {"x": 500, "y": 500}, "duration": 500}` |
 | `input` | 坐标输入 | `{"action_type": "input", "x": 500, "y": 300, "text": "hello"}` |
@@ -128,7 +128,7 @@ autotest/
 - `value`: 动作核心值（文字、图像路径、等待毫秒数、坐标等），**必填**
 - `offset`: 相对于识别结果的偏移量 `{"x": 横向偏移, "y": 纵向偏移}`，**可选**
 - `timeout`: 超时时间（毫秒），默认 5000，**可选**
-- `threshold`: 图像匹配阈值，默认 0.8，**可选**
+- `threshold`: 图像匹配阈值，默认 0.9，**可选**
 - `text`: 输入的文本内容，**必填**（用于 ocr_input、input）
 - `x`, `y`: 坐标位置，**必填**（用于 click、input）
 - `from`, `to`: 滑动起始和结束坐标，**必填**（用于 swipe）

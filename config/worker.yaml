@@ -7,15 +7,15 @@ worker:
   ip: null                          # Specify IP address, null means auto-detect
   port: 8088                        # HTTP service port
   namespace: meeting_public         # Namespace for categorizing Workers
-  # 默认使用 namespace；支持平台覆盖（android）和设备精确覆盖（android/serial）。
+  # Uses namespace by default; supports platform overrides (android) and device-specific overrides (android/serial).
   # namespace_overrides:
   #   android: meeting_app
   #   harmony_pc: meeting_av
   #   android/serial-001: meeting_gamma
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
-  discover_harmony_mobile_devices: false  # 是否发现鸿蒙移动设备
-  discover_harmony_pc_devices: false      # 是否发现鸿蒙 PC 设备
+  discover_harmony_mobile_devices: false  # Enable HarmonyOS mobile device discovery
+  discover_harmony_pc_devices: false      # Enable HarmonyOS PC device discovery
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
   service_retry_interval: 10        # Retry interval (seconds)
@@ -55,14 +55,14 @@ platforms:
     token_headers:
       - "X-Auth-Token"
       - "X-Request-Operator"
-    # Chromium 启动参数（字符串列表）
-    # 用于自定义浏览器行为，如禁用翻译、禁用自动化提示等
+    # Chromium launch arguments (string list)
+    # Customize browser behavior, such as disabling translation and automation notices
     browser_args:
-      - "--disable-features=Translate,TranslateUI"  # 禁用浏览器翻译功能
-    # 缓存自动清理配置
-    cache_clear_enabled: true              # 是否启用自动清理
-    cache_clear_interval_hours: 24         # 清理间隔（小时）
-    cache_clear_clear_on_idle: true        # 是否仅在空闲时清理
+      - "--disable-features=Translate,TranslateUI"  # Disable browser translation
+    # Automatic cache cleanup settings
+    cache_clear_enabled: true              # Enable automatic cleanup
+    cache_clear_interval_hours: 24         # Cleanup interval (hours)
+    cache_clear_clear_on_idle: true        # Only clean up while idle
 
   android:
     enabled: null                   # Only on Windows
@@ -94,19 +94,19 @@ platforms:
 
   harmony_mobile:
     enabled: null                   # Only on Windows
-    hdc_path: tools/hdc/hdc.exe     # HDC 路径，空则自动搜索 tools/hdc
+    hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
     session_timeout: 300
     screenshot_dir: data/screenshots
 
   harmony_pc:
     enabled: null                   # Only on Windows
-    hdc_path: tools/hdc/hdc.exe     # HDC 路径，空则自动搜索 tools/hdc
+    hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
     session_timeout: 300
     screenshot_dir: data/screenshots
 
 # Image Matching Settings
 image_matching:
-  default_threshold: 0.8            # Default matching threshold
+  default_threshold: 0.9            # Default matching threshold
   methods:                          # Supported matching methods
     - template                      # Template matching
     - sift                          # Feature point matching
@@ -296,8 +296,8 @@ websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
   streaming_fps: 10              # Streaming frame rate
-  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). 默认保持 jpeg，
-                                  # codec 实际由 server.py 基于 WebSocket query 参数 codec 决定（实测 ?codec=h264）；
-                                  # 此默认值仅影响无 query 时的兜底，不与 H.264 推流优化冲突
-  streaming_bitrate: 4000000     # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
+  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). Keep jpeg by default.
+                                  # server.py selects the actual codec from the WebSocket codec query parameter (for example, ?codec=h264).
+                                  # This value is only the fallback when no query parameter is supplied and does not conflict with H.264 streaming optimizations.
+  streaming_bitrate: 4000000     # Average H.264 bitrate (4 Mbps; VBR bursts may exceed this value)
   streaming_profile: 66          # H.264 profile: 66=Baseline, 77=Main, 100=High

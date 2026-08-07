@@ -131,7 +131,7 @@ PlatformManager (抽象基类)
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作、move 类动作 |
-| `threshold` | 图像匹配阈值（默认 0.8） | image_* 动作 |
+| `threshold` | 图像匹配阈值（默认 0.9） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
 | `end_x`, `end_y` | 拖拽终点坐标 | swipe, drag |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
@@ -212,7 +212,7 @@ PlatformManager (抽象基类)
   "image_base64": "<base64_encoded_image>",
   "value": "密码",
   "end_x": 500,
-  "threshold": 0.8
+  "threshold": 0.9
 }
 ```
 }
