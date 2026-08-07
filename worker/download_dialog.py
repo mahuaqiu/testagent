@@ -4,26 +4,39 @@
 提供 PyQt5 下载进度对话框，支持取消下载。
 """
 
-import os
 import logging
-import httpx
+import os
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
+import httpx
+from PyQt5.QtCore import (
+    Qt,
+    QThread,
+    pyqtSignal,
+)
 from PyQt5.QtWidgets import (
     QDialog,
-    QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QProgressBar,
     QPushButton,
-    QHBoxLayout,
-)
-from PyQt5.QtCore import (
-    QThread,
-    pyqtSignal,
-    Qt,
+    QVBoxLayout,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_local_download_path(download_url: str) -> bool:
+    """判断下载地址是否为本地文件或 UNC 共享路径。"""
+    path = str(download_url).strip()
+    parsed = urlparse(path)
+    return (
+        path.startswith(("\\\\", "//"))
+        or os.path.isabs(path)
+        or parsed.scheme == ""
+    )
 
 
 class DownloadThread(QThread):
@@ -67,6 +80,10 @@ class DownloadThread(QThread):
         logger.info(f"保存路径: {self.save_path}")
 
         try:
+            if _is_local_download_path(self.download_url):
+                self._copy_local_file()
+                return
+
             with httpx.Client(
                 timeout=self.timeout,
                 trust_env=False,
@@ -117,6 +134,36 @@ class DownloadThread(QThread):
             error_msg = f"下载失败: {e}"
             logger.error(error_msg)
             self.error_signal.emit(error_msg)
+
+    def _copy_local_file(self) -> None:
+        """复制本地或 UNC 安装包，并支持取消。"""
+        source_path = Path(str(self.download_url).strip())
+        if not source_path.is_file():
+            raise FileNotFoundError(f"源文件不存在: {self.download_url}")
+
+        total_size = source_path.stat().st_size
+        downloaded = 0
+        os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+
+        with source_path.open("rb") as source, open(self.save_path, "wb") as target:
+            while True:
+                if self._is_cancelled:
+                    logger.info("复制已取消")
+                    target.close()
+                    if os.path.exists(self.save_path):
+                        os.remove(self.save_path)
+                    self.cancelled_signal.emit()
+                    return
+
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+                downloaded += len(chunk)
+                self.progress_signal.emit(downloaded, total_size)
+
+        logger.info(f"文件复制完成: {self.download_url} -> {self.save_path}")
+        self.finished_signal.emit(self.save_path)
 
     def cancel(self) -> None:
         """取消下载。"""
