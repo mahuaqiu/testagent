@@ -68,7 +68,8 @@ class SettingsWindow(QDialog):
             return {}
 
         # 尝试多种编码
-        encodings = ["utf-8", "gbk", "gb18030"]
+        # 兼容旧安装器在 Windows PowerShell 5.1 下生成的 UTF-16 配置。
+        encodings = ["utf-8-sig", "utf-16", "gbk", "gb18030"]
         data = None
         last_error = None
 
@@ -440,8 +441,7 @@ class SettingsWindow(QDialog):
         original_content = ""
         try:
             if os.path.exists(self.config_path):
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    original_content = f.read()
+                original_content = self._read_config_content()
                 logger.info(f"Config file read successfully")
         except Exception as e:
             logger.error(f"Failed to read config file: {e}")
@@ -542,3 +542,17 @@ class SettingsWindow(QDialog):
                     break
 
         return '\n'.join(lines)
+
+    def _read_config_content(self) -> str:
+        """读取配置文件，兼容旧安装器生成的 UTF-16 文件。"""
+        encodings = ["utf-8-sig", "utf-16", "gbk", "gb18030"]
+        last_error = None
+        for encoding in encodings:
+            try:
+                with open(self.config_path, "r", encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError as error:
+                last_error = error
+        if last_error:
+            raise last_error
+        return ""

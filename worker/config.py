@@ -158,7 +158,9 @@ class WorkerConfig:
         - GBK/GB18030：Windows 中文系统默认编码（如 Inno Setup 生成的配置）
         """
         # 尝试多种编码
-        encodings = ["utf-8", "gbk", "gb18030"]
+        # Windows PowerShell 5.1 的旧安装器会将 Set-Content 默认写成 UTF-16。
+        # 保留该编码兼容，避免旧安装包生成的配置被当成空配置读取。
+        encodings = ["utf-8-sig", "utf-16", "gbk", "gb18030"]
         data = None
 
         for encoding in encodings:
@@ -466,7 +468,8 @@ def load_config() -> WorkerConfig:
 
 def _read_file_with_encoding(path: str) -> str:
     """尝试多种编码读取文件。"""
-    encodings = ["utf-8", "gbk", "gb18030"]
+    # 兼容旧安装器在 Windows PowerShell 5.1 下生成的 UTF-16 配置。
+    encodings = ["utf-8-sig", "utf-16", "gbk", "gb18030"]
     for encoding in encodings:
         try:
             with open(path, encoding=encoding) as f:
@@ -551,8 +554,7 @@ def merge_config_with_local_protection(
 
     # 读取现有配置的保留字段
     if os.path.exists(existing_config_path):
-        with open(existing_config_path, encoding="utf-8") as f:
-            existing_data = yaml.safe_load(f) or {}
+        existing_data = yaml.safe_load(_read_file_with_encoding(existing_config_path)) or {}
         existing_worker = existing_data.get("worker", {})
     else:
         existing_worker = {}

@@ -1,4 +1,4 @@
-; installer/installer.nsi
+﻿; installer/installer.nsi
 ; Test Worker Install Script
 ; NSIS Modern UI 2
 
@@ -341,7 +341,6 @@ Function IsUpgradeInstall
     StrCpy $IsUpgrade "0"
   done:
 FunctionEnd
-
 ; Config page creation
 Function ConfigPageCreate
   ; Check if upgrade install
@@ -356,28 +355,26 @@ Function ConfigPageCreate
 
   ; Row 1: IP and Port on same line
   ${NSD_CreateLabel} 0 0 140 12u "Worker IP Address:"
-  ${NSD_CreateText} 0 18 280 12u ""
+  ${NSD_CreateText} 0 18 280 12u "$IpInput"
   Pop $IpInput
-  ; Use IP detected in .onInit (stored in DetectedIP, not IpInput which is now control handle)
-  ${NSD_SetText} $IpInput $DetectedIP
 
   ${NSD_CreateLabel} 300 0 80 12u "Port:"
-  ${NSD_CreateText} 300 18 80 12u "8088"
+  ${NSD_CreateText} 300 18 80 12u "$PortInput"
   Pop $PortInput
 
   ; Row 2: Namespace
   ${NSD_CreateLabel} 0 40 100% 12u "Namespace:"
-  ${NSD_CreateText} 0 58 200 12u "meeting_public"
+  ${NSD_CreateText} 0 58 200 12u "$NamespaceInput"
   Pop $NamespaceInput
 
   ; Row 3: Platform API address
   ${NSD_CreateLabel} 0 80 100% 12u "Platform API Address:"
-  ${NSD_CreateText} 0 98 350 12u "${PLATFORM_API}"
+  ${NSD_CreateText} 0 98 350 12u "$PlatformApiInput"
   Pop $PlatformApiInput
 
   ; Row 4: OCR service address
   ${NSD_CreateLabel} 0 120 100% 12u "OCR Service Address:"
-  ${NSD_CreateText} 0 138 350 12u "${OCR_SERVICE}"
+  ${NSD_CreateText} 0 138 350 12u "$OcrServiceInput"
   Pop $OcrServiceInput
 
   ; Row 5: Device discovery options
@@ -398,6 +395,13 @@ FunctionEnd
 
 ; Config page leave
 Function ConfigPageLeave
+  ; 升级安装跳过配置页，没有可读取的控件。
+  Call IsUpgradeInstall
+  StrCmp $IsUpgrade "1" done
+
+  ; 静默安装没有 nsDialogs 控件，保留 .onInit 中解析出的参数。
+  IfSilent silent_install
+
   ; Get user input
   ${NSD_GetText} $IpInput $IpInput
   ${NSD_GetText} $PortInput $PortInput
@@ -408,6 +412,9 @@ Function ConfigPageLeave
   ${NSD_GetState} $DiscoverIos $DiscoverIos
   ${NSD_GetState} $DiscoverHarmonyMobile $DiscoverHarmonyMobile
   ${NSD_GetState} $DiscoverHarmonyPc $DiscoverHarmonyPc
+
+  done:
+  silent_install:
 FunctionEnd
 
 ; Config file replacement
@@ -431,50 +438,85 @@ Function ReplaceConfigFile
   ; Use nsExec::Exec to completely hide console window
   ; Use double-quoted NSIS string, PowerShell uses single quotes for -replace arguments
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace 'ip: null', 'ip: $IpInput' | Set-Content '$9'$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ip:.*$', '  ip: $IpInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Port replacement
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace 'port: 8088', 'port: $PortInput' | Set-Content '$9'$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*port:.*$', '  port: $PortInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Namespace replacement
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace 'namespace: meeting_public', 'namespace: $NamespaceInput' | Set-Content '$9'$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*namespace:.*$', '  namespace: $NamespaceInput' | Set-Content '$9' -Encoding UTF8$\""
+  nsExec::Exec $1
+  Pop $0
+
+  ; 平台 API 和 OCR 服务都在安装页收集，必须写入用户配置。
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*platform_api:.*$', '  platform_api: $PlatformApiInput' | Set-Content '$9' -Encoding UTF8$\""
+  nsExec::Exec $1
+  Pop $0
+
+  StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ocr_service:.*$', '  ocr_service: $OcrServiceInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Device discovery - Android
-  StrCmp $DiscoverAndroid ${BST_CHECKED} 0 skip_android
+  StrCmp $DiscoverAndroid ${BST_CHECKED} 0 android_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_android_devices: false', 'discover_android_devices: true' | Set-Content '$9'$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$', '  discover_android_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    nsExec::Exec $1
+    Pop $0
+    Goto skip_android
+  android_unchecked:
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$', '  discover_android_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_android:
 
   ; Device discovery - iOS
-  StrCmp $DiscoverIos ${BST_CHECKED} 0 skip_ios
+  StrCmp $DiscoverIos ${BST_CHECKED} 0 ios_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_ios_devices: false', 'discover_ios_devices: true' | Set-Content '$9'$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$', '  discover_ios_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    nsExec::Exec $1
+    Pop $0
+    Goto skip_ios
+  ios_unchecked:
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$', '  discover_ios_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_ios:
 
   ; Device discovery - Harmony Mobile
-  StrCmp $DiscoverHarmonyMobile ${BST_CHECKED} 0 skip_harmony_mobile
+  StrCmp $DiscoverHarmonyMobile ${BST_CHECKED} 0 harmony_mobile_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_mobile_devices: false', 'discover_harmony_mobile_devices: true' | Set-Content '$9'$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$', '  discover_harmony_mobile_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    nsExec::Exec $1
+    Pop $0
+    Goto skip_harmony_mobile
+  harmony_mobile_unchecked:
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$', '  discover_harmony_mobile_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_harmony_mobile:
 
   ; Device discovery - Harmony PC
-  StrCmp $DiscoverHarmonyPc ${BST_CHECKED} 0 skip_harmony_pc
+  StrCmp $DiscoverHarmonyPc ${BST_CHECKED} 0 harmony_pc_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace 'discover_harmony_pc_devices: false', 'discover_harmony_pc_devices: true' | Set-Content '$9'$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$', '  discover_harmony_pc_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    nsExec::Exec $1
+    Pop $0
+    Goto skip_harmony_pc
+  harmony_pc_unchecked:
+    StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$', '  discover_harmony_pc_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_harmony_pc:
@@ -489,6 +531,17 @@ FunctionEnd
 
 ; Initialize function (handle command line parameters)
 Function .onInit
+  ; 默认值用于静默安装，也作为可视化安装页面的初始值。
+  StrCpy $IpInput ""
+  StrCpy $PortInput "8088"
+  StrCpy $NamespaceInput "meeting_public"
+  StrCpy $PlatformApiInput "${PLATFORM_API}"
+  StrCpy $OcrServiceInput "${OCR_SERVICE}"
+  StrCpy $DiscoverAndroid ${BST_UNCHECKED}
+  StrCpy $DiscoverIos ${BST_UNCHECKED}
+  StrCpy $DiscoverHarmonyMobile ${BST_UNCHECKED}
+  StrCpy $DiscoverHarmonyPc ${BST_UNCHECKED}
+
   ; Get command line parameters
   ${GetParameters} $0
 
@@ -519,6 +572,8 @@ Function .onInit
   StrCmp $DetectedIP "" 0 done
     Call GetLocalIP
     StrCpy $DetectedIP $R0
+    StrCmp $IpInput "" 0 done
+      StrCpy $IpInput $DetectedIP
   done:
 FunctionEnd
 
