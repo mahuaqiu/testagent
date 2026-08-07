@@ -510,9 +510,10 @@ class GUIApp:
             return
 
         try:
-            # 先同步停止 Worker，回收本项目启动的 HDC，再交给安装器做兜底清理。
-            self._stop_worker()
+            # 必须先启动安装器，再停止 Worker。否则退出清理可能在安装器
+            # Popen 执行前结束当前进程，造成下载完成后直接退出。
             self.upgrade_manager.run_silent_install(downloaded_file)
+            self._stop_worker()
             self._show_info_dialog("升级", "安装程序已启动，Worker 将退出")
             self._do_exit()
         except Exception as e:

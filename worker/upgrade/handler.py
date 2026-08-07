@@ -153,11 +153,14 @@ def _execute_upgrade_background(
 
         logger.info(f"下载完成: {installer_path}")
 
-        # 2. 安装前先释放 Worker 自己持有的资源；安装器还会按归属记录做兜底清理。
+        # 2. 必须先拉起安装器，再停止 Worker。
+        # 安装器会自行清理旧进程；如果先 stop，退出清理可能让当前进程在
+        # Popen 执行前结束，表现为下载完成后直接退出但安装器没有启动。
         _status_manager.update_status("installing")
-        _stop_worker()
-
         run_silent_install(installer_path)
+
+        # 安装器已经创建成功，再释放 Worker 资源并退出。
+        _stop_worker()
 
         # 3. 标记完成（安装程序会重启 Worker）
         _status_manager.update_status(
