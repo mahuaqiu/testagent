@@ -367,7 +367,12 @@
       "PowerShell(cargo test *)",
       "Bash(cargo test *)",
       "Bash(./hdc.exe list *)",
-      "Bash(echo \"===EXIT: $?===\")"
+      "Bash(echo \"===EXIT: $?===\")",
+      "Bash(where makensis *)",
+      "Read(//c/Program Files \\\\\\(x86\\\\\\)/NSIS//**)",
+      "Read(//c/Program Files/**)",
+      "Bash(/c/Program Files/NSIS/makensis.exe *)",
+      "Bash(xxd -l 16 \"D:/code/autotest/installer/installer.nsi\")"
     ]
   }
 }
