@@ -87,3 +87,21 @@ def test_installer_escapes_powershell_regex_line_anchors() -> None:
 
     assert "-replace '(?m)^\\s*ip:.*$$'" in script
     assert "-replace '(?m)^\\s*discover_harmony_pc_devices:.*$$'" in script
+
+
+def test_oninit_keeps_defaults_when_command_line_option_missing() -> None:
+    """未传命令行参数时（GetOptions 返回空串），.onInit 必须保留默认值。
+
+    StrCmp str1 str2 jump_if_equal jump_if_not_equal：
+    $1 为空即命令行未传该参数（相等分支），此时必须跳过 StrCpy 以保留默认值；
+    $1 非空即命令行传了该参数（不相等分支），此时才应执行 StrCpy 写入命令行值。
+    正确写法是 "StrCmp $1 \"\" +2 0"。写反成 "0 +2" 会导致未传参时用空串
+    覆盖 Port/Namespace/PlatformApi/OcrService 的默认值。
+    """
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    oninit_body = script.split("Function .onInit", maxsplit=1)[1].split(
+        "FunctionEnd", maxsplit=1
+    )[0]
+
+    assert oninit_body.count('StrCmp $1 "" +2 0') == 5
+    assert 'StrCmp $1 "" 0 +2' not in oninit_body

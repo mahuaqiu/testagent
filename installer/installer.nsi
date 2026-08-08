@@ -584,24 +584,30 @@ Function .onInit
   ${GetParameters} $0
 
   ; Parse parameters (optional: support /IP= /PORT= etc)
+  ; StrCmp 语法为 StrCmp str1 str2 jump_if_equal jump_if_not_equal。
+  ; 之前写成 "0 +2" 导致：未传该命令行参数时（$1 为空，属于相等分支）反而落到下一行执行 StrCpy，
+  ; 用空字符串覆盖了 .onInit 刚设置好的默认值；真正传参时（不相等）又跳过 StrCpy 丢弃传入值。
+  ; 正常安装（不带命令行参数）Port/Namespace/PlatformApi/OcrService 的默认值就是这样被清空的。
+  ; IP 之所以看起来没问题，是因为后面还有 GetLocalIP 自动探测兜底覆盖了被清空的值。
+  ; 修正为 "+2 0"：未传参（相等）跳过 StrCpy 保留默认值；传参（不相等）落到下一行写入命令行值。
   ${GetOptions} $0 "/IP=" $1
-  StrCmp $1 "" 0 +2
+  StrCmp $1 "" +2 0
     StrCpy $IpInput $1
 
   ${GetOptions} $0 "/PORT=" $1
-  StrCmp $1 "" 0 +2
+  StrCmp $1 "" +2 0
     StrCpy $PortInput $1
 
   ${GetOptions} $0 "/NAMESPACE=" $1
-  StrCmp $1 "" 0 +2
+  StrCmp $1 "" +2 0
     StrCpy $NamespaceInput $1
 
   ${GetOptions} $0 "/PLATFORM_API=" $1
-  StrCmp $1 "" 0 +2
+  StrCmp $1 "" +2 0
     StrCpy $PlatformApiInput $1
 
   ${GetOptions} $0 "/OCR_SERVICE=" $1
-  StrCmp $1 "" 0 +2
+  StrCmp $1 "" +2 0
     StrCpy $OcrServiceInput $1
 
   ; Auto detect IP for all installs (not just silent)
