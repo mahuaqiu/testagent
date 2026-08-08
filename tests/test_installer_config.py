@@ -65,3 +65,25 @@ def test_installer_persists_every_config_page_field() -> None:
         assert field in script
 
     assert "Set-Content '$9' -Encoding UTF8" in script
+
+
+def test_uninstaller_only_calls_uninstaller_functions() -> None:
+    """卸载段调用的自定义函数必须使用 NSIS 要求的 un. 前缀。"""
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    uninstall_section = script.split("Section Uninstall", maxsplit=1)[1].split(
+        "SectionEnd", maxsplit=1
+    )[0]
+
+    assert "Call un.KillDeviceServiceProcesses" in uninstall_section
+    assert "Call un.KillOwnedHdcProcesses" in uninstall_section
+    assert "Function un.KillDeviceServiceProcesses" in script
+    assert "Function un.KillOwnedHdcProcesses" in script
+    assert "IfFileExists \"$2\" 0 un_done_owned_hdc" in script
+
+
+def test_installer_escapes_powershell_regex_line_anchors() -> None:
+    """NSIS 字符串中 PowerShell 正则的行尾锚点必须转义为字面量美元符。"""
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert "-replace '(?m)^\\s*ip:.*$$'" in script
+    assert "-replace '(?m)^\\s*discover_harmony_pc_devices:.*$$'" in script

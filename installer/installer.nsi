@@ -121,10 +121,10 @@ Section Uninstall
   Pop $0
 
   ; 保留原有设备服务清理：ios、adb、ffmpeg 仍按安装目录过滤
-  Call KillDeviceServiceProcesses
+  Call un.KillDeviceServiceProcesses
 
   ; HDC 只能清理 Worker 自己启动并登记的实例，不能按进程名或路径批量杀用户的 HDC
-  Call KillOwnedHdcProcesses
+  Call un.KillOwnedHdcProcesses
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -228,6 +228,44 @@ Function KillOwnedHdcProcesses
   Pop $0
   Pop $0
   done_owned_hdc:
+FunctionEnd
+
+; 卸载段只能调用 un. 前缀函数，保留与安装升级一致的设备服务清理范围。
+Function un.KillDeviceServiceProcesses
+  StrCpy $2 "$INSTDIR"
+  StrCpy $3 "$2\"
+  DetailPrint "Killing device service processes..."
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$p = Get-Process -Name ios,adb,ffmpeg -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1foreach ($$x in $$p) { "
+  StrCpy $1 "$1  if ($$x.Path.StartsWith('$3', 1) -or $$x.Path.StartsWith('$2\\', 1)) { "
+  StrCpy $1 "$1    $$x.Kill() "
+  StrCpy $1 "$1  } "
+  StrCpy $1 "$1}$\""
+  nsExec::ExecToStack $1
+  Pop $0
+  Pop $0
+FunctionEnd
+
+; 仅清理由本 Worker 登记的 HDC，避免误杀用户自行启动的进程。
+Function un.KillOwnedHdcProcesses
+  StrCpy $2 "$INSTDIR\data\hdc_processes.json"
+  IfFileExists "$2" 0 un_done_owned_hdc
+  DetailPrint "Killing Worker-owned HDC processes..."
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$path = '$2'; "
+  StrCpy $1 "$1try { $$records = @(Get-Content -Raw -LiteralPath $$path | ConvertFrom-Json) } catch { $$records = @() }; "
+  StrCpy $1 "$1foreach ($$record in $$records) { "
+  StrCpy $1 "$1  $$p = Get-Process -Id ([int]$$record.pid) -ErrorAction SilentlyContinue; "
+  StrCpy $1 "$1  if ($$null -eq $$p) { continue }; "
+  StrCpy $1 "$1  try { $$samePath = ([IO.Path]::GetFullPath($$p.Path) -ieq [IO.Path]::GetFullPath([string]$$record.exe_path)) } catch { $$samePath = $$false }; "
+  StrCpy $1 "$1  try { $$expected = [DateTimeOffset]::FromUnixTimeSeconds([int64][double]$$record.create_time).UtcDateTime; $$sameStart = ([Math]::Abs(($$p.StartTime.ToUniversalTime() - $$expected).TotalSeconds) -le 2) } catch { $$sameStart = $$false }; "
+  StrCpy $1 "$1  if ($$samePath -and $$sameStart) { try { $$p.Kill() } catch {} }; "
+  StrCpy $1 "$1}; Remove-Item -LiteralPath $$path -Force -ErrorAction SilentlyContinue$\""
+  nsExec::ExecToStack $1
+  Pop $0
+  Pop $0
+  un_done_owned_hdc:
 FunctionEnd
 
 ; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)
@@ -438,43 +476,43 @@ Function ReplaceConfigFile
   ; Use nsExec::Exec to completely hide console window
   ; Use double-quoted NSIS string, PowerShell uses single quotes for -replace arguments
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ip:.*$', '  ip: $IpInput' | Set-Content '$9' -Encoding UTF8$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ip:.*$$', '  ip: $IpInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Port replacement
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*port:.*$', '  port: $PortInput' | Set-Content '$9' -Encoding UTF8$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*port:.*$$', '  port: $PortInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Namespace replacement
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*namespace:.*$', '  namespace: $NamespaceInput' | Set-Content '$9' -Encoding UTF8$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*namespace:.*$$', '  namespace: $NamespaceInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; 平台 API 和 OCR 服务都在安装页收集，必须写入用户配置。
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*platform_api:.*$', '  platform_api: $PlatformApiInput' | Set-Content '$9' -Encoding UTF8$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*platform_api:.*$$', '  platform_api: $PlatformApiInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ocr_service:.*$', '  ocr_service: $OcrServiceInput' | Set-Content '$9' -Encoding UTF8$\""
+  StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*ocr_service:.*$$', '  ocr_service: $OcrServiceInput' | Set-Content '$9' -Encoding UTF8$\""
   nsExec::Exec $1
   Pop $0
 
   ; Device discovery - Android
   StrCmp $DiscoverAndroid ${BST_CHECKED} 0 android_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$', '  discover_android_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$$', '  discover_android_devices: true' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
     Goto skip_android
   android_unchecked:
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$', '  discover_android_devices: false' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_android_devices:.*$$', '  discover_android_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_android:
@@ -482,13 +520,13 @@ Function ReplaceConfigFile
   ; Device discovery - iOS
   StrCmp $DiscoverIos ${BST_CHECKED} 0 ios_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$', '  discover_ios_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$$', '  discover_ios_devices: true' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
     Goto skip_ios
   ios_unchecked:
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$', '  discover_ios_devices: false' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_ios_devices:.*$$', '  discover_ios_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_ios:
@@ -496,13 +534,13 @@ Function ReplaceConfigFile
   ; Device discovery - Harmony Mobile
   StrCmp $DiscoverHarmonyMobile ${BST_CHECKED} 0 harmony_mobile_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$', '  discover_harmony_mobile_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$$', '  discover_harmony_mobile_devices: true' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
     Goto skip_harmony_mobile
   harmony_mobile_unchecked:
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$', '  discover_harmony_mobile_devices: false' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_mobile_devices:.*$$', '  discover_harmony_mobile_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_harmony_mobile:
@@ -510,13 +548,13 @@ Function ReplaceConfigFile
   ; Device discovery - Harmony PC
   StrCmp $DiscoverHarmonyPc ${BST_CHECKED} 0 harmony_pc_unchecked
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$', '  discover_harmony_pc_devices: true' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$$', '  discover_harmony_pc_devices: true' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
     Goto skip_harmony_pc
   harmony_pc_unchecked:
     StrCpy $1 "$\"powershell$\" -NoProfile -ExecutionPolicy Bypass -Command $\""
-    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$', '  discover_harmony_pc_devices: false' | Set-Content '$9' -Encoding UTF8$\""
+    StrCpy $1 "$1(Get-Content '$9') -replace '(?m)^\s*discover_harmony_pc_devices:.*$$', '  discover_harmony_pc_devices: false' | Set-Content '$9' -Encoding UTF8$\""
     nsExec::Exec $1
     Pop $0
   skip_harmony_pc:
