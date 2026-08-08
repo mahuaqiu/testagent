@@ -372,7 +372,9 @@
       "Read(//c/Program Files \\\\\\(x86\\\\\\)/NSIS//**)",
       "Read(//c/Program Files/**)",
       "Bash(/c/Program Files/NSIS/makensis.exe *)",
-      "Bash(xxd -l 16 \"D:/code/autotest/installer/installer.nsi\")"
+      "Bash(xxd -l 16 \"D:/code/autotest/installer/installer.nsi\")",
+      "Bash(git log *)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }
