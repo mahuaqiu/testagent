@@ -1011,12 +1011,16 @@ class Worker:
         if validation_result:
             return validation_result
 
-        # 移动端 start_app/stop_app 需要确保设备服务可用，即使 needs_context=False
+        # 设备命令类动作需要确保设备服务可用，即使执行器声明 requires_context=False。
         # 因为这些动作依赖 _current_device 和 client 来执行命令
         needs_device_service = (
             platform in ("ios", "android", "harmony_mobile", "harmony_pc")
             and task.device_id
-            and any(a.action_type in ("start_app", "stop_app") for a in task.actions)
+            and any(
+                a.action_type in ("start_app", "stop_app")
+                or (platform == "harmony_pc" and a.action_type == "activate_window")
+                for a in task.actions
+            )
         )
 
         # 启动平台（如果未启动）

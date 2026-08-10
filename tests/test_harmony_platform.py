@@ -359,6 +359,99 @@ def test_harmony_pc_right_click_uses_long_tap() -> None:
     assert calls == [(123, 456)]
 
 
+def test_harmony_pc_move_uses_hdc_uinput() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        move_mouse=lambda x, y: calls.append((x, y)) or True,
+    )
+
+    manager.move(123, 456, context=client)
+
+    assert calls == [(123, 456)]
+
+
+def test_harmony_mobile_move_is_not_supported() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    client = SimpleNamespace(move_mouse=lambda *_: True)
+
+    with pytest.raises(NotImplementedError, match="only supported on Harmony PC"):
+        manager.move(1, 2, context=client)
+
+
+def test_harmony_hdc_move_mouse_uses_uinput_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper, commands = _make_command_capture_wrapper(monkeypatch)
+
+    assert wrapper.move_mouse(123, 456) is True
+    assert commands == ["uinput -M -m 123 456"]
+
+
+def test_harmony_hdc_activate_window_uses_aa_start_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper, commands = _make_command_capture_wrapper(monkeypatch)
+
+    assert wrapper.activate_window("com.example.app", "MainAbility") is True
+    assert commands == ["aa start -b 'com.example.app' -a 'MainAbility'"]
+
+
+def test_harmony_pc_activate_window_accepts_bundle_and_ability_fields() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    calls: list[tuple[str, str]] = []
+    client = SimpleNamespace(
+        activate_window=lambda bundle, ability: calls.append((bundle, ability)) or True,
+    )
+    action = Action.from_dict({
+        "action_type": "activate_window",
+        "bundleName": "com.example.app",
+        "abilityName": "MainAbility",
+    })
+
+    result = manager.execute_action(client, action)
+
+    assert result.status == ActionStatus.SUCCESS
+    assert calls == [("com.example.app", "MainAbility")]
+
+
+def test_harmony_pc_activate_window_requires_both_fields() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    action = Action.from_dict({
+        "action_type": "activate_window",
+        "bundleName": "com.example.app",
+    })
+
+    result = manager.execute_action(SimpleNamespace(), action)
+
+    assert result.status == ActionStatus.FAILED
+    assert result.error == "bundle_name and ability_name are required"
+
+
+def test_harmony_activate_window_fields_round_trip_from_camel_case() -> None:
+    action = Action.from_dict({
+        "action_type": "activate_window",
+        "bundleName": "com.example.app",
+        "abilityName": "MainAbility",
+    })
+
+    assert action.bundle_name == "com.example.app"
+    assert action.ability_name == "MainAbility"
+    assert action.to_dict() == {
+        "action_type": "activate_window",
+        "bundle_name": "com.example.app",
+        "ability_name": "MainAbility",
+    }
+
+
+def test_harmony_hdc_window_commands_report_remote_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper, _ = _make_command_capture_wrapper(
+        monkeypatch,
+        output="[Fail] command failed",
+    )
+
+    assert wrapper.move_mouse(1, 2) is False
+    assert wrapper.activate_window("com.example.app", "MainAbility") is False
+
+
 def test_harmony_click_turns_false_hdc_result_into_error() -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
     client = SimpleNamespace(tap=lambda x, y: False)

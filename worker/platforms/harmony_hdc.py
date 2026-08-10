@@ -1119,6 +1119,19 @@ class HarmonyHdcWrapper:
         logger.info(f"应用启动成功: {package}/{ability}")
         return True
 
+    def move_mouse(self, x: int, y: int) -> bool:
+        """通过 HDC uinput 将鼠标移动到指定坐标。"""
+        result = self.shell(f"uinput -M -m {int(x)} {int(y)}")
+        return self._check_result(result, "鼠标移动")
+
+    def activate_window(self, bundle_name: str, ability_name: str) -> bool:
+        """通过 Ability Assistant 激活鸿蒙 PC 应用窗口。"""
+        result = self.shell(
+            f"aa start -b {_quote_remote_shell_argument(bundle_name)} "
+            f"-a {_quote_remote_shell_argument(ability_name)}"
+        )
+        return self._check_result(result, "激活窗口")
+
     def stop_app(self, package: str) -> bool:
         """
         强制停止应用。

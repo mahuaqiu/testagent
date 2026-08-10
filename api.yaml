@@ -1127,7 +1127,7 @@ components:
             - click: 点击指定坐标
             - right_click: 右键点击指定坐标（仅桌面端）
             - double_click: 双击指定坐标
-            - move: 移动鼠标到指定坐标（仅桌面端）
+            - move: 移动鼠标到指定坐标（Windows/Mac/Web/鸿蒙 PC；鸿蒙 PC 使用 HDC uinput）
             - swipe: 滑动手势
             - drag: 拖拽手势（与 swipe 参数相同）
             - input: 在指定坐标输入文本
@@ -1147,7 +1147,7 @@ components:
             - cmd_exec: 在宿主机执行 shell/cmd 命令
             - unlock_screen: 解锁屏幕（iOS/Android 专用）
             - pinch: 移动端双指缩放，value 为 in 或 out
-            - activate_window: 激活窗口（Windows/Mac/Web 专用）
+            - activate_window: 激活窗口（Windows/Mac/Web/鸿蒙 PC；鸿蒙 PC 通过 bundleName + abilityName 激活）
             - close_window: 关闭窗口/弹窗（Windows/Web 专用，PostMessage WM_CLOSE）
             - set_resolution: 设置显示器分辨率（Windows 专用）
             - set_volume: 设置系统音量（Windows 专用）
@@ -1220,7 +1220,7 @@ components:
             - ocr_get_position: 要查找的文字内容（支持 reg_ 前缀正则匹配）
             - cmd_exec: 要执行的命令字符串，如 "echo hello" 或 "dir C:\\Users"
             - unlock_screen: 解锁密码（数字密码，如 "123456"）
-            - activate_window: 窗口标题或窗口类名（支持包含匹配）
+            - activate_window: Windows/Mac/Web 为窗口标题或窗口类名；鸿蒙 PC 可作为 bundleName 的兼容传参
             - close_window: 窗口标题（match_by=title）或窗口类名（match_by=class）
         match_mode:
           type: string
@@ -1240,6 +1240,7 @@ components:
             平台支持：
             - Windows/Web: 支持 title 和 class 模式
             - Mac: 仅 activate_window 支持 class 模式（通过应用名激活）
+            - 鸿蒙 PC: 不使用 match_by，通过 bundleName 和 abilityName 激活应用窗口
         class:
           type: string
           description: "window_class 的兼容别名，仅用于 close_window 窗口类名定位"
@@ -1266,6 +1267,22 @@ components:
             示例：
             {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
             {"action_type": "close_window", "value": "声音", "window_class": "#32770", "name": "rundll32.exe"}
+        bundleName:
+          type: string
+          description: |
+            鸿蒙 PC activate_window 动作的 Bundle 名称。
+            也兼容 snake_case 字段 bundle_name，以及使用 value 传入 Bundle 名称。
+        abilityName:
+          type: string
+          description: |
+            鸿蒙 PC activate_window 动作的 Ability 名称。
+            也兼容 snake_case 字段 ability_name，以及 params.ability 历史写法。
+        bundle_name:
+          type: string
+          description: "bundleName 的 snake_case 兼容字段，仅用于鸿蒙 PC activate_window"
+        ability_name:
+          type: string
+          description: "abilityName 的 snake_case 兼容字段，仅用于鸿蒙 PC activate_window"
         proxy:
           type: string
           description: |
@@ -1473,10 +1490,10 @@ components:
             其他动作（如 ocr_click、ocr_assert、image_click、image_assert 等）不使用此参数。
         x:
           type: integer
-          description: "X 坐标（像素），仅 click、right_click、move 和 input 动作必填"
+          description: "X 坐标（像素），仅 click、right_click、move 和 input 动作必填；鸿蒙 PC move 将其传给 uinput -M -m"
         y:
           type: integer
-          description: "Y 坐标（像素），仅 click、right_click、move 和 input 动作必填"
+          description: "Y 坐标（像素），仅 click、right_click、move 和 input 动作必填；鸿蒙 PC move 将其传给 uinput -M -m"
         end_x:
           type: integer
           description: |
@@ -1846,7 +1863,8 @@ components:
   # 示例 2: 双击坐标并偏移
   # {"action_type": "double_click", "x": 500, "y": 300, "offset": {"x": 10, "y": 5}}
 
-  # move - 移动鼠标到指定坐标（仅桌面端支持）
+  # move - 移动鼠标到指定坐标（Windows/Mac/Web/鸿蒙 PC）
+  # 鸿蒙 PC 对应设备命令：hdc shell uinput -M -m <x> <y>
   # 示例 1: 移动鼠标到坐标 (500, 300)
   # {"action_type": "move", "x": 500, "y": 300}
   # 示例 2: 移动鼠标到坐标并偏移
@@ -2047,8 +2065,8 @@ components:
   # {"action_type": "pinch", "value": "out", "params": {"scale": 0.5, "duration": 500}}
 
   # ---------- 窗口激活动作 ----------
-  # activate_window - 激活窗口（Windows/Mac/Web 平台）
-  # 将指定窗口带到前台并获取焦点，支持按标题或窗口类名定位
+  # activate_window - 激活窗口（Windows/Mac/Web/鸿蒙 PC 平台）
+  # Windows/Mac/Web 将指定窗口带到前台；鸿蒙 PC 通过 Bundle 和 Ability 激活窗口
   # 示例 1: 按窗口标题激活（包含匹配）
   # {"action_type": "activate_window", "value": "计算器"}
   # 示例 2: 按窗口类名激活 Chrome 浏览器
@@ -2059,6 +2077,9 @@ components:
   # {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "msedge.exe"}
   # 示例 5: Mac 激活应用（使用 class 模式，即应用名）
   # {"action_type": "activate_window", "value": "Calculator", "match_by": "class"}
+  # 示例 6: 鸿蒙 PC 通过 Bundle 和 Ability 激活窗口
+  # 对应设备命令：hdc shell aa start -b <bundleName> -a <abilityName>
+  # {"action_type": "activate_window", "bundleName": "com.example.app", "abilityName": "MainAbility"}
 
   # ---------- 关闭窗口动作 ----------
   # close_window - 关闭指定窗口/弹窗（Windows/Web 平台）

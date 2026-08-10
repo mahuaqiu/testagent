@@ -47,8 +47,8 @@ class HarmonyPlatformManager(PlatformManager):
         "ocr_check_same_row_text", "ocr_check_same_row_image",
     }
     PC_ACTIONS: set[str] = {
-        "click", "double_click", "right_click", "swipe", "drag", "input", "press", "screenshot", "wait",
-        "start_app", "stop_app", "unlock_screen",
+        "click", "double_click", "right_click", "move", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "start_app", "stop_app", "unlock_screen", "activate_window",
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_double_click",
         "ocr_exist", "ocr_get_position", "image_click", "image_wait", "image_assert",
         "image_double_click", "image_exist", "image_get_position", "image_click_near_text",
@@ -384,14 +384,20 @@ class HarmonyPlatformManager(PlatformManager):
 
     def move(self, x: int, y: int, context=None) -> None:
         """
-        移动（鸿蒙无 hover 操作，忽略）。
+        通过 HDC uinput 移动鼠标。
 
         Args:
             x: X 坐标
             y: Y 坐标
             context: 执行上下文（可选）
         """
-        raise NotImplementedError("Harmony HDC 暂不支持鼠标移动")
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if self._device_type != "harmony_pc":
+            raise NotImplementedError("move action is only supported on Harmony PC")
+        if not client.move_mouse(x, y):
+            raise HarmonyError(f"HDC 鼠标移动失败: ({x}, {y})")
 
     def input_text(self, text: str, context=None) -> None:
         """
@@ -475,6 +481,8 @@ class HarmonyPlatformManager(PlatformManager):
             return self._action_start_app(client, action)
         elif action.action_type == "stop_app":
             return self._action_stop_app(client, action)
+        elif action.action_type == "activate_window":
+            return self._action_activate_window(client, action)
         elif action.action_type == "unlock_screen":
             # 使用 ActionRegistry 执行
             executor = ActionRegistry.get(action.action_type)
@@ -543,3 +551,50 @@ class HarmonyPlatformManager(PlatformManager):
         except Exception as e:
             logger.error(f"stop_app failed: {e}")
             return ActionResult(action.number, "stop_app", ActionStatus.FAILED, error=str(e))
+
+    def _action_activate_window(self, client: HarmonyHdcWrapper, action: Action) -> ActionResult:
+        """通过 bundleName 和 abilityName 激活鸿蒙 PC 窗口。"""
+        action_number = getattr(action, "number", 0)
+        if self._device_type != "harmony_pc":
+            return ActionResult(
+                action_number,
+                "activate_window",
+                ActionStatus.FAILED,
+                error="activate_window action is only supported on Harmony PC",
+            )
+
+        params = action.params or {}
+        bundle_name = action.bundle_name or params.get("bundleName") or params.get("bundle_name")
+        ability_name = action.ability_name or params.get("abilityName") or params.get("ability_name")
+
+        # value 兼容 Bundle 名称；ability 兼容 start_app 的历史参数写法。
+        bundle_name = bundle_name or action.value
+        ability_name = ability_name or params.get("ability")
+        if not bundle_name or not ability_name:
+            return ActionResult(
+                action_number,
+                "activate_window",
+                ActionStatus.FAILED,
+                error="bundle_name and ability_name are required",
+            )
+
+        if not isinstance(bundle_name, str) or not isinstance(ability_name, str):
+            return ActionResult(
+                action_number,
+                "activate_window",
+                ActionStatus.FAILED,
+                error="bundle_name and ability_name must be strings",
+            )
+
+        try:
+            if not client.activate_window(bundle_name, ability_name):
+                raise HarmonyError(f"HDC 激活窗口失败: {bundle_name}/{ability_name}")
+            return ActionResult(
+                action_number,
+                "activate_window",
+                ActionStatus.SUCCESS,
+                output=f"Window activated: {bundle_name}/{ability_name}",
+            )
+        except Exception as e:
+            logger.error(f"activate_window failed: {e}")
+            return ActionResult(action_number, "activate_window", ActionStatus.FAILED, error=str(e))
