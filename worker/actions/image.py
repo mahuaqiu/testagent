@@ -35,6 +35,13 @@ def _image_to_base64(img: "Image.Image") -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _region_b64(screenshot_bytes: bytes | None, has_region: bool) -> str | None:
+    """当 action 使用了 region 裁剪时，将裁剪后的截图字节转为 base64；否则返回 None。"""
+    if not has_region or not screenshot_bytes:
+        return None
+    return base64.b64encode(screenshot_bytes).decode("ascii")
+
+
 def _parse_row_tolerance(row_tolerance) -> tuple[int, int]:
     """解析 row_tolerance 参数，返回 (top_px, bottom_px)。
 
@@ -96,6 +103,7 @@ class ImageClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -205,6 +213,11 @@ class ImageWaitAction(BaseActionExecutor):
             status=ActionStatus.FAILED,
             error="Image not appeared within timeout",
             ocr_info=self._get_last_ocr_info(platform),
+            region_screenshot=_region_b64(
+                self._crop_region(platform.take_screenshot(context), action.region)
+                if action.region else None,
+                bool(action.region),
+            ),
         )
 
 
@@ -248,6 +261,7 @@ class ImageAssertAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.FAILED,
                     error="Image found but expected not exist",
+                    region_screenshot=_region_b64(screenshot, bool(action.region)),
                 )
             else:
                 return ActionResult(
@@ -270,6 +284,7 @@ class ImageAssertAction(BaseActionExecutor):
                     action_type=self.name,
                     status=ActionStatus.FAILED,
                     error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                    region_screenshot=_region_b64(screenshot, bool(action.region)),
                 )
 
 
@@ -331,6 +346,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Image not found near text: {action.value}",
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -400,6 +416,7 @@ class ImageMoveAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -469,6 +486,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error="Image not found" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标

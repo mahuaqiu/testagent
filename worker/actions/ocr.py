@@ -38,6 +38,13 @@ def _image_to_base64(img: "Image.Image") -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _region_b64(screenshot_bytes: bytes | None, has_region: bool) -> str | None:
+    """当 action 使用了 region 裁剪时，将裁剪后的截图字节转为 base64；否则返回 None。"""
+    if not has_region or not screenshot_bytes:
+        return None
+    return base64.b64encode(screenshot_bytes).decode("ascii")
+
+
 def _parse_row_tolerance(row_tolerance) -> tuple[int, int]:
     """解析 row_tolerance 参数，返回 (top_px, bottom_px)。
 
@@ -92,6 +99,7 @@ class OcrClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -158,6 +166,7 @@ class OcrInputAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -264,6 +273,11 @@ class OcrWaitAction(BaseActionExecutor):
             status=ActionStatus.FAILED,
             error=f"Text not appeared within timeout: {action.value}",
             ocr_info=self._get_last_ocr_info(platform),
+            region_screenshot=_region_b64(
+                self._crop_region(platform.take_screenshot(context), action.region)
+                if action.region else None,
+                bool(action.region),
+            ),
         )
 
 
@@ -313,6 +327,7 @@ class OcrAssertAction(BaseActionExecutor):
                     status=ActionStatus.FAILED,
                     error=f"Texts found but expected not exist: {found}",
                     ocr_info=self._get_last_ocr_info(platform),
+                    region_screenshot=_region_b64(screenshot, bool(action.region)),
                 )
             else:
                 return ActionResult(
@@ -331,6 +346,7 @@ class OcrAssertAction(BaseActionExecutor):
                     status=ActionStatus.FAILED,
                     error=f"Texts not found: {not_found}",
                     ocr_info=self._get_last_ocr_info(platform),
+                    region_screenshot=_region_b64(screenshot, bool(action.region)),
                 )
             else:
                 return ActionResult(
@@ -411,6 +427,7 @@ class OcrMoveAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
@@ -472,6 +489,7 @@ class OcrDoubleClickAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
 
         # 将相对坐标转换为全局坐标
