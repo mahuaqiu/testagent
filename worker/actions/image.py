@@ -6,6 +6,7 @@ image_move, image_double_click, image_exist,
 ocr_click_same_row_image, ocr_check_same_row_image。
 """
 
+import base64
 import io
 import logging
 import time
@@ -25,6 +26,32 @@ logger = logging.getLogger(__name__)
 def _get_timestamp() -> float:
     """获取当前时间戳（Unix timestamp）。"""
     return time.time()
+
+
+def _image_to_base64(img: "Image.Image") -> str:
+    """将 PIL Image 转换为 base64 字符串。"""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _parse_row_tolerance(row_tolerance) -> tuple[int, int]:
+    """解析 row_tolerance 参数，返回 (top_px, bottom_px)。
+
+    支持两种写法：
+    - 整数：上下各扩展相同像素，如 25 → (25, 25)
+    - 列表/元组 [top, bottom]：分别指定上下方向，如 [25, 0] → (25, 0)
+    """
+    default = 25
+    if row_tolerance is None:
+        return default, default
+    if isinstance(row_tolerance, (list, tuple)) and len(row_tolerance) >= 2:
+        return int(row_tolerance[0]), int(row_tolerance[1])
+    try:
+        v = int(row_tolerance)
+        return v, v
+    except (TypeError, ValueError):
+        return default, default
 
 
 class ImageClickAction(BaseActionExecutor):
@@ -522,10 +549,10 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
         img = Image.open(io.BytesIO(screenshot))
         img_width, img_height = img.size
 
-        # 裁剪水平带状区域（使用 region 相对坐标）
-        row_tolerance = action.row_tolerance if action.row_tolerance is not None else 20
-        top = max(0, anchor_y - row_tolerance)
-        bottom = min(img_height, anchor_y + row_tolerance + 1)
+        # 裁剪水平带状区域（支持上下分别控制）
+        tol_top, tol_bottom = _parse_row_tolerance(action.row_tolerance)
+        top = max(0, anchor_y - tol_top)
+        bottom = min(img_height, anchor_y + tol_bottom + 1)
 
         cropped = img.crop((0, top, img_width, bottom))
 
@@ -548,6 +575,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
                 status=ActionStatus.FAILED,
                 error=f"Target image not found in row of \"{action.anchor_text}\"" + (f" at target_index {target_index}" if target_index > 0 else ""),
                 ocr_info=self._get_last_ocr_info(platform),
+                region_screenshot=_image_to_base64(cropped),
             )
 
         # 计算目标在原图中的坐标（加上裁剪偏移）
@@ -636,13 +664,13 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
 
         anchor_x, anchor_y = anchor_position
 
-        # 获取截图尺寸并裁剪水平带状区域（使用 region 相对坐标）
+        # 获取截图尺寸并裁剪水平带状区域（支持上下分别控制）
         img = Image.open(io.BytesIO(screenshot))
         img_width, img_height = img.size
 
-        row_tolerance = action.row_tolerance if action.row_tolerance is not None else 20
-        top = max(0, anchor_y - row_tolerance)
-        bottom = min(img_height, anchor_y + row_tolerance + 1)
+        tol_top, tol_bottom = _parse_row_tolerance(action.row_tolerance)
+        top = max(0, anchor_y - tol_top)
+        bottom = min(img_height, anchor_y + tol_bottom + 1)
 
         cropped = img.crop((0, top, img_width, bottom))
         cropped_bytes_io = io.BytesIO()
@@ -679,6 +707,8 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
             status=ActionStatus.SUCCESS,
             output=json.dumps(output_data),
             ocr_info=self._get_last_ocr_info(platform),
+            # 找不到时附带区域截图，便于在报告中定位问题
+            region_screenshot=_image_to_base64(cropped) if not exists else None,
         )
 
     def _find_text_with_fallback(self, platform: "PlatformManager", image_bytes: bytes, text: str, index: int = 0, match_mode: str = "exact") -> tuple[int, int] | None:

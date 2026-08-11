@@ -116,7 +116,7 @@ class Action:
     # 同行定位参数
     anchor_text: str | None = None        # 锚点文本（用于同行定位）
     anchor_index: int | None = None       # 锚点索引（第几个匹配）
-    row_tolerance: int | None = None      # 水平带范围（像素，默认20）
+    row_tolerance: int | list | None = None  # 水平带范围：整数（上下对称）或 [top, bottom] 数组，默认25
     target_index: int | None = None       # 目标索引（同行第几个匹配）
     region: list[int] | None = None       # 操作区域 [x1, y1, x2, y2]
     match_by: str | None = None           # 定位方式："title" 或 "process"

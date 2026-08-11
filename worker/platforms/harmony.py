@@ -553,7 +553,12 @@ class HarmonyPlatformManager(PlatformManager):
             return ActionResult(action.number, "stop_app", ActionStatus.FAILED, error=str(e))
 
     def _action_activate_window(self, client: HarmonyHdcWrapper, action: Action) -> ActionResult:
-        """通过 bundleName 和 abilityName 激活鸿蒙 PC 窗口。"""
+        """通过 Bundle 名称和 Ability 名称激活鸿蒙 PC 窗口。
+
+        参数约定：
+          value  — Bundle 名称（包名），如 "com.example.app"
+          name   — Ability 名称，如 "MainAbility"
+        """
         action_number = getattr(action, "number", 0)
         if self._device_type != "harmony_pc":
             return ActionResult(
@@ -563,19 +568,15 @@ class HarmonyPlatformManager(PlatformManager):
                 error="activate_window action is only supported on Harmony PC",
             )
 
-        params = action.params or {}
-        bundle_name = action.bundle_name or params.get("bundleName") or params.get("bundle_name")
-        ability_name = action.ability_name or params.get("abilityName") or params.get("ability_name")
+        bundle_name = action.value
+        ability_name = action.name
 
-        # value 兼容 Bundle 名称；ability 兼容 start_app 的历史参数写法。
-        bundle_name = bundle_name or action.value
-        ability_name = ability_name or params.get("ability")
         if not bundle_name or not ability_name:
             return ActionResult(
                 action_number,
                 "activate_window",
                 ActionStatus.FAILED,
-                error="bundle_name and ability_name are required",
+                error="value（bundle 名称）和 name（ability 名称）均为必填",
             )
 
         if not isinstance(bundle_name, str) or not isinstance(ability_name, str):
@@ -583,7 +584,7 @@ class HarmonyPlatformManager(PlatformManager):
                 action_number,
                 "activate_window",
                 ActionStatus.FAILED,
-                error="bundle_name and ability_name must be strings",
+                error="bundle 名称和 ability 名称必须为字符串",
             )
 
         try:

@@ -1147,7 +1147,7 @@ components:
             - cmd_exec: 在宿主机执行 shell/cmd 命令
             - unlock_screen: 解锁屏幕（iOS/Android 专用）
             - pinch: 移动端双指缩放，value 为 in 或 out
-            - activate_window: 激活窗口（Windows/Mac/Web/鸿蒙 PC；鸿蒙 PC 通过 bundleName + abilityName 激活）
+            - activate_window: 激活窗口（Windows/Mac/Web/鸿蒙 PC；鸿蒙 PC 用 value=Bundle 名称、name=Ability 名称）
             - close_window: 关闭窗口/弹窗（Windows/Web 专用，PostMessage WM_CLOSE）
             - set_resolution: 设置显示器分辨率（Windows 专用）
             - set_volume: 设置系统音量（Windows 专用）
@@ -1220,7 +1220,7 @@ components:
             - ocr_get_position: 要查找的文字内容（支持 reg_ 前缀正则匹配）
             - cmd_exec: 要执行的命令字符串，如 "echo hello" 或 "dir C:\\Users"
             - unlock_screen: 解锁密码（数字密码，如 "123456"）
-            - activate_window: Windows/Mac/Web 为窗口标题或窗口类名；鸿蒙 PC 可作为 bundleName 的兼容传参
+            - activate_window: Windows/Mac/Web 为窗口标题或窗口类名；鸿蒙 PC 为 Bundle 名称（包名）
             - close_window: 窗口标题（match_by=title）或窗口类名（match_by=class）
         match_mode:
           type: string
@@ -1240,7 +1240,7 @@ components:
             平台支持：
             - Windows/Web: 支持 title 和 class 模式
             - Mac: 仅 activate_window 支持 class 模式（通过应用名激活）
-            - 鸿蒙 PC: 不使用 match_by，通过 bundleName 和 abilityName 激活应用窗口
+            - 鸿蒙 PC: 不使用 match_by，通过 value（Bundle 名称）和 name（Ability 名称）激活应用窗口
         class:
           type: string
           description: "window_class 的兼容别名，仅用于 close_window 窗口类名定位"
@@ -1267,22 +1267,6 @@ components:
             示例：
             {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "chrome.exe"}
             {"action_type": "close_window", "value": "声音", "window_class": "#32770", "name": "rundll32.exe"}
-        bundleName:
-          type: string
-          description: |
-            鸿蒙 PC activate_window 动作的 Bundle 名称。
-            也兼容 snake_case 字段 bundle_name，以及使用 value 传入 Bundle 名称。
-        abilityName:
-          type: string
-          description: |
-            鸿蒙 PC activate_window 动作的 Ability 名称。
-            也兼容 snake_case 字段 ability_name，以及 params.ability 历史写法。
-        bundle_name:
-          type: string
-          description: "bundleName 的 snake_case 兼容字段，仅用于鸿蒙 PC activate_window"
-        ability_name:
-          type: string
-          description: "abilityName 的 snake_case 兼容字段，仅用于鸿蒙 PC activate_window"
         proxy:
           type: string
           description: |
@@ -1370,12 +1354,12 @@ components:
             - ocr_*_same_row_*: 选择第 N 个匹配的锚点文本
             示例：anchor_index=1 表示使用第二个匹配的锚点文本
         row_tolerance:
-          type: integer
-          default: 20
           description: |
-            水平带范围（像素），仅 ocr_*_same_row_* 动作可用：
-            - 定义锚点文本上下搜索范围，默认 20 像素
-            - 例如 row_tolerance=20 表示在锚点 Y 坐标上下各 20 像素范围内搜索目标
+            水平带范围（像素），仅 ocr_*_same_row_* 动作可用，默认 25 像素。
+            支持两种写法：
+            - 整数：上下各扩展相同像素，如 25 → 上下各 25 像素
+            - 数组 [top, bottom]：分别指定上下方向，如 [25, 0] → 只往上扩展 25 像素、下方 0
+            例：row_tolerance=25 等同于 row_tolerance=[25,25]，row_tolerance=[30,0] 只向上查 30px
         target_index:
           type: integer
           default: 0
@@ -2077,9 +2061,9 @@ components:
   # {"action_type": "activate_window", "value": "Chrome_WidgetWin_1", "match_by": "class", "name": "msedge.exe"}
   # 示例 5: Mac 激活应用（使用 class 模式，即应用名）
   # {"action_type": "activate_window", "value": "Calculator", "match_by": "class"}
-  # 示例 6: 鸿蒙 PC 通过 Bundle 和 Ability 激活窗口
-  # 对应设备命令：hdc shell aa start -b <bundleName> -a <abilityName>
-  # {"action_type": "activate_window", "bundleName": "com.example.app", "abilityName": "MainAbility"}
+  # 示例 6: 鸿蒙 PC — value 传 Bundle 名称，name 传 Ability 名称
+  # 对应设备命令：hdc shell aa start -b <value> -a <name>
+  # {"action_type": "activate_window", "value": "com.example.app", "name": "MainAbility"}
 
   # ---------- 关闭窗口动作 ----------
   # close_window - 关闭指定窗口/弹窗（Windows/Web 平台）

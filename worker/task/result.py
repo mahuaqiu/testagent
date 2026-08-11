@@ -49,6 +49,8 @@ class ActionResult:
     stderr: Optional[str] = None     # 标准错误
     # OCR 失败时的信息
     ocr_info: Optional[list[dict[str, Any]]] = None  # OCR 识别信息列表
+    # 区域截图（same_row 等使用裁剪区域时，附带裁剪后的小图）
+    region_screenshot: Optional[str] = None  # base64，失败时的裁剪区域截图
     # 点击类动作时间戳
     timestamp: Optional[float] = None  # 点击动作执行时的时间戳（Unix timestamp）
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
@@ -70,6 +72,7 @@ class ActionResult:
             stdout=data.get("stdout"),
             stderr=data.get("stderr"),
             ocr_info=data.get("ocr_info"),
+            region_screenshot=data.get("region_screenshot"),
             timestamp=data.get("timestamp"),
             artifacts=data.get("artifacts", []),
         )
@@ -98,6 +101,8 @@ class ActionResult:
             result["stderr"] = self.stderr
         if self.ocr_info is not None:
             result["ocr_info"] = self.ocr_info
+        if self.region_screenshot is not None:
+            result["region_screenshot"] = self.region_screenshot
         if self.timestamp is not None:
             result["timestamp"] = self.timestamp
         if self.artifacts:
