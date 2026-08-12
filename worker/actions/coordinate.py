@@ -10,7 +10,7 @@ import time
 from typing import TYPE_CHECKING
 
 from common.utils import compress_image_to_jpeg
-from worker.actions.base import BaseActionExecutor
+from worker.actions.base import BaseActionExecutor, _get_timestamp
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
@@ -24,11 +24,6 @@ except ImportError:
     PYPERCLIP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
-
-def _get_timestamp() -> float:
-    """获取当前时间戳（Unix timestamp）。"""
-    return time.time()
 
 
 class ClickAction(BaseActionExecutor):

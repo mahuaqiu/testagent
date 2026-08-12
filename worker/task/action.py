@@ -109,14 +109,12 @@ class Action:
     restart: bool = False                 # 是否强制重启（Windows 平台专用）
     bundle_id: str | None = None          # iOS Bundle ID
     package_name: str | None = None       # Android 包名
-    bundle_name: str | None = None        # 鸿蒙 Bundle 名称
-    ability_name: str | None = None       # 鸿蒙 Ability 名称
     permissions: Any | None = None         # Web 权限配置（如 ["camera","microphone"] 或 "false"）
 
     # 同行定位参数
     anchor_text: str | None = None        # 锚点文本（用于同行定位）
     anchor_index: int | None = None       # 锚点索引（第几个匹配）
-    row_tolerance: int | list | None = None  # 水平带范围：整数（上下对称）或 [top, bottom] 数组，默认25
+    row_tolerance: int | list[int] | None = None  # 水平带范围：整数（上下对称）或 [top, bottom] 数组，默认25
     target_index: int | None = None       # 目标索引（同行第几个匹配）
     region: list[int] | None = None       # 操作区域 [x1, y1, x2, y2]
     match_by: str | None = None           # 定位方式："title" 或 "process"
@@ -204,8 +202,6 @@ class Action:
             restart=data.get("restart", False),
             bundle_id=data.get("bundle_id"),
             package_name=data.get("package_name"),
-            bundle_name=data.get("bundle_name") or data.get("bundleName"),
-            ability_name=data.get("ability_name") or data.get("abilityName"),
             permissions=data.get("permissions"),
             index=data.get("index"),
             time=data.get("time"),
@@ -281,10 +277,6 @@ class Action:
             result["bundle_id"] = self.bundle_id
         if self.package_name is not None:
             result["package_name"] = self.package_name
-        if self.bundle_name is not None:
-            result["bundle_name"] = self.bundle_name
-        if self.ability_name is not None:
-            result["ability_name"] = self.ability_name
         if self.index is not None:
             result["index"] = self.index
         if self.time is not None:

@@ -401,8 +401,8 @@ def test_harmony_pc_activate_window_accepts_bundle_and_ability_fields() -> None:
     )
     action = Action.from_dict({
         "action_type": "activate_window",
-        "bundleName": "com.example.app",
-        "abilityName": "MainAbility",
+        "value": "com.example.app",
+        "name": "MainAbility",
     })
 
     result = manager.execute_action(client, action)
@@ -415,28 +415,28 @@ def test_harmony_pc_activate_window_requires_both_fields() -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
     action = Action.from_dict({
         "action_type": "activate_window",
-        "bundleName": "com.example.app",
+        "value": "com.example.app",
     })
 
     result = manager.execute_action(SimpleNamespace(), action)
 
     assert result.status == ActionStatus.FAILED
-    assert result.error == "bundle_name and ability_name are required"
+    assert result.error == "value（bundle 名称）和 name（ability 名称）均为必填"
 
 
 def test_harmony_activate_window_fields_round_trip_from_camel_case() -> None:
     action = Action.from_dict({
         "action_type": "activate_window",
-        "bundleName": "com.example.app",
-        "abilityName": "MainAbility",
+        "value": "com.example.app",
+        "name": "MainAbility",
     })
 
-    assert action.bundle_name == "com.example.app"
-    assert action.ability_name == "MainAbility"
+    assert action.value == "com.example.app"
+    assert action.name == "MainAbility"
     assert action.to_dict() == {
         "action_type": "activate_window",
-        "bundle_name": "com.example.app",
-        "ability_name": "MainAbility",
+        "value": "com.example.app",
+        "name": "MainAbility",
     }
 
 

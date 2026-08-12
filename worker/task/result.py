@@ -52,7 +52,7 @@ class ActionResult:
     # 区域截图（same_row 等使用裁剪区域时，附带裁剪后的小图）
     region_screenshot: Optional[str] = None  # base64，失败时的裁剪区域截图
     # 点击类动作时间戳
-    timestamp: Optional[float] = None  # 点击动作执行时的时间戳（Unix timestamp）
+    timestamp: Optional[int] = None  # 点击动作执行时的时间戳（毫秒级）
     artifacts: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod

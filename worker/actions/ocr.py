@@ -17,51 +17,19 @@ from typing import TYPE_CHECKING
 
 from PIL import Image
 
-from worker.actions.base import BaseActionExecutor
+from worker.actions.base import (
+    BaseActionExecutor,
+    _get_timestamp,
+    _image_to_base64,
+    _parse_row_tolerance,
+    _region_b64,
+)
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
 
 logger = logging.getLogger(__name__)
-
-
-def _get_timestamp() -> float:
-    """获取当前时间戳（Unix timestamp）。"""
-    return time.time()
-
-
-def _image_to_base64(img: "Image.Image") -> str:
-    """将 PIL Image 转换为 base64 字符串。"""
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def _region_b64(screenshot_bytes: bytes | None, has_region: bool) -> str | None:
-    """当 action 使用了 region 裁剪时，将裁剪后的截图字节转为 base64；否则返回 None。"""
-    if not has_region or not screenshot_bytes:
-        return None
-    return base64.b64encode(screenshot_bytes).decode("ascii")
-
-
-def _parse_row_tolerance(row_tolerance) -> tuple[int, int]:
-    """解析 row_tolerance 参数，返回 (top_px, bottom_px)。
-
-    支持两种写法：
-    - 整数：上下各扩展相同像素，如 25 → (25, 25)
-    - 列表/元组 [top, bottom]：分别指定上下方向，如 [25, 0] → (25, 0)
-    """
-    default = 25
-    if row_tolerance is None:
-        return default, default
-    if isinstance(row_tolerance, (list, tuple)) and len(row_tolerance) >= 2:
-        return int(row_tolerance[0]), int(row_tolerance[1])
-    try:
-        v = int(row_tolerance)
-        return v, v
-    except (TypeError, ValueError):
-        return default, default
 
 
 class OcrClickAction(BaseActionExecutor):
