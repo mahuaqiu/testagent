@@ -24,3 +24,23 @@ def test_is_enabled_returns_false_when_no_flag(isolated_db):
     import common.autostart as autostart
 
     assert autostart.is_enabled() is False
+
+
+def test_set_enabled_true_writes_db_flag_true(isolated_db):
+    """set_enabled(True) 应把 db 标志写为 true。"""
+    import common.autostart as autostart
+
+    autostart.set_enabled(True)
+
+    assert autostart._read_db_flag() == "true"
+    assert autostart.is_enabled() is True
+
+
+def test_set_enabled_false_writes_db_flag_false(isolated_db):
+    """set_enabled(False) 应把 db 标志写为 false。"""
+    import common.autostart as autostart
+
+    autostart.set_enabled(False)
+
+    assert autostart._read_db_flag() == "false"
+    assert autostart.is_enabled() is False

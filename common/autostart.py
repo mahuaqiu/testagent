@@ -73,3 +73,78 @@ def is_enabled() -> bool:
         return False
     flag = _read_db_flag()
     return flag == "true"
+
+
+def _exe_path() -> str:
+    """返回自启要执行的 exe 全路径（打包后即 test-worker.exe）。"""
+    return sys.executable
+
+
+def _write_registry() -> None:
+    """写 HKLM Run 值，数据为带引号的 exe 路径。失败只记日志。"""
+    if winreg is None:
+        return
+    try:
+        key = winreg.CreateKeyEx(
+            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_SET_VALUE
+        )
+        try:
+            winreg.SetValueEx(
+                key, VALUE_NAME, 0, winreg.REG_SZ, f'"{_exe_path()}"'
+            )
+        finally:
+            key.Close()
+    except Exception as e:
+        logger.warning(f"写入自启注册表失败: {e}")
+
+
+def _delete_registry() -> None:
+    """删 HKLM Run 值。键不存在视为成功。失败只记日志。"""
+    if winreg is None:
+        return
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_SET_VALUE
+        )
+        try:
+            winreg.DeleteValue(key, VALUE_NAME)
+        finally:
+            key.Close()
+    except FileNotFoundError:
+        # 值不存在视为成功
+        pass
+    except Exception as e:
+        logger.warning(f"删除自启注册表失败: {e}")
+
+
+def _registry_has_value() -> bool:
+    """查询 HKLM Run 是否存在 test-worker 值。失败返回 False。"""
+    if winreg is None:
+        return False
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_READ
+        )
+        try:
+            winreg.QueryValueEx(key, VALUE_NAME)
+            return True
+        finally:
+            key.Close()
+    except FileNotFoundError:
+        return False
+    except Exception as e:
+        logger.warning(f"查询自启注册表失败: {e}")
+        return False
+
+
+def set_enabled(enabled: bool) -> None:
+    """设置自启状态：先写 db，再同步注册表。
+
+    enabled=True→写 HKLM Run 键；enabled=False→删 Run 键。
+    注册表操作失败不抛异常（只记日志），db 已更新成功即视为设置成功。
+    """
+    _write_db_flag(enabled)
+    if enabled:
+        _write_registry()
+    else:
+        _delete_registry()
