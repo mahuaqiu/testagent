@@ -148,3 +148,20 @@ def set_enabled(enabled: bool) -> None:
         _write_registry()
     else:
         _delete_registry()
+
+
+def seed_from_registry() -> None:
+    """首次启动播种：db 无 auto_start key 时，读注册表有无 test-worker
+    值来初始化 db。已有则跳过。幂等、不抛异常（失败只记日志）。
+    """
+    if winreg is None:
+        return
+    try:
+        if _read_db_flag() is not None:
+            # db 已有标志，不覆盖
+            return
+        has_value = _registry_has_value()
+        _write_db_flag(has_value)
+        logger.info(f"自启状态已从注册表播种到 db: {has_value}")
+    except Exception as e:
+        logger.warning(f"播种自启状态失败: {e}")
