@@ -105,3 +105,65 @@ def test_oninit_keeps_defaults_when_command_line_option_missing() -> None:
 
     assert oninit_body.count('StrCmp $1 "" +2 0') == 5
     assert 'StrCmp $1 "" 0 +2' not in oninit_body
+
+
+def test_installer_has_autostart_variable_and_registry_logic() -> None:
+    """安装脚本应包含开机自启变量、注册表写入（全新安装）、卸载删除逻辑。"""
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    # 变量声明
+    assert "Var AutoStart" in script
+
+    # .onInit 默认勾上
+    oninit_body = script.split("Function .onInit", maxsplit=1)[1].split(
+        "FunctionEnd", maxsplit=1
+    )[0]
+    assert "StrCpy $AutoStart ${BST_CHECKED}" in oninit_body
+
+    # 安装段：全新安装写注册表，升级跳过
+    main_section = script.split('Section "MainSection" SEC01', maxsplit=1)[1].split(
+        "SectionEnd", maxsplit=1
+    )[0]
+    assert "skip_autostart" in main_section
+    assert (
+        'WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "test-worker"'
+        in main_section
+    )
+    assert 'StrCmp $IsUpgrade "1" skip_autostart' in main_section
+
+    # 卸载段：删注册表
+    uninstall_section = script.split("Section Uninstall", maxsplit=1)[1].split(
+        "SectionEnd", maxsplit=1
+    )[0]
+    assert (
+        'DeleteRegValue HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "test-worker"'
+        in uninstall_section
+    )
+
+
+def test_installer_has_options_page() -> None:
+    """安装脚本应新增选项页，承载设备发现与开机自启。"""
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    # 页面顺序：配置页后紧跟选项页
+    assert "Page custom OptionsPageCreate OptionsPageLeave" in script
+    # 选项页创建与离开函数
+    assert "Function OptionsPageCreate" in script
+    assert "Function OptionsPageLeave" in script
+    # 选项页升级跳过
+    options_create = script.split("Function OptionsPageCreate", maxsplit=1)[1].split(
+        "FunctionEnd", maxsplit=1
+    )[0]
+    assert 'StrCmp $IsUpgrade "1" skip_options' in options_create
+    # 选项页含开机自启 checkbox
+    assert '"开机自动启动"' in options_create
+
+
+def test_installer_config_page_no_longer_has_device_discovery() -> None:
+    """配置页应移除设备发现控件（迁至选项页）。"""
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    config_create = script.split("Function ConfigPageCreate", maxsplit=1)[1].split(
+        "FunctionEnd", maxsplit=1
+    )[0]
+    # 配置页不再创建设备发现 checkbox
+    assert "Device Discovery:" not in config_create

@@ -118,7 +118,7 @@ class SettingsWindow(QDialog):
         """设置界面。"""
         self.setWindowTitle("设置")
         self.setMinimumWidth(500)
-        self.setMinimumHeight(480)
+        self.setMinimumHeight(540)
         self.setModal(True)
 
         # 移除右上角问号按钮，保留关闭按钮
@@ -225,6 +225,22 @@ class SettingsWindow(QDialog):
         grid.addLayout(discover_row, row, 0, 1, 3)
 
         row += 1
+
+        # 分隔线
+        line3 = QFrame()
+        line3.setFrameShape(QFrame.HLine)
+        line3.setStyleSheet("background-color: #e8e8e8;")
+        line3.setFixedHeight(1)
+        grid.addWidget(line3, row, 0, 1, 3)
+        row += 1
+
+        # 开机自启开关
+        grid.addWidget(self._create_label("开机自启"), row, 0)
+        self.autostart_checkbox = QCheckBox("开机时自动启动 Worker")
+        self.autostart_checkbox.setStyleSheet("font-size: 14px; color: #555555;")
+        grid.addWidget(self.autostart_checkbox, row, 1)
+        row += 1
+
         layout.addLayout(grid)
 
         # 弹性空间
@@ -372,6 +388,10 @@ class SettingsWindow(QDialog):
         self.discover_harmony_mobile_checkbox.setChecked(discover_harmony_mobile)
         self.discover_harmony_pc_checkbox.setChecked(discover_harmony_pc)
 
+        # 开机自启
+        from common.autostart import is_enabled
+        self.autostart_checkbox.setChecked(is_enabled())
+
     def _validate(self) -> bool:
         """验证输入。"""
         port_text = self.port_input.text().strip()
@@ -436,6 +456,14 @@ class SettingsWindow(QDialog):
         """保存按钮点击。"""
         if not self._validate():
             return
+
+        # 开机自启：写 db + 同步注册表（独立于 worker.yaml）
+        try:
+            from common.autostart import set_enabled
+            set_enabled(self.autostart_checkbox.isChecked())
+        except Exception as e:
+            logger.warning(f"保存开机自启设置失败: {e}")
+            # 不阻断，继续保存其它配置
 
         # Read original file content to preserve comments and format
         original_content = ""
