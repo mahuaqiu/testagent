@@ -72,7 +72,7 @@ db 的 `schema_meta.auto_start` 是**唯一真相源**，注册表是它的投�
 - **真相源**：`schema_meta` 表中 `key='auto_start'`，`value='true'` 或 `'false'`
 - **投影**：`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` 下 `test-worker` 值 = `sys.executable` 全路径（带引号，防路径含空格）
 - **播种时机**：`GUIApp.run()` 里 Worker 启动后、托盘启动前，调一次 `seed_from_registry()`。db 无该 key 时读注册表有无 `test-worker` 值来初始化；db 已有则跳过（幂等）
-- **设置窗口同步**：保存时若 db 值变化则同步注册表（false→true 写键，true→false 删键）；db 值未变则不动注册表
+- **设置窗口同步**：`set_enabled` 每次调用都先写 db 再同步注册表（false→true 写键，true→false 删键），不做变化检测——注册表写/删操作幂等，重复执行无副作用，实现更简单
 
 ### 三个组件的职责边界
 
