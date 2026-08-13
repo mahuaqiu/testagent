@@ -46,12 +46,14 @@ Var DiscoverAndroid
 Var DiscoverIos
 Var DiscoverHarmonyMobile
 Var DiscoverHarmonyPc
+Var AutoStart
 Var IsUpgrade
 
 ; Page order
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom ConfigPageCreate ConfigPageLeave
+Page custom OptionsPageCreate OptionsPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -100,6 +102,17 @@ Section "MainSection" SEC01
   ; Desktop shortcut
   CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\test-worker.exe"
 
+  ; 开机自启：仅全新安装处理，升级安装跳过
+  StrCmp $IsUpgrade "1" skip_autostart
+    StrCmp $AutoStart ${BST_CHECKED} 0 autostart_off
+      ClearErrors
+      WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker" '"$INSTDIR\test-worker.exe"'
+      IfErrors 0 autostart_done
+        DetailPrint "Warning: 写入开机自启注册表失败，已跳过"
+    autostart_off:
+    autostart_done:
+  skip_autostart:
+
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\uninst.exe"
 
@@ -125,6 +138,9 @@ Section Uninstall
 
   ; HDC 只能清理 Worker 自己启动并登记的实例，不能按进程名或路径批量杀用户的 HDC
   Call un.KillOwnedHdcProcesses
+
+  ; 清理开机自启注册表项
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker"
 
   ; Delete shortcuts
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -415,17 +431,6 @@ Function ConfigPageCreate
   ${NSD_CreateText} 0 138 350 12u "$OcrServiceInput"
   Pop $OcrServiceInput
 
-  ; Row 5: Device discovery options
-  ${NSD_CreateLabel} 0 160 100% 12u "Device Discovery:"
-  ${NSD_CreateCheckbox} 0 178 80 12u "Android"
-  Pop $DiscoverAndroid
-  ${NSD_CreateCheckbox} 100 178 60 12u "iOS"
-  Pop $DiscoverIos
-  ${NSD_CreateCheckbox} 165 178 90 12u "Harmony Mobile"
-  Pop $DiscoverHarmonyMobile
-  ${NSD_CreateCheckbox} 260 178 80 12u "Harmony PC"
-  Pop $DiscoverHarmonyPc
-
   nsDialogs::Show
 
   skip_page:
@@ -446,10 +451,63 @@ Function ConfigPageLeave
   ${NSD_GetText} $NamespaceInput $NamespaceInput
   ${NSD_GetText} $PlatformApiInput $PlatformApiInput
   ${NSD_GetText} $OcrServiceInput $OcrServiceInput
+
+  done:
+  silent_install:
+FunctionEnd
+
+; 选项页创建：设备发现 + 开机自启
+Function OptionsPageCreate
+  ; 升级安装跳过（与配置页同模式）
+  Call IsUpgradeInstall
+  StrCmp $IsUpgrade "1" skip_options
+
+  !insertmacro MUI_HEADER_TEXT "Worker Options" "Select discovery and startup options"
+
+  nsDialogs::Create 1018
+  Pop $0
+
+  ; Device Discovery（从配置页迁移，拆两行更宽松）
+  ${NSD_CreateLabel} 0 0 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 18 80 12u "Android"
+  Pop $DiscoverAndroid
+  ${NSD_CreateCheckbox} 100 18 60 12u "iOS"
+  Pop $DiscoverIos
+  ${NSD_CreateCheckbox} 0 40 90 12u "Harmony Mobile"
+  Pop $DiscoverHarmonyMobile
+  ${NSD_CreateCheckbox} 110 40 80 12u "Harmony PC"
+  Pop $DiscoverHarmonyPc
+
+  ; 分隔线
+  ${NSD_CreateHLine} 0 70 100% 1u ""
+  Pop $0
+
+  ; Startup
+  ${NSD_CreateLabel} 0 88 100% 12u "Startup:"
+  ${NSD_CreateCheckbox} 0 106 140 12u "开机自动启动"
+  Pop $AutoStart
+
+  ; 默认勾上（控件创建后同步状态）
+  ${NSD_SetState} $AutoStart ${BST_CHECKED}
+
+  nsDialogs::Show
+
+  skip_options:
+FunctionEnd
+
+; 选项页离开：读取勾选状态
+Function OptionsPageLeave
+  Call IsUpgradeInstall
+  StrCmp $IsUpgrade "1" done
+
+  ; 静默安装没有控件，保留 .onInit 默认值
+  IfSilent silent_install
+
   ${NSD_GetState} $DiscoverAndroid $DiscoverAndroid
   ${NSD_GetState} $DiscoverIos $DiscoverIos
   ${NSD_GetState} $DiscoverHarmonyMobile $DiscoverHarmonyMobile
   ${NSD_GetState} $DiscoverHarmonyPc $DiscoverHarmonyPc
+  ${NSD_GetState} $AutoStart $AutoStart
 
   done:
   silent_install:
@@ -579,6 +637,7 @@ Function .onInit
   StrCpy $DiscoverIos ${BST_UNCHECKED}
   StrCpy $DiscoverHarmonyMobile ${BST_UNCHECKED}
   StrCpy $DiscoverHarmonyPc ${BST_UNCHECKED}
+  StrCpy $AutoStart ${BST_CHECKED}
 
   ; Get command line parameters
   ${GetParameters} $0
