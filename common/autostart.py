@@ -7,7 +7,6 @@ HKLM\\...\\Run 注册表项是它的投影。所有操作失败只记日志，�
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ def _get_db():
     return Database(_db_path())
 
 
-def _read_db_flag() -> Optional[str]:
+def _read_db_flag() -> str | None:
     """读 schema_meta.auto_start，无 key 返回 None。失败返回 None。"""
     try:
         db = _get_db()

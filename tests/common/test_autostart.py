@@ -1,8 +1,5 @@
 """开机自启模块测试。"""
 
-import sys
-from pathlib import Path
-
 import pytest
 
 from worker.storage.database import Database
