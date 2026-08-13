@@ -16,7 +16,7 @@ Worker（Test Worker）作为多端自动化测试执行基建，部署到测试
 
 | 编号 | 需求 | 说明 |
 |------|------|------|
-| R1 | 安装器配置页加"开机自动启动"checkbox，默认勾上 | 复用现有设备发现 checkbox 范式 |
+| R1 | 安装器新增"选项页"，含"开机自动启动"checkbox，默认勾上 | 把设备发现也迁入选项页，配置页因此宽松 |
 | R2 | 全新安装勾选时写 `HKLM\...\Run` 注册表键（系统级） | 任何用户登录都生效 |
 | R3 | 注册表写入失败不中断安装 | 自启是锦上添花，不得影响安装主流程 |
 | R4 | 升级安装时跳过自启处理 | 既不写也不删，保留用户上次的状态 |
@@ -137,20 +137,63 @@ else:
 
 ### 组件 2：安装器改动（`installer/installer.nsi`）
 
-复用现有配置页 checkbox 范式（与 `DiscoverAndroid` 等完全同构）。
+**页面结构调整**：新增一个独立的"选项页"（`OptionsPage`），把原配置页的"设备发现"勾选组移到选项页，并在选项页新增"开机自启"开关。配置页因此变宽松，选项页也宽松，避免 1018 控件区域（约 180px 可见高度）放不下。
+
+#### 页面顺序调整
+
+```
+MUI_PAGE_WELCOME
+MUI_PAGE_DIRECTORY
+Page custom ConfigPageCreate ConfigPageLeave      ; 配置页（精简：移除设备发现）
+Page custom OptionsPageCreate OptionsPageLeave    ; 新增：选项页
+MUI_PAGE_INSTFILES
+MUI_PAGE_FINISH
+```
+
+#### 配置页（精简后）
+
+`ConfigPageCreate` 删除"Row 5: Device discovery"整段（label + 4 个 checkbox），保留 IP/端口、命名空间、平台 API、OCR 四项。配置页内容到 y=138 结束，宽松。
+
+设备发现的 4 个变量（`$DiscoverAndroid` 等）声明保留，但其创建/读取逻辑迁移到 `OptionsPageCreate` / `OptionsPageLeave`。
+
+#### 新增选项页（OptionsPage）
+
+`OptionsPageCreate` 负责创建设备发现 + 开机自启控件，`OptionsPageLeave` 负责读取勾选状态。升级安装整页跳过（与配置页同模式）。
+
+界面布局：
+```
+┌─────────────────────────────────────────────────┐
+│  Worker Options                                  │  MUI_HEADER_TEXT
+│  Select discovery and startup options            │
+├─────────────────────────────────────────────────┤
+│  Device Discovery:                              │  y=0
+│    ☐ Android    ☐ iOS                           │  y=18
+│    ☐ Harmony Mobile    ☐ Harmony PC             │  y=40
+│                                                  │
+│  ─────────────────────────────────────────       │  分隔线 y=70
+│                                                  │
+│  Startup:                                        │  y=88
+│    ☑ 开机自动启动                                 │  y=106
+│                                                  │
+│  (留白)                                          │
+│                              [< Back] [Next >]   │
+└─────────────────────────────────────────────────┘
+```
+
+设备发现从原配置页的"一行 4 个"拆为"两行各 2 个"，更宽松；开机自启独立一块。
 
 #### 改动清单
 
-**1. 新增变量声明**（变量区）：
+**1. 新增变量声明**（变量区，已有 `$Discover*`，新增 `$AutoStart`）：
 ```nsis
 Var AutoStart
 ```
 
-**2. 配置页加 checkbox**（`ConfigPageCreate` 函数，设备发现那行之后）：
+**2. 页面顺序**（`MUI_PAGE_*` 区，配置页后插入选项页）：
 ```nsis
-; Row 6: 开机自动启动
-${NSD_CreateCheckbox} 0 200 140 12u "开机自动启动"
-Pop $AutoStart
+Page custom ConfigPageCreate ConfigPageLeave
+Page custom OptionsPageCreate OptionsPageLeave
+!insertmacro MUI_PAGE_INSTFILES
 ```
 
 **3. `.onInit` 设默认值**（与现有 `Discover*` 同模式）：
@@ -159,13 +202,74 @@ StrCpy $AutoStart ${BST_CHECKED}   ; 默认勾上
 ```
 不做命令行参数覆盖（需求确认去掉 `/AUTOSTART=` 参数）。
 
-**4. `ConfigPageLeave` 读取勾选状态**：
+**4. `OptionsPageCreate` 创建控件**：
 ```nsis
-${NSD_GetState} $AutoStart $AutoStart
-```
-升级安装走 `skip_page`，此段被跳过，`$AutoStart` 保持默认值但安装段会判断升级跳过。
+Function OptionsPageCreate
+  ; 升级安装跳过（与配置页同模式）
+  Call IsUpgradeInstall
+  StrCmp $IsUpgrade "1" skip_options
 
-**5. 安装段写注册表**（`Section "MainSection" SEC01`，创建快捷方式之后）：
+  !insertmacro MUI_HEADER_TEXT "Worker Options" "Select discovery and startup options"
+
+  nsDialogs::Create 1018
+  Pop $0
+
+  ; Device Discovery（从配置页迁移，拆两行更宽松）
+  ${NSD_CreateLabel} 0 0 100% 12u "Device Discovery:"
+  ${NSD_CreateCheckbox} 0 18 80 12u "Android"
+  Pop $DiscoverAndroid
+  ${NSD_CreateCheckbox} 100 18 60 12u "iOS"
+  Pop $DiscoverIos
+  ${NSD_CreateCheckbox} 0 40 90 12u "Harmony Mobile"
+  Pop $DiscoverHarmonyMobile
+  ${NSD_CreateCheckbox} 110 40 80 12u "Harmony PC"
+  Pop $DiscoverHarmonyPc
+
+  ; 分隔线
+  ${NSD_CreateHLine} 0 70 100% 1u ""
+  Pop $0
+
+  ; Startup
+  ${NSD_CreateLabel} 0 88 100% 12u "Startup:"
+  ${NSD_CreateCheckbox} 0 106 140 12u "开机自动启动"
+  Pop $AutoStart
+
+  ; 默认勾上（$AutoStart 在 .onInit 已设默认值，但控件需同步状态）
+  ${NSD_SetState} $AutoStart ${BST_CHECKED}
+
+  nsDialogs::Show
+
+  skip_options:
+FunctionEnd
+```
+
+注意：`.onInit` 设的是 `$AutoStart` 变量默认值，但 nsDialogs checkbox 控件创建时初始状态默认未勾选，需用 `${NSD_SetState}` 同步为勾上。静默安装不创建控件，`$AutoStart` 仍保持 `.onInit` 默认值。
+
+**5. `OptionsPageLeave` 读取勾选状态**（照搬 `ConfigPageLeave` 里读 Discover checkbox 的逻辑，加 AutoStart）：
+```nsis
+Function OptionsPageLeave
+  Call IsUpgradeInstall
+  StrCmp $IsUpgrade "1" done
+
+  ; 静默安装没有控件，保留 .onInit 默认值
+  IfSilent silent_install
+
+  ${NSD_GetState} $DiscoverAndroid $DiscoverAndroid
+  ${NSD_GetState} $DiscoverIos $DiscoverIos
+  ${NSD_GetState} $DiscoverHarmonyMobile $DiscoverHarmonyMobile
+  ${NSD_GetState} $DiscoverHarmonyPc $DiscoverHarmonyPc
+  ${NSD_GetState} $AutoStart $AutoStart
+
+  done:
+  silent_install:
+FunctionEnd
+```
+
+**6. `ConfigPageLeave` 删除设备发现读取**：原 `ConfigPageLeave` 里读 `$Discover*` 的 4 行删除（迁移到 `OptionsPageLeave`），保留 IP/端口/命名空间/平台 API/OCR 读取。
+
+**7. `ReplaceConfigFile` 不变**：设备发现的配置写入仍由 `ReplaceConfigFile` 完成（它读的是 `$Discover*` 变量，不论哪个页面写入，变量值已就绪）。
+
+**8. 安装段写注册表**（`Section "MainSection" SEC01`，创建快捷方式之后）：
 ```nsis
 ; 开机自启：仅全新安装处理，升级安装跳过
 StrCmp $IsUpgrade "1" skip_autostart
@@ -184,7 +288,7 @@ skip_autostart:
 - **写失败不中断**：`ClearErrors` / `IfErrors` 捕获失败，只 `DetailPrint` 警告，不 `SetErrors`、不 `Abort`，安装继续。
 - **值带引号**：`'"$INSTDIR\test-worker.exe"'`——NSIS 字符串里内嵌一对双引号，防路径含空格（`Program Files` 必然有空格）。
 
-**6. 卸载段删注册表键**（`Section Uninstall`，删快捷方式附近）：
+**9. 卸载段删注册表键**（`Section Uninstall`，删快捷方式附近）：
 ```nsis
 ; 清理开机自启注册表项
 DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker"
@@ -194,7 +298,8 @@ DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker
 #### 升级安装行为
 
 升级安装（`IsUpgrade=1`）时：
-- 配置页整页跳过（现有逻辑）→ checkbox 不会被用户操作
+- 配置页整页跳过（现有逻辑）
+- 选项页整页跳过（`skip_options`）→ checkbox 不会被用户操作
 - 安装段 `skip_autostart` → 既不写也不删注册表
 - 结果：注册表 Run 键保持用户上一次全新安装时的状态
 
@@ -203,6 +308,8 @@ DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker
 ### 组件 3：设置窗口改动（`worker/settings_window.py`）
 
 #### UI：加 checkbox
+
+**先调整窗口最小高度**：`_setup_ui` 里 `self.setMinimumHeight(480)` 改为 `540`。原 480 刚好装下现有 9 行内容，新增分隔线 + 自启 checkbox 行（约 +48px）后 480 装不下会触发滚动或裁剪，加高到 540 稳妥。
 
 在 `_setup_ui` 设备发现那一行之后，加一条分隔线 + 自启开关：
 ```python
