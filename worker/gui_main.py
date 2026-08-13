@@ -571,6 +571,13 @@ class GUIApp:
         self.app.processEvents()
         self._start_worker()
 
+        # 播种开机自启状态到 db（首次启动读注册表初始化，幂等）
+        try:
+            from common.autostart import seed_from_registry
+            seed_from_registry()
+        except Exception as e:
+            logger.warning(f"播种开机自启状态失败: {e}")
+
         # 启动托盘
         self._splash.update_status("启动系统托盘...")
         self.app.processEvents()
