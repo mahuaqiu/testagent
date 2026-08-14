@@ -374,7 +374,11 @@
       "Bash(/c/Program Files/NSIS/makensis.exe *)",
       "Bash(xxd -l 16 \"D:/code/autotest/installer/installer.nsi\")",
       "Bash(git log *)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(Write-Host \"---\")",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/common/test_autostart.py tests/test_installer_config.py -q --tb=short)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py)",
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py --fix; .\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/common/test_autostart.py tests/test_installer_config.py -q --tb=short)"
     ]
   }
 }
