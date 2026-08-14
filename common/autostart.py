@@ -34,8 +34,14 @@ def _get_db():
     return Database(_db_path())
 
 
+def _registry_access(access: int) -> int:
+    """叠加 KEY_WOW64_64KEY，与安装器 SetRegView 64 对齐。"""
+    return access | winreg.KEY_WOW64_64KEY
+
+
 def _read_db_flag() -> str | None:
     """读 schema_meta.auto_start，无 key 返回 None。失败返回 None。"""
+    db = None
     try:
         db = _get_db()
         conn = db.connection()
@@ -46,10 +52,17 @@ def _read_db_flag() -> str | None:
     except Exception as e:
         logger.warning(f"读取自启标志失败: {e}")
         return None
+    finally:
+        if db is not None:
+            db.close()
 
 
 def _write_db_flag(value: bool) -> None:
-    """写 schema_meta.auto_start。失败只记日志。"""
+    """写 schema_meta.auto_start。失败只记日志。
+
+    Database 使用 isolation_level=None（自动提交），无需额外 commit。
+    """
+    db = None
     try:
         db = _get_db()
         conn = db.connection()
@@ -57,9 +70,11 @@ def _write_db_flag(value: bool) -> None:
             "INSERT OR REPLACE INTO schema_meta(key, value) VALUES(?, ?)",
             (AUTO_START_KEY, "true" if value else "false"),
         )
-        conn.commit()
     except Exception as e:
         logger.warning(f"写入自启标志失败: {e}")
+    finally:
+        if db is not None:
+            db.close()
 
 
 def is_enabled() -> bool:
@@ -79,13 +94,24 @@ def _exe_path() -> str:
     return sys.executable
 
 
+def _can_touch_registry() -> bool:
+    """仅打包环境才写/删 Run 键，避免开发态把 python.exe 写进开机启动。"""
+    if winreg is None:
+        return False
+    from common.packaging import is_packaged
+    return is_packaged()
+
+
 def _write_registry() -> None:
     """写 HKLM Run 值，数据为带引号的 exe 路径。失败只记日志。"""
-    if winreg is None:
+    if not _can_touch_registry():
         return
     try:
         key = winreg.CreateKeyEx(
-            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_SET_VALUE
+            winreg.HKEY_LOCAL_MACHINE,
+            RUN_KEY,
+            0,
+            _registry_access(winreg.KEY_SET_VALUE),
         )
         try:
             winreg.SetValueEx(
@@ -99,11 +125,14 @@ def _write_registry() -> None:
 
 def _delete_registry() -> None:
     """删 HKLM Run 值。键不存在视为成功。失败只记日志。"""
-    if winreg is None:
+    if not _can_touch_registry():
         return
     try:
         key = winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_SET_VALUE
+            winreg.HKEY_LOCAL_MACHINE,
+            RUN_KEY,
+            0,
+            _registry_access(winreg.KEY_SET_VALUE),
         )
         try:
             winreg.DeleteValue(key, VALUE_NAME)
@@ -122,7 +151,10 @@ def _registry_has_value() -> bool:
         return False
     try:
         key = winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, RUN_KEY, 0, winreg.KEY_READ
+            winreg.HKEY_LOCAL_MACHINE,
+            RUN_KEY,
+            0,
+            _registry_access(winreg.KEY_READ),
         )
         try:
             winreg.QueryValueEx(key, VALUE_NAME)
@@ -141,6 +173,7 @@ def set_enabled(enabled: bool) -> None:
 
     enabled=True→写 HKLM Run 键；enabled=False→删 Run 键。
     注册表操作失败不抛异常（只记日志），db 已更新成功即视为设置成功。
+    开发态（非打包）只写 db，不碰注册表。
     """
     _write_db_flag(enabled)
     if enabled:

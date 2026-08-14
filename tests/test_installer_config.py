@@ -4,7 +4,6 @@ from pathlib import Path
 
 from worker.config import WorkerConfig
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_SCRIPT = PROJECT_ROOT / "installer" / "installer.nsi"
 
@@ -113,6 +112,9 @@ def test_installer_has_autostart_variable_and_registry_logic() -> None:
 
     # 变量声明
     assert "Var AutoStart" in script
+
+    # 64 位视图：与 64 位 Worker / PROGRAMFILES64 对齐，避免写到 WOW6432Node
+    assert "SetRegView 64" in script
 
     # .onInit 默认勾上
     oninit_body = script.split("Function .onInit", maxsplit=1)[1].split(

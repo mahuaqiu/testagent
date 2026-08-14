@@ -78,3 +78,27 @@ def test_seed_idempotent_when_db_already_set(isolated_db, monkeypatch):
     autostart.seed_from_registry()
 
     assert autostart._read_db_flag() == "false"
+
+
+def test_dev_mode_skips_registry_write(isolated_db, monkeypatch):
+    """非打包环境 set_enabled 只写 db，不碰注册表。"""
+    import common.autostart as autostart
+    from common import packaging
+
+    monkeypatch.setattr(packaging, "is_packaged", lambda: False)
+
+    # 若守卫失效，CreateKeyEx 被调用即失败
+    if autostart.winreg is not None:
+        def boom(*_a, **_k):
+            raise AssertionError("开发态不应访问注册表")
+
+        monkeypatch.setattr(autostart.winreg, "CreateKeyEx", boom)
+        monkeypatch.setattr(autostart.winreg, "OpenKey", boom)
+
+    autostart.set_enabled(True)
+    assert autostart._read_db_flag() == "true"
+    assert autostart.is_enabled() is True
+
+    autostart.set_enabled(False)
+    assert autostart._read_db_flag() == "false"
+    assert autostart.is_enabled() is False

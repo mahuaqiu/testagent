@@ -25,6 +25,8 @@ InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
 RequestExecutionLevel admin
+; 64 位应用目录 + 64 位 Worker：注册表统一走 64 位视图，避免 32 位 NSIS 写到 WOW6432Node
+SetRegView 64
 SetCompressor /SOLID lzma
 
 ; Command line parameter parsing helpers
