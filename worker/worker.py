@@ -1391,6 +1391,8 @@ class Worker:
                     for ar in log_dict['actions']:
                         if ar.get('screenshot'):
                             ar['screenshot'] = '<base64_data>'
+                        if ar.get('region_screenshot'):
+                            ar['region_screenshot'] = '<base64_data>'
                 logger.info(f"Task failed: {log_dict}")
 
                 return failed_result
@@ -1412,6 +1414,8 @@ class Worker:
             for ar in log_dict['actions']:
                 if ar.get('screenshot'):
                     ar['screenshot'] = '<base64_data>'
+                if ar.get('region_screenshot'):
+                    ar['region_screenshot'] = '<base64_data>'
         logger.info(f"Task completed: {log_dict}")
 
         return result
