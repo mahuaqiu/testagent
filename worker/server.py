@@ -1372,6 +1372,7 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
     """
     from worker.screen.frame_source import (
         HarmonyFrameSource,
+        HarmonyOfficialFrameSource,
         MacFrameSource,
         MinicapFrameSource,
         MJPEGFrameSource,
@@ -1401,12 +1402,10 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         return MinicapFrameSource(device_id, minicap)
 
     elif platform in ("harmony_mobile", "harmony_pc"):
-        # 鸿蒙：uitest 帧流优先，snapshot_display 轮询兜底
+        # 鸿蒙：官方 H.264 解码会话优先，auto 模式失败时内部回退旧帧源。
         harmony_manager = _get_harmony_manager(platform)
         if harmony_manager:
-            hdc_client = harmony_manager._device_clients.get(device_id)
-            if hdc_client:
-                return HarmonyFrameSource(device_id, hdc_client)
+            return HarmonyOfficialFrameSource(device_id, harmony_manager)
         # Fallback: 直接创建 HDC 客户端
         from worker.platforms.harmony_hdc import HarmonyHdcWrapper
         hdc_client = HarmonyHdcWrapper(device_id)

@@ -103,8 +103,19 @@ class ScreenManager:
     def get_frame(self, timeout: float = 1.0) -> bytes:
         """获取单帧（供录屏和推流共享）。"""
         try:
-            return self._frame_queue.get(timeout=timeout)
+            frame = self._frame_queue.get(timeout=timeout)
+            if self._frame_source.prefers_latest_frame:
+                # 官方鸿蒙帧源已维护最新帧槽位，不能因为通用 FIFO 再把旧帧
+                # 交给 WebSocket。队列中若有更新帧，直接丢弃旧帧直到最新一张。
+                while True:
+                    try:
+                        frame = self._frame_queue.get_nowait()
+                    except Empty:
+                        return frame
+            return frame
         except Empty:
+            if self._frame_source.prefers_latest_frame:
+                return self._frame_source.get_frame()
             # 队列空时返回空白帧
             return self._frame_source.get_blank_frame()
 

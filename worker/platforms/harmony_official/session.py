@@ -1,0 +1,629 @@
+"""鸿蒙官方 HOScrcpy 会话、输入和最新帧缓存。"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from queue import Empty, Full, Queue
+import re
+import threading
+import time
+from typing import Any
+
+from common.packaging import get_base_dir
+from worker.platforms.harmony_official.bridge import JavaBridgeError, JavaBridgeProcess
+from worker.platforms.harmony_official.decoder import H264DecodeError, H264Decoder, LatestFrame, LatestFrameCache
+from worker.platforms.harmony_official.protocol import (
+    BridgeMessage,
+    BridgeMessageType,
+    command_mouse_down,
+    command_mouse_move,
+    command_mouse_up,
+    command_request_idr,
+    command_touch_down,
+    command_touch_move,
+    command_touch_up,
+    command_wheel,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+class HarmonyOfficialError(RuntimeError):
+    """官方 HOScrcpy 会话不可用或执行失败。"""
+
+
+class HarmonyOfficialSession:
+    """单台鸿蒙设备的官方视频、触摸或鼠标会话。"""
+
+    def __init__(
+        self,
+        *,
+        serial: str,
+        device_type: str,
+        hdc_path: str,
+        settings: dict[str, Any],
+    ) -> None:
+        self.serial = serial
+        self.device_type = device_type
+        self.hdc_path = hdc_path
+        self.settings = settings
+        self._frame_cache = LatestFrameCache()
+        self._h264_queue: Queue[bytes] = Queue(maxsize=max(1, int(settings["frame_queue_capacity"])))
+        self._bridge: JavaBridgeProcess | None = None
+        self._decoder_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._ready_event = threading.Event()
+        self._state_lock = threading.RLock()
+        self._input_lock = threading.Lock()
+        self._startup_error = ""
+        self._closed_reason = ""
+        self._input_ready_at = 0.0
+        self._last_idr_request_at = 0.0
+        self._dropped_h264_messages = 0
+        self._decoder_error = ""
+
+    @property
+    def is_running(self) -> bool:
+        bridge = self._bridge
+        return bool(bridge and bridge.is_running and not self._stop_event.is_set())
+
+    @property
+    def latest_frame(self) -> LatestFrame | None:
+        return self._frame_cache.get(timeout=0.0)
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        frame = self.latest_frame
+        return (frame.width, frame.height) if frame else (0, 0)
+
+    def start(self) -> None:
+        """启动 Java 采集和 H.264 解码线程，等待 SDK READY。"""
+        with self._state_lock:
+            if self.is_running:
+                return
+            self._reset_start_state()
+            try:
+                H264Decoder(jpeg_quality=int(self.settings["jpeg_quality"]))
+            except H264DecodeError as exc:
+                raise HarmonyOfficialError(str(exc)) from exc
+
+            self._decoder_thread = threading.Thread(
+                target=self._decode_loop,
+                name=f"harmony-official-decode-{self.serial}",
+                daemon=True,
+            )
+            self._decoder_thread.start()
+            self._bridge = JavaBridgeProcess(
+                serial=self.serial,
+                device_type=self.device_type,
+                java_path=str(self.settings["java_path"]),
+                jar_path=Path(str(self.settings["jar_path"])),
+                class_path=Path(str(self.settings["bridge_class_path"])),
+                hdc_path=self.hdc_path,
+                temp_dir=Path(str(self.settings["temp_dir"])),
+                image_scale_size=int(self.settings["image_scale_size"]),
+                frame_rate=int(self.settings["frame_rate"]),
+                bit_rate=int(self.settings["bit_rate"]),
+                on_message=self._on_bridge_message,
+                on_closed=self._on_bridge_closed,
+            )
+            try:
+                self._bridge.start()
+            except JavaBridgeError as exc:
+                self._stop_event.set()
+                raise HarmonyOfficialError(str(exc)) from exc
+
+        timeout = float(self.settings["startup_timeout_seconds"])
+        if not self._ready_event.wait(timeout):
+            self.stop()
+            detail = self._startup_error or self._closed_reason or "未收到 READY"
+            raise HarmonyOfficialError(f"等待鸿蒙官方 SDK READY 超时({timeout}s): {detail}")
+        if self._startup_error:
+            detail = self._startup_error
+            self.stop()
+            raise HarmonyOfficialError(f"鸿蒙官方 SDK 启动失败: {detail}")
+
+        first_frame_timeout = max(0.1, float(self.settings["first_frame_timeout_seconds"]))
+        if self._frame_cache.get(timeout=first_frame_timeout) is None:
+            detail = self._decoder_error or self._closed_reason or "未收到可解码视频帧"
+            self.stop()
+            raise HarmonyOfficialError(f"等待鸿蒙官方首个视频帧超时({first_frame_timeout}s): {detail}")
+
+        logger.info("鸿蒙官方会话已就绪: %s/%s", self.device_type, self.serial)
+
+    def stop(self) -> None:
+        """停止 Java Bridge 和解码线程。"""
+        with self._state_lock:
+            self._stop_event.set()
+            bridge = self._bridge
+            self._bridge = None
+        if bridge:
+            bridge.stop()
+        thread = self._decoder_thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=3)
+        self._decoder_thread = None
+        self._frame_cache.clear()
+
+    def get_latest_jpeg(self, timeout: float = 5.0, require_new: bool = False) -> bytes:
+        """获取最新 JPEG；首帧或请求新帧时会等待。"""
+        if not self.is_running:
+            raise HarmonyOfficialError("鸿蒙官方会话未运行")
+        current = self.latest_frame
+        after_sequence = current.sequence if require_new and current else None
+        if current is None or require_new:
+            self.request_idr()
+        frame = self._frame_cache.get(timeout=max(timeout, 0.0), after_sequence=after_sequence)
+        if frame is None:
+            detail = self._decoder_error or self._closed_reason or "未收到可解码视频帧"
+            raise HarmonyOfficialError(f"等待鸿蒙官方视频帧超时: {detail}")
+        return frame.jpeg
+
+    def request_idr(self) -> None:
+        """请求设备端发送关键帧，节流避免连续请求。"""
+        now = time.monotonic()
+        if now - self._last_idr_request_at < 0.5:
+            return
+        self._last_idr_request_at = now
+        try:
+            self._send(command_request_idr())
+        except HarmonyOfficialError:
+            pass
+
+    def tap(self, x: int, y: int, duration_ms: int = 0) -> None:
+        """执行移动端触摸点击或长按，PC 使用左键点击。"""
+        self._wait_input_ready()
+        if self.device_type == "mobile":
+            self._send(command_touch_down(x, y))
+            try:
+                time.sleep(max(duration_ms, 80) / 1000.0)
+            finally:
+                self._send(command_touch_up(x, y))
+            return
+        self._mouse_click("LEFT", x, y, duration_ms)
+
+    def double_click(self, x: int, y: int) -> None:
+        """执行双击。"""
+        self.tap(x, y)
+        time.sleep(0.08)
+        self.tap(x, y)
+
+    def right_click(self, x: int, y: int) -> None:
+        """执行鸿蒙 PC 官方鼠标右键。"""
+        self._require_pc()
+        self._wait_input_ready()
+        self._mouse_click("RIGHT", x, y, 0)
+
+    def move_mouse(self, x: int, y: int, button: str | None = None) -> None:
+        """移动鸿蒙 PC 鼠标；拖拽期间携带按键类型。"""
+        self._require_pc()
+        self._wait_input_ready()
+        self._send(command_mouse_move(button, x, y))
+
+    def swipe(
+        self,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        duration_ms: int,
+        steps: int | None = None,
+    ) -> None:
+        """移动端发送触摸轨迹，PC 发送官方左键拖拽。"""
+        self._wait_input_ready()
+        duration_ms = max(1, int(duration_ms))
+        event_count = self._gesture_steps(duration_ms, steps)
+        interval = duration_ms / event_count / 1000.0
+        if self.device_type == "mobile":
+            self._send(command_touch_down(start_x, start_y))
+            try:
+                for index in range(1, event_count + 1):
+                    time.sleep(interval)
+                    x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
+                    self._send(command_touch_move(x, y))
+                time.sleep(0.02)
+            finally:
+                self._send(command_touch_up(end_x, end_y))
+            return
+
+        self._send(command_mouse_down("LEFT", start_x, start_y))
+        try:
+            for index in range(1, event_count + 1):
+                time.sleep(interval)
+                x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
+                self._send(command_mouse_move("LEFT", x, y))
+            time.sleep(0.02)
+        finally:
+            self._send(command_mouse_up("LEFT", end_x, end_y))
+
+    def wheel(self, direction: str, x: int, y: int) -> None:
+        """发送鸿蒙 PC 官方滚轮事件。"""
+        self._require_pc()
+        self._wait_input_ready()
+        self._send(command_wheel(direction, x, y))
+
+    def _reset_start_state(self) -> None:
+        self._stop_event.clear()
+        self._ready_event.clear()
+        self._startup_error = ""
+        self._closed_reason = ""
+        self._decoder_error = ""
+        self._input_ready_at = 0.0
+        self._last_idr_request_at = 0.0
+        self._frame_cache.clear()
+        while True:
+            try:
+                self._h264_queue.get_nowait()
+            except Empty:
+                break
+
+    def _on_bridge_message(self, message: BridgeMessage) -> None:
+        if message.message_type == BridgeMessageType.H264:
+            self._offer_h264(message.payload)
+        elif message.message_type == BridgeMessageType.READY:
+            self._input_ready_at = time.monotonic() + float(self.settings["input_ready_delay_seconds"])
+            self._ready_event.set()
+        elif message.message_type == BridgeMessageType.ERROR:
+            detail = message.text
+            logger.warning("鸿蒙官方 Java Bridge 报错(%s): %s", self.serial, detail)
+            if not self._ready_event.is_set():
+                self._startup_error = detail
+                self._ready_event.set()
+            else:
+                self._decoder_error = detail
+        elif message.message_type == BridgeMessageType.EOF:
+            self._closed_reason = message.text
+        elif message.message_type == BridgeMessageType.STATS:
+            logger.debug("鸿蒙官方 Java Bridge 统计(%s): %s", self.serial, message.text)
+
+    def _on_bridge_closed(self, reason: str) -> None:
+        self._closed_reason = reason
+        if not self._ready_event.is_set() and not self._stop_event.is_set():
+            self._startup_error = reason
+            self._ready_event.set()
+        if not self._stop_event.is_set():
+            logger.warning("鸿蒙官方 Java Bridge 已关闭(%s): %s", self.serial, reason)
+
+    def _offer_h264(self, payload: bytes) -> None:
+        try:
+            self._h264_queue.put_nowait(payload)
+        except Full:
+            try:
+                self._h264_queue.get_nowait()
+            except Empty:
+                pass
+            try:
+                self._h264_queue.put_nowait(payload)
+                self._dropped_h264_messages += 1
+                logger.debug("丢弃过期鸿蒙 H.264 数据: serial=%s, count=%d", self.serial, self._dropped_h264_messages)
+            except Full:
+                pass
+
+    def _decode_loop(self) -> None:
+        try:
+            decoder = H264Decoder(jpeg_quality=int(self.settings["jpeg_quality"]))
+        except H264DecodeError as exc:
+            self._decoder_error = str(exc)
+            return
+
+        while not self._stop_event.is_set():
+            try:
+                payload = self._h264_queue.get(timeout=0.2)
+            except Empty:
+                continue
+            try:
+                for jpeg, width, height in decoder.decode_to_jpegs(payload):
+                    self._frame_cache.update(jpeg, width, height)
+            except H264DecodeError as exc:
+                self._decoder_error = str(exc)
+                logger.warning("鸿蒙官方 H.264 解码异常(%s): %s", self.serial, exc)
+                self.request_idr()
+
+    def _wait_input_ready(self) -> None:
+        if not self.is_running or not self._ready_event.is_set():
+            raise HarmonyOfficialError("鸿蒙官方输入会话未就绪")
+        delay = self._input_ready_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+    def _send(self, command: bytes) -> None:
+        bridge = self._bridge
+        if bridge is None:
+            raise HarmonyOfficialError("鸿蒙官方 Java Bridge 未启动")
+        try:
+            with self._input_lock:
+                bridge.send(command)
+        except JavaBridgeError as exc:
+            raise HarmonyOfficialError(str(exc)) from exc
+
+    def _mouse_click(self, button: str, x: int, y: int, duration_ms: int) -> None:
+        self._require_pc()
+        self._send(command_mouse_down(button, x, y))
+        try:
+            time.sleep(max(duration_ms, 80) / 1000.0)
+        finally:
+            self._send(command_mouse_up(button, x, y))
+
+    def _require_pc(self) -> None:
+        if self.device_type != "pc":
+            raise HarmonyOfficialError("当前官方会话不是鸿蒙 PC")
+
+    @staticmethod
+    def _gesture_steps(duration_ms: int, steps: int | None) -> int:
+        if steps is not None:
+            return max(1, min(int(steps), 40))
+        return max(1, min(20, duration_ms // 50))
+
+    @staticmethod
+    def _interpolate(
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        index: int,
+        count: int,
+    ) -> tuple[int, int]:
+        ratio = index / count
+        return (
+            round(start_x + (end_x - start_x) * ratio),
+            round(start_y + (end_y - start_y) * ratio),
+        )
+
+
+class HarmonyOfficialSessionManager:
+    """按设备复用官方会话，并在 auto 模式下让调用者回退旧链路。"""
+
+    DEFAULTS: dict[str, Any] = {
+        "enabled": True,
+        "mode": "auto",
+        "java_path": "java",
+        "jar_path": "tools/harmony/hosScrcpy-1.0.15-beta.jar",
+        "bridge_class_path": "tools/harmony/bridge",
+        "startup_timeout_seconds": 35,
+        "first_frame_timeout_seconds": 10,
+        "idle_timeout_seconds": 600,
+        "input_ready_delay_seconds": 1.5,
+        "reconnect_attempts": 3,
+        "reconnect_backoff_seconds": 2,
+        "frame_queue_capacity": 2,
+        "image_scale_size": 720,
+        "frame_rate": 30,
+        "bit_rate": 4_000_000,
+        "jpeg_quality": 90,
+        "fallback_to_legacy": True,
+    }
+
+    def __init__(self, device_type: str, config: dict[str, Any] | None = None) -> None:
+        self.device_type = "mobile" if device_type == "harmony_mobile" else "pc"
+        self._settings = self._build_settings(config or {})
+        self._hdc_path: str | None = None
+        self._sessions: dict[str, HarmonyOfficialSession] = {}
+        # 同一设备可能同时被 HTTP 任务和 WebSocket 使用；只有最后一个租约释放后，
+        # 才开始计算空闲释放时间，避免截图任务误杀正在推流的会话。
+        self._owners: dict[str, set[str]] = {}
+        self._idle_timers: dict[str, threading.Timer] = {}
+        self._prewarm_threads: dict[str, threading.Thread] = {}
+        self._prewarm_generation = 0
+        self._lock = threading.RLock()
+
+    @property
+    def mode(self) -> str:
+        return str(self._settings["mode"])
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._settings["enabled"]) and self.mode != "legacy"
+
+    @property
+    def fallback_to_legacy(self) -> bool:
+        return self.mode == "auto" and bool(self._settings["fallback_to_legacy"])
+
+    def set_hdc_path(self, hdc_path: str | None) -> None:
+        self._hdc_path = hdc_path
+
+    def get_or_start(self, serial: str) -> HarmonyOfficialSession | None:
+        """返回可用官方会话；auto 失败返回 ``None``，official 模式抛异常。"""
+        if not self.enabled:
+            return None
+        if not self._hdc_path:
+            return self._handle_start_failure("HDC 路径不可用")
+
+        with self._lock:
+            current = self._sessions.get(serial)
+            if current and current.is_running:
+                return current
+            if current:
+                current.stop()
+                self._sessions.pop(serial, None)
+
+            attempts = max(1, int(self._settings["reconnect_attempts"]))
+            last_error = ""
+            for attempt in range(1, attempts + 1):
+                session = HarmonyOfficialSession(
+                    serial=serial,
+                    device_type=self.device_type,
+                    hdc_path=self._hdc_path,
+                    settings=self._settings_for_serial(serial),
+                )
+                try:
+                    session.start()
+                    self._sessions[serial] = session
+                    return session
+                except HarmonyOfficialError as exc:
+                    last_error = str(exc)
+                    session.stop()
+                    logger.warning(
+                        "启动鸿蒙官方会话失败: serial=%s, attempt=%d/%d, error=%s",
+                        serial,
+                        attempt,
+                        attempts,
+                        exc,
+                    )
+                    if attempt < attempts:
+                        time.sleep(float(self._settings["reconnect_backoff_seconds"]))
+            return self._handle_start_failure(last_error)
+
+    def get(self, serial: str) -> HarmonyOfficialSession | None:
+        with self._lock:
+            session = self._sessions.get(serial)
+            return session if session and session.is_running else None
+
+    def prewarm(self, serial: str, owner: str | None = None) -> None:
+        """后台预热官方会话，不阻塞当前鸿蒙动作。"""
+        if not self.enabled or not self._hdc_path:
+            return
+
+        with self._lock:
+            if owner:
+                self._owners.setdefault(serial, set()).add(owner)
+                self._cancel_idle_timer_locked(serial)
+            current = self._sessions.get(serial)
+            if current and current.is_running:
+                if not self._owners.get(serial):
+                    self._schedule_idle_release_locked(serial)
+                return
+            thread = self._prewarm_threads.get(serial)
+            if thread and thread.is_alive():
+                return
+            generation = self._prewarm_generation
+
+            def _run() -> None:
+                try:
+                    with self._lock:
+                        if generation != self._prewarm_generation:
+                            return
+                    session = self.get_or_start(serial)
+                    if session is not None:
+                        stale_session = False
+                        with self._lock:
+                            if generation != self._prewarm_generation:
+                                stale_session = self._sessions.get(serial) is session
+                                if stale_session:
+                                    self._sessions.pop(serial, None)
+                                    self._owners.pop(serial, None)
+                            elif not self._owners.get(serial):
+                                self._schedule_idle_release_locked(serial)
+                        if stale_session:
+                            session.stop()
+                            return
+                        logger.info("鸿蒙官方会话后台预热完成: %s", serial)
+                except Exception as exc:
+                    # 预热失败不影响当前动作，真正需要官方链路时仍会按 auto 回退 HDC。
+                    logger.warning("鸿蒙官方会话后台预热失败: serial=%s, error=%s", serial, exc)
+                    if owner:
+                        self.release(serial, owner)
+                finally:
+                    with self._lock:
+                        if self._prewarm_threads.get(serial) is threading.current_thread():
+                            self._prewarm_threads.pop(serial, None)
+
+            thread = threading.Thread(
+                target=_run,
+                name=f"harmony-official-prewarm-{serial}",
+                daemon=True,
+            )
+            self._prewarm_threads[serial] = thread
+            thread.start()
+
+    def acquire(self, serial: str, owner: str) -> HarmonyOfficialSession | None:
+        """获取一份官方会话租约；同一 owner 重复获取不会增加引用。"""
+        with self._lock:
+            self._cancel_idle_timer_locked(serial)
+            session = self.get_or_start(serial)
+            if session is None:
+                return None
+            self._owners.setdefault(serial, set()).add(owner)
+            return session
+
+    def release(self, serial: str, owner: str) -> None:
+        """释放官方会话租约；没有活动租约时启动空闲释放倒计时。"""
+        with self._lock:
+            owners = self._owners.get(serial)
+            if not owners:
+                return
+            owners.discard(owner)
+            if owners:
+                return
+            self._owners.pop(serial, None)
+            self._schedule_idle_release_locked(serial)
+
+    def stop_session(self, serial: str) -> None:
+        with self._lock:
+            self._cancel_idle_timer_locked(serial)
+            self._owners.pop(serial, None)
+            session = self._sessions.pop(serial, None)
+        if session:
+            session.stop()
+
+    def stop_all(self) -> None:
+        with self._lock:
+            sessions = list(self._sessions.values())
+            timers = list(self._idle_timers.values())
+            self._prewarm_generation += 1
+            self._sessions.clear()
+            self._owners.clear()
+            self._idle_timers.clear()
+            self._prewarm_threads.clear()
+        for timer in timers:
+            timer.cancel()
+        for session in sessions:
+            session.stop()
+
+    def _cancel_idle_timer_locked(self, serial: str) -> None:
+        timer = self._idle_timers.pop(serial, None)
+        if timer:
+            timer.cancel()
+
+    def _schedule_idle_release_locked(self, serial: str) -> None:
+        if serial not in self._sessions or self._owners.get(serial):
+            return
+        self._cancel_idle_timer_locked(serial)
+        timeout = max(0.1, float(self._settings["idle_timeout_seconds"]))
+        timer = threading.Timer(timeout, self._release_idle_session, args=(serial,))
+        timer.daemon = True
+        self._idle_timers[serial] = timer
+        timer.start()
+        logger.info("鸿蒙官方会话进入空闲保活: serial=%s, timeout=%.1fs", serial, timeout)
+
+    def _release_idle_session(self, serial: str) -> None:
+        with self._lock:
+            self._idle_timers.pop(serial, None)
+            if self._owners.get(serial):
+                return
+            session = self._sessions.pop(serial, None)
+        if session:
+            logger.info("鸿蒙官方会话空闲超时，退出 Java Bridge: %s", serial)
+            session.stop()
+
+    def _handle_start_failure(self, detail: str) -> None:
+        message = f"鸿蒙官方 HOScrcpy 不可用: {detail}"
+        if self.mode == "official" or not self.fallback_to_legacy:
+            raise HarmonyOfficialError(message)
+        logger.warning("%s；将回退 HDC 路径", message)
+        return None
+
+    def _build_settings(self, config: dict[str, Any]) -> dict[str, Any]:
+        settings = dict(self.DEFAULTS)
+        settings.update({key: value for key, value in config.items() if value is not None})
+        mode = str(settings["mode"]).lower()
+        if mode not in {"auto", "official", "legacy"}:
+            raise ValueError(f"harmony_official.mode 必须是 auto、official 或 legacy: {mode}")
+        settings["mode"] = mode
+        base_dir = Path(get_base_dir())
+        for key in ("java_path", "jar_path", "bridge_class_path"):
+            value = Path(str(settings[key]))
+            # ``java`` 仅是 PATH 命令，不应拼接项目目录；显式相对路径则用于
+            # 打包后的 tools/jre/bin/java.exe。
+            if key == "java_path" and str(value) == "java":
+                continue
+            settings[key] = str(value if value.is_absolute() else base_dir / value)
+        return settings
+
+    def _settings_for_serial(self, serial: str) -> dict[str, Any]:
+        settings = dict(self._settings)
+        temp_root = Path(get_base_dir()) / "data" / "harmony_official"
+        safe_serial = re.sub(r"[^A-Za-z0-9_.-]", "_", serial)
+        settings["temp_dir"] = str(temp_root / safe_serial / "java_tmp")
+        return settings

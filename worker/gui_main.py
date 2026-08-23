@@ -487,6 +487,9 @@ class GUIApp:
         if self.worker and self.worker.device_monitor:
             logger.info("托盘升级开始，停止设备监控定时任务")
             self.worker.device_monitor.stop()
+        if self.worker:
+            # 下载期间也释放鸿蒙官方 Java 进程，避免安装包覆盖时产生文件占用。
+            self.worker.stop_harmony_official_sessions()
 
         temp_dir = tempfile.gettempdir()
         installer_path = os.path.join(temp_dir, "test-worker-installer.exe")
@@ -512,6 +515,7 @@ class GUIApp:
         try:
             # 必须先启动安装器，再停止 Worker。否则退出清理可能在安装器
             # Popen 执行前结束当前进程，造成下载完成后直接退出。
+            self.worker.stop_harmony_official_sessions()
             self.upgrade_manager.run_silent_install(downloaded_file)
             self._stop_worker()
             self._show_info_dialog("升级", "安装程序已启动，Worker 将退出")

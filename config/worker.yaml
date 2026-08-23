@@ -14,8 +14,8 @@ worker:
   #   android/serial-001: meeting_gamma
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
-  discover_harmony_mobile_devices: false  # Enable HarmonyOS mobile device discovery
-  discover_harmony_pc_devices: false      # Enable HarmonyOS PC device discovery
+  discover_harmony_mobile_devices: true   # Enable HarmonyOS mobile device discovery
+  discover_harmony_pc_devices: true       # Enable HarmonyOS PC device discovery
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
   service_retry_interval: 10        # Retry interval (seconds)
@@ -103,6 +103,28 @@ platforms:
     hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
     session_timeout: 300
     screenshot_dir: data/screenshots
+
+# 鸿蒙官方 HOScrcpy Java SDK 配置。
+# Java Bridge 使用官方 H.264 流提供截图、OCR 和 WebSocket JPEG 帧。
+# 按键、文本、应用生命周期和自动故障回退仍保留 HDC 通道。
+harmony_official:
+  enabled: true
+  mode: auto                       # auto：优先官方后回退 HDC；official：不回退；legacy：禁用官方链路
+  java_path: "D:/Program Files/jdk/bin/java.exe"  # 当前开发机；发布包由构建脚本改为 tools/jre/bin/java.exe
+  jar_path: tools/harmony/hosScrcpy-1.0.15-beta.jar
+  bridge_class_path: tools/harmony/bridge
+  startup_timeout_seconds: 35
+  first_frame_timeout_seconds: 10
+  idle_timeout_seconds: 600       # 无截图、推流或鸿蒙动作 10 分钟后释放官方会话
+  input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
+  reconnect_attempts: 3
+  reconnect_backoff_seconds: 2
+  frame_queue_capacity: 2          # 丢弃旧 H.264 数据，只保留最新画面
+  image_scale_size: 720
+  frame_rate: 30
+  bit_rate: 4000000
+  jpeg_quality: 90
+  fallback_to_legacy: true
 
 # Image Matching Settings
 image_matching:

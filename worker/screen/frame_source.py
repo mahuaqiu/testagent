@@ -15,12 +15,18 @@ from PIL import Image
 if TYPE_CHECKING:
     from worker.platforms.minicap.minicap import Minicap
     from worker.platforms.harmony_hdc import HarmonyHdcWrapper
+    from worker.platforms.harmony import HarmonyPlatformManager
 
 logger = logging.getLogger(__name__)
 
 
 class FrameSource(ABC):
     """帧获取抽象基类。"""
+
+    @property
+    def prefers_latest_frame(self) -> bool:
+        """是否要求消费者跳过 ScreenManager 中积压的旧帧。"""
+        return False
 
     @abstractmethod
     def get_frame(self) -> bytes:
@@ -407,3 +413,100 @@ class HarmonyFrameSource(FrameSource):
             width, height = 1280, 720
         img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
         return self._img_to_jpeg(img)
+
+
+class HarmonyOfficialFrameSource(FrameSource):
+    """鸿蒙官方 HOScrcpy H.264 会话帧源。
+
+    官方会话由 ``HarmonyPlatformManager`` 按设备复用。帧源持有一份推流租约；
+    推流停止且没有其他消费者时，立即释放并终止 Java 会话。
+    官方链路不可用时，在 ``auto`` 模式回退到既有 HarmonyFrameSource。
+    """
+
+    def __init__(self, device_id: str, manager: "HarmonyPlatformManager"):
+        self.device_id = device_id
+        self.manager = manager
+        self._session = None
+        self._fallback: HarmonyFrameSource | None = None
+        self._screen_size: Optional[tuple[int, int]] = None
+        self._owner = f"stream:{id(self)}"
+
+    @property
+    def prefers_latest_frame(self) -> bool:
+        """官方源只保留最新解码帧，避免通用 FIFO 再次放大延迟。"""
+        return True
+
+    def start(self) -> None:
+        """启动或获取官方会话；无法启动时在 auto 模式创建旧帧源。"""
+        if self._session is not None or self._fallback is not None:
+            return
+        self._session = self.manager.acquire_official_session(self.device_id, self._owner)
+        if self._session is not None:
+            logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
+            return
+
+        client = self.manager._device_clients.get(self.device_id)
+        if client is None:
+            raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
+        self._fallback = HarmonyFrameSource(self.device_id, client)
+        self._fallback.start()
+        logger.warning("HarmonyOfficialFrameSource 已回退旧帧源: %s", self.device_id)
+
+    def get_frame(self) -> bytes:
+        if self._session is None and self._fallback is None:
+            self.start()
+        if self._session is not None:
+            try:
+                # SDK READY 到首个可解码帧之间可能还有一小段缓冲时间，
+                # 不要把正常的首帧延迟误判为官方会话故障。
+                return self._session.get_latest_jpeg(timeout=5.0)
+            except Exception as exc:
+                self.manager._handle_official_failure(self.device_id, "推流取帧", exc)
+                self._session = None
+                self._start_fallback_after_failure()
+        if self._fallback is None:
+            raise ConnectionError("鸿蒙推流帧源不可用")
+        return self._fallback.get_frame()
+
+    def get_screen_size(self) -> tuple[int, int]:
+        if self._screen_size:
+            return self._screen_size
+        if self._session is not None:
+            size = self._session.screen_size
+            if size != (0, 0):
+                self._screen_size = size
+                return size
+        if self._fallback is not None:
+            self._screen_size = self._fallback.get_screen_size()
+            return self._screen_size
+
+        client = self.manager._device_clients.get(self.device_id)
+        if client:
+            self._screen_size = client.display_size()
+            return self._screen_size
+        return (0, 0)
+
+    def stop(self) -> None:
+        """停止帧源并释放官方会话租约。"""
+        if self._fallback is not None:
+            self._fallback.stop()
+            self._fallback = None
+        if self._session is not None:
+            self.manager.release_official_session(self.device_id, self._owner)
+        self._session = None
+
+    def get_blank_frame(self) -> bytes:
+        width, height = self.get_screen_size()
+        if width <= 0 or height <= 0:
+            width, height = 1280, 720
+        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
+        return self._img_to_jpeg(img)
+
+    def _start_fallback_after_failure(self) -> None:
+        if self._fallback is not None:
+            return
+        client = self.manager._device_clients.get(self.device_id)
+        if client is None:
+            raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
+        self._fallback = HarmonyFrameSource(self.device_id, client)
+        self._fallback.start()

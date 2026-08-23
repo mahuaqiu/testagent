@@ -236,6 +236,23 @@ class Worker:
 
         logger.info(f"Worker {self.worker_id} stopped")
 
+    def stop_harmony_official_sessions(self) -> None:
+        """升级前关闭鸿蒙推流和官方 Java Bridge，释放被安装器占用的文件。"""
+        try:
+            from worker.screen.manager import close_all_screen_managers
+
+            close_all_screen_managers()
+        except Exception as e:
+            logger.warning(f"升级前关闭鸿蒙推流帧源失败: {e}")
+
+        for platform in ("harmony_mobile", "harmony_pc"):
+            manager = self.platform_managers.get(platform)
+            if manager and hasattr(manager, "stop_official_sessions"):
+                try:
+                    manager.stop_official_sessions()
+                except Exception as e:
+                    logger.warning(f"升级前关闭{platform}官方 Java Bridge 失败: {e}")
+
     def _discover_environment(self) -> None:
         """发现宿主机环境（不含设备发现）。"""
         # 发现宿主机信息
@@ -381,6 +398,7 @@ class Worker:
                         self.ocr_client,
                         unlock_config,
                         device_type=platform,
+                        official_config=self.config.harmony_official,
                     )
                     if platform == "harmony_mobile":
                         self.harmony_mobile_manager = manager
@@ -861,6 +879,11 @@ class Worker:
         if not task.actions:
             return True
 
+        # 鸿蒙任意动作都先启动平台，随后由任务入口后台预热官方视频会话。
+        # 这样屏锁、Shell、按键等动作执行期间可以并行完成 Java/设备通道启动。
+        if task.platform in ("harmony_mobile", "harmony_pc") and task.device_id:
+            return True
+
         from worker.actions import ActionRegistry
 
         # 如果任务包含 start_app 或 stop_app，则不需要自动启动
@@ -1011,6 +1034,31 @@ class Worker:
         if validation_result:
             return validation_result
 
+        harmony_service_ready = False
+        harmony_activity_owner: str | None = None
+
+        # 鸿蒙任意 action 都触发官方链路后台预热；不等待预热完成，保证当前
+        # 屏锁、Shell、按键等 HDC 动作可以和 Java 启动并行执行。
+        if platform in ("harmony_mobile", "harmony_pc") and task.device_id:
+            status, message = manager.ensure_device_service(task.device_id)
+            if status != "online":
+                return TaskResult(
+                    task_id=task.task_id,
+                    request_id=request_id,
+                    status=TaskStatus.FAILED,
+                    platform=platform,
+                    error=f"Device service not available: {message}",
+                )
+            harmony_service_ready = True
+            if self.device_monitor:
+                self.device_monitor.mark_device_online(platform, task.device_id)
+            if hasattr(manager, "prewarm_official_session"):
+                harmony_activity_owner = f"task:{task.task_id}"
+                manager.prewarm_official_session(
+                    task.device_id,
+                    owner=harmony_activity_owner,
+                )
+
         # 设备命令类动作需要确保设备服务可用，即使执行器声明 requires_context=False。
         # 因为这些动作依赖 _current_device 和 client 来执行命令
         needs_device_service = (
@@ -1050,7 +1098,11 @@ class Worker:
             if needs_context or needs_device_service:
                 try:
                     # 移动端：确保设备服务可用（启动 WDA/u2）
-                    if platform in ("ios", "android", "harmony_mobile", "harmony_pc") and task.device_id:
+                    if (
+                        platform in ("ios", "android", "harmony_mobile", "harmony_pc")
+                        and task.device_id
+                        and not (platform in ("harmony_mobile", "harmony_pc") and harmony_service_ready)
+                    ):
                         status, message = manager.ensure_device_service(task.device_id)
                         if status != "online":
                             return TaskResult(
@@ -1104,6 +1156,11 @@ class Worker:
                     manager.close_context(context, close_session=False)
                 except Exception as e:
                     logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
+            if harmony_activity_owner and hasattr(manager, "release_official_session"):
+                try:
+                    manager.release_official_session(task.device_id, harmony_activity_owner)
+                except Exception as e:
+                    logger.warning(f"释放鸿蒙官方预热租约失败: {e}")
 
 
     def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:

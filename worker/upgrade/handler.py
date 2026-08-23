@@ -52,6 +52,17 @@ def _stop_worker() -> None:
         logger.warning(f"升级退出前停止 Worker 失败: {e}")
 
 
+def _stop_harmony_official_sessions() -> None:
+    """升级开始时关闭鸿蒙推流和 Java Bridge，避免安装器遇到文件占用。"""
+    try:
+        from worker.server import worker
+
+        if worker:
+            worker.stop_harmony_official_sessions()
+    except Exception as e:
+        logger.warning(f"升级前关闭鸿蒙官方 Java Bridge 失败: {e}")
+
+
 def get_current_version() -> str | None:
     """
     获取当前版本号。
@@ -97,6 +108,9 @@ def start_async_upgrade(request: UpgradeRequest) -> UpgradeResponse:
             current_version=current_version,
             target_version=target_version,
         )
+
+    # 下载期间也不保留官方 Java 进程，避免升级包覆盖 JAR/Bridge 时发生占用。
+    _stop_harmony_official_sessions()
 
     # 初始化状态
     state = UpgradeState(
@@ -157,6 +171,8 @@ def _execute_upgrade_background(
         # 安装器会自行清理旧进程；如果先 stop，退出清理可能让当前进程在
         # Popen 执行前结束，表现为下载完成后直接退出但安装器没有启动。
         _status_manager.update_status("installing")
+        # 防御性重复清理，覆盖下载期间被重新建立的推流会话。
+        _stop_harmony_official_sessions()
         run_silent_install(installer_path)
 
         # 安装器已经创建成功，再释放 Worker 资源并退出。

@@ -1,7 +1,8 @@
 """
 鸿蒙平台执行引擎。
 
-基于 HDC（HarmonyOS Device Connector）直连实现，支持 OCR/图像识别定位。
+以官方 HOScrcpy Java 会话作为低延迟视频和输入主通道，HDC 保留为
+设备发现、按键、文本、应用管理和故障回退通道。
 """
 
 import logging
@@ -23,6 +24,11 @@ from worker.platforms.harmony_hdc import (
 )
 from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
+from worker.platforms.harmony_official import (
+    HarmonyOfficialError,
+    HarmonyOfficialSession,
+    HarmonyOfficialSessionManager,
+)
 from worker.task import Action, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -32,7 +38,7 @@ class HarmonyPlatformManager(PlatformManager):
     """
     鸿蒙平台管理器。
 
-    使用 HDC 直连控制鸿蒙设备。
+    使用官方 Java 会话控制视频、触摸和鼠标，HDC 提供兼容能力。
     """
 
     # 鸿蒙没有 sidecar，因此录屏、实时窗口流和宿主机命令不加入白名单。
@@ -64,6 +70,7 @@ class HarmonyPlatformManager(PlatformManager):
         ocr_client=None,
         unlock_config=None,
         device_type: str = "harmony_mobile",
+        official_config: Optional[dict[str, Any]] = None,
     ):
         """
         初始化鸿蒙平台管理器。
@@ -79,6 +86,10 @@ class HarmonyPlatformManager(PlatformManager):
         self._current_device: Optional[str] = None
         self._unlock_config = unlock_config or {}  # 解锁配置
         self._device_type = device_type
+        self._official_sessions = HarmonyOfficialSessionManager(
+            device_type,
+            official_config,
+        )
 
     @property
     def platform(self) -> str:
@@ -107,6 +118,7 @@ class HarmonyPlatformManager(PlatformManager):
             logger.warning("HDC 工具未找到，鸿蒙平台可能不可用")
         else:
             logger.info(f"HDC 工具已就绪: {self._hdc_path}")
+        self._official_sessions.set_hdc_path(self._hdc_path)
 
         self._started = True
         logger.info("Harmony platform started")
@@ -117,6 +129,7 @@ class HarmonyPlatformManager(PlatformManager):
 
         清理所有设备连接。
         """
+        self._official_sessions.stop_all()
         self._device_clients.clear()
         self._current_device = None
         stop_owned_hdc_processes()
@@ -182,6 +195,7 @@ class HarmonyPlatformManager(PlatformManager):
         """
         if udid in self._device_clients:
             del self._device_clients[udid]
+        self._official_sessions.stop_session(udid)
         if self._current_device == udid:
             self._current_device = None
         logger.info(f"Harmony device marked faulty: {udid}")
@@ -273,8 +287,10 @@ class HarmonyPlatformManager(PlatformManager):
                 if self._current_device == serial:
                     self._current_device = None
                 logger.info(f"关闭设备会话: {serial}")
+            self._official_sessions.stop_session(serial)
         else:
-            # 保持客户端用于后续任务复用
+            # HDC 客户端可复用；官方 Java 会话释放任务租约后进入 10 分钟空闲保活。
+            self._official_sessions.release(context.serial, f"task:{id(context)}")
             logger.debug(f"保持设备客户端用于复用: {context.serial}")
 
     # ========== 基础操作方法 ==========
@@ -290,6 +306,12 @@ class HarmonyPlatformManager(PlatformManager):
             bytes: 截图数据（JPEG 格式）
         """
         client: HarmonyHdcWrapper = context
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                return official_session.get_latest_jpeg(timeout=5.0)
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "截图", exc)
         with tempfile.NamedTemporaryFile(suffix=".jpeg", delete=False) as f:
             temp_path = f.name
         try:
@@ -326,6 +348,63 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("No device context")
         return self.get_screenshot(client)
 
+    def get_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
+        """获取或启动设备级官方会话（兼容旧调用方）。
+
+        ``auto`` 模式失败时返回 ``None``，调用方继续走 HDC；``official``
+        模式失败时抛出异常，避免静默退回高延迟路径。
+        """
+        return self._official_sessions.get_or_start(udid)
+
+    def acquire_official_session(self, udid: str, owner: str) -> Optional[HarmonyOfficialSession]:
+        """获取一份带生命周期租约的官方会话。"""
+        return self._official_sessions.acquire(udid, owner)
+
+    def release_official_session(self, udid: str, owner: str) -> None:
+        """释放一份官方会话租约。"""
+        self._official_sessions.release(udid, owner)
+
+    def stop_official_sessions(self) -> None:
+        """升级或退出前立即停止本平台的 Java Bridge。"""
+        self._official_sessions.stop_all()
+
+    def prewarm_official_session(self, udid: str, owner: str | None = None) -> None:
+        """后台预热官方会话，让后续截图/推流直接复用已解码链路。"""
+        self._official_sessions.prewarm(udid, owner=owner)
+
+    def _get_official_session_for_client(
+        self,
+        client: Any,
+    ) -> tuple[str | None, HarmonyOfficialSession | None]:
+        """为真实 HDC 上下文获取官方会话，兼容轻量测试上下文。
+
+        平台层历史上允许测试和扩展传入只实现动作方法的上下文对象；这类对象
+        没有 ``serial`` 时继续直接执行 HDC 回退。
+        """
+        serial = getattr(client, "serial", None)
+        if not serial:
+            return None, None
+        return serial, self.acquire_official_session(serial, f"task:{id(client)}")
+
+    def _handle_official_failure(
+        self,
+        udid: str,
+        operation: str,
+        exc: Exception,
+    ) -> None:
+        """记录官方链路运行期故障，并按配置决定是否允许 HDC 回退。"""
+        if not isinstance(exc, HarmonyOfficialError):
+            exc = HarmonyOfficialError(str(exc))
+        self._official_sessions.stop_session(udid)
+        if not self._official_sessions.fallback_to_legacy:
+            raise exc
+        logger.warning(
+            "鸿蒙官方%s失败，回退 HDC: device=%s, error=%s",
+            operation,
+            udid,
+            exc,
+        )
+
     def click(self, x: int, y: int, duration: int = 0, context=None) -> None:
         """
         点击屏幕坐标。
@@ -339,6 +418,13 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                official_session.tap(x, y, duration)
+                return
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "点击", exc)
         success = client.long_tap(x, y, duration) if duration > 0 else client.tap(x, y)
         if not success:
             raise HarmonyError(f"HDC 点击失败: ({x}, {y})")
@@ -348,6 +434,13 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                official_session.double_click(x, y)
+                return
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "双击", exc)
         if not client.double_tap(x, y):
             raise HarmonyError(f"HDC 双击失败: ({x}, {y})")
 
@@ -357,6 +450,13 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session and self._device_type == "harmony_pc":
+            try:
+                official_session.right_click(x, y)
+                return
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "右键", exc)
         if not client.long_tap(x, y):
             raise HarmonyError(f"HDC 右键（长按）失败: ({x}, {y})")
 
@@ -376,6 +476,20 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                official_session.swipe(
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    duration,
+                    steps,
+                )
+                return
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "滑动", exc)
         distance = abs(end_x - start_x) + abs(end_y - start_y)
         speed = int(distance * 1000 / duration) if duration > 0 else 1000
         speed = max(200, min(speed, 40000))
@@ -396,6 +510,13 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("No device context")
         if self._device_type != "harmony_pc":
             raise NotImplementedError("move action is only supported on Harmony PC")
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                official_session.move_mouse(x, y)
+                return
+            except HarmonyOfficialError as exc:
+                self._handle_official_failure(serial, "鼠标移动", exc)
         if not client.move_mouse(x, y):
             raise HarmonyError(f"HDC 鼠标移动失败: ({x}, {y})")
 

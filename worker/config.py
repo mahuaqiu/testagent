@@ -67,6 +67,9 @@ class WorkerConfig:
     # 平台配置
     platforms: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    # 鸿蒙官方 HOScrcpy Java SDK 配置
+    harmony_official: dict[str, Any] = field(default_factory=dict)
+
     # 日志配置
     log_level: str = "INFO"
     log_file: str | None = None  # None 表示使用默认路径
@@ -178,6 +181,7 @@ class WorkerConfig:
         worker_data = data.get("worker", {})
         external = data.get("external_services", {})
         platforms = data.get("platforms", {})
+        harmony_official_cfg = data.get("harmony_official", {})
         logging_cfg = data.get("logging", {})
         image_matching = data.get("image_matching", {})
         upgrade_cfg = data.get("upgrade", {})
@@ -212,6 +216,7 @@ class WorkerConfig:
             platform_api=external.get("platform_api", "http://192.168.0.102:8000"),
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
+            harmony_official=harmony_official_cfg,
             log_level=logging_cfg.get("level", "INFO"),
             log_file=logging_cfg.get("file"),
             log_max_size=logging_cfg.get("max_size", 52428800),

@@ -6,6 +6,7 @@ param(
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
     [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.2.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
+    [string]$JavaRuntimePath = "",  # JRE 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
     [switch]$Clean,
     [switch]$BuildInstaller
 )
@@ -177,6 +178,7 @@ $nuitkaArgs = @(
     "--include-package=cv2"
     "--include-package=PIL"
     "--include-package=numpy"
+    "--include-package=av"
     "--include-package=pydantic"
     "--include-package=pystray"
     "--include-module=pystray._win32"
@@ -250,6 +252,23 @@ Write-Host "Copying tools directory (full)..."
 if (Test-Path "$PackageDir\tools") { Remove-Item -Recurse -Force "$PackageDir\tools" }
 Copy-Item -Path "$ProjectRoot\tools" -Destination "$PackageDir\tools" -Recurse -Force
 
+# 官方鸿蒙投屏 Bridge 运行时只需要 JRE 17+，不要在目标机器上依赖 javac/JDK。
+if ($JavaRuntimePath -ne "") {
+    $JavaExe = Join-Path $JavaRuntimePath "bin\java.exe"
+    if (-not (Test-Path $JavaExe)) {
+        Write-Error "Java runtime not found: $JavaExe"
+        exit 1
+    }
+    Write-Host "Copying Java runtime for Harmony official bridge..."
+    $JreTarget = "$PackageDir\tools\jre"
+    if (Test-Path $JreTarget) { Remove-Item -Recurse -Force $JreTarget }
+    New-Item -ItemType Directory -Force -Path $JreTarget | Out-Null
+    Copy-Item -Path "$JavaRuntimePath\*" -Destination $JreTarget -Recurse -Force
+    Write-Host "  Java runtime copied to tools/jre"
+} else {
+    Write-Warning "JavaRuntimePath is empty; the package requires an external JRE 17+ configured in harmony_official.java_path"
+}
+
 # Verify the bundled Harmony module can be imported with the matching CPython ABI.
 $oldPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$PackageDir;$PackageDir\perfharmony"
@@ -269,6 +288,18 @@ Copy-Item -Path "$ProjectRoot\assets" -Destination "$PackageDir\assets" -Recurse
 Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "$ProjectRoot\config" -Destination "$PackageDir\config" -Recurse -Force
+
+if ($JavaRuntimePath -ne "") {
+    # 发布包一律指向随包 JRE，开发机配置中的绝对 JDK 路径不能带到用户机器。
+    $PackagedConfig = "$PackageDir\config\worker.yaml"
+    $ConfigText = Get-Content -Path $PackagedConfig -Raw -Encoding UTF8
+    $ConfigText = [regex]::Replace(
+        $ConfigText,
+        '(?m)^(\s*java_path:)\s*.*$',
+        '$1 tools/jre/bin/java.exe'
+    )
+    Set-Content -Path $PackagedConfig -Value $ConfigText -Encoding UTF8
+}
 
 # Copy minicap binary files (Nuitka --include-data-dir may miss)
 Write-Host "Copying minicap static files..."
