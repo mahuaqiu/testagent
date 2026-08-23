@@ -378,7 +378,9 @@
       "Bash(Write-Host \"---\")",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/common/test_autostart.py tests/test_installer_config.py -q --tb=short)",
       "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py)",
-      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py --fix; .\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/common/test_autostart.py tests/test_installer_config.py -q --tb=short)"
+      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py --fix; .\\\\venv\\\\Scripts\\\\python.exe -m ruff check common/autostart.py tests/common/test_autostart.py tests/test_installer_config.py; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/common/test_autostart.py tests/test_installer_config.py -q --tb=short)",
+      "Bash(npm run *)",
+      "Bash(pnpm run *)"
     ]
   }
 }
