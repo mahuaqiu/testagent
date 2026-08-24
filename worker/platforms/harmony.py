@@ -382,9 +382,19 @@ class HarmonyPlatformManager(PlatformManager):
         """
         return self._official_sessions.get_or_start(udid)
 
-    def acquire_official_session(self, udid: str, owner: str) -> Optional[HarmonyOfficialSession]:
+    def acquire_official_session(
+        self,
+        udid: str,
+        owner: str,
+        *,
+        require_decoded_frame: bool = True,
+    ) -> Optional[HarmonyOfficialSession]:
         """获取一份带生命周期租约的官方会话。"""
-        return self._official_sessions.acquire(udid, owner)
+        return self._official_sessions.acquire(
+            udid,
+            owner,
+            require_decoded_frame=require_decoded_frame,
+        )
 
     def is_device_locked(self, udid: str) -> bool:
         """查询设备锁屏状态，供实时 H.264 链路等待解锁使用。"""

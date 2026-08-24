@@ -126,6 +126,7 @@ class HarmonyOfficialSession:
         self._decoder_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
+        self._first_h264_event = threading.Event()
         self._state_lock = threading.RLock()
         self._input_lock = threading.Lock()
         self._startup_error = ""
@@ -151,7 +152,7 @@ class HarmonyOfficialSession:
         frame = self.latest_frame
         return (frame.width, frame.height) if frame else (0, 0)
 
-    def start(self) -> None:
+    def start(self, *, wait_for_decoded_frame: bool = True) -> None:
         """启动 Java 采集和 H.264 解码线程，等待 SDK READY。"""
         with self._state_lock:
             if self.is_running:
@@ -199,12 +200,18 @@ class HarmonyOfficialSession:
             raise HarmonyOfficialError(f"鸿蒙官方 SDK 启动失败: {detail}")
 
         first_frame_timeout = max(0.1, float(self.settings["first_frame_timeout_seconds"]))
-        if self._wait_for_first_frame(first_frame_timeout) is None:
+        first_frame_ready = (
+            self._wait_for_first_frame(first_frame_timeout)
+            if wait_for_decoded_frame
+            else self._wait_for_first_h264(first_frame_timeout)
+        )
+        if first_frame_ready is None:
             detail = self._decoder_error or self._closed_reason or "未收到可解码视频帧"
             # 启动失败时 Java SDK 可能卡在 gRPC 清理阶段；缩短优雅停止时间，
             # 让下一次重试尽快接管，避免首连被无效等待拖长。
             self.stop(timeout=1.0)
-            raise HarmonyOfficialError(f"等待鸿蒙官方首个视频帧超时({first_frame_timeout}s): {detail}")
+            frame_kind = "可解码视频帧" if wait_for_decoded_frame else "H.264 视频帧"
+            raise HarmonyOfficialError(f"等待鸿蒙官方首个{frame_kind}超时({first_frame_timeout}s): {detail}")
 
         logger.info("鸿蒙官方会话已就绪: %s/%s", self.device_type, self.serial)
 
@@ -374,6 +381,7 @@ class HarmonyOfficialSession:
     def _reset_start_state(self) -> None:
         self._stop_event.clear()
         self._ready_event.clear()
+        self._first_h264_event.clear()
         self._startup_error = ""
         self._closed_reason = ""
         self._decoder_error = ""
@@ -398,6 +406,7 @@ class HarmonyOfficialSession:
 
     def _on_bridge_message(self, message: BridgeMessage) -> None:
         if message.message_type == BridgeMessageType.H264:
+            self._first_h264_event.set()
             self._offer_h264(message.payload)
             self._broadcast_h264(message.payload)
         elif message.message_type == BridgeMessageType.READY:
@@ -564,6 +573,20 @@ class HarmonyOfficialSession:
             if not self.is_running:
                 return None
 
+    def _wait_for_first_h264(self, timeout: float) -> bool | None:
+        """等待首个原始 H.264 包，供 WebSocket 直通链路快速就绪。"""
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            if self._first_h264_event.wait(min(0.2, remaining)):
+                return True
+            # H.264 WebSocket 直通不依赖本机 PyAV 解码；只要 Java Bridge
+            # 仍在运行，原始码流就可以继续交给浏览器处理。
+            if not self.is_running:
+                return None
+
     def _decode_loop(self) -> None:
         try:
             decoder = H264Decoder(jpeg_quality=int(self.settings["jpeg_quality"]))
@@ -712,7 +735,12 @@ class HarmonyOfficialSessionManager:
         """返回设备当前是否处于锁屏状态，供 H.264 等待逻辑使用。"""
         return self._is_device_locked(serial)
 
-    def get_or_start(self, serial: str) -> HarmonyOfficialSession | None:
+    def get_or_start(
+        self,
+        serial: str,
+        *,
+        require_decoded_frame: bool = True,
+    ) -> HarmonyOfficialSession | None:
         """返回可用官方会话；auto 失败返回 ``None``，official 模式抛异常。"""
         if not self.enabled:
             return None
@@ -743,7 +771,7 @@ class HarmonyOfficialSessionManager:
                     settings=self._settings_for_serial(serial),
                 )
                 try:
-                    session.start()
+                    session.start(wait_for_decoded_frame=require_decoded_frame)
                     self._sessions[serial] = session
                     return session
                 except HarmonyOfficialError as exc:
@@ -825,11 +853,20 @@ class HarmonyOfficialSessionManager:
             self._prewarm_threads[serial] = thread
             thread.start()
 
-    def acquire(self, serial: str, owner: str) -> HarmonyOfficialSession | None:
+    def acquire(
+        self,
+        serial: str,
+        owner: str,
+        *,
+        require_decoded_frame: bool = True,
+    ) -> HarmonyOfficialSession | None:
         """获取一份官方会话租约；同一 owner 重复获取不会增加引用。"""
         with self._lock:
             self._cancel_idle_timer_locked(serial)
-            session = self.get_or_start(serial)
+            session = self.get_or_start(
+                serial,
+                require_decoded_frame=require_decoded_frame,
+            )
             if session is None:
                 return None
             self._owners.setdefault(serial, set()).add(owner)

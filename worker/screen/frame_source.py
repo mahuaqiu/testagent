@@ -502,7 +502,11 @@ class HarmonyOfficialFrameSource(FrameSource):
         """订阅官方会话的 H.264 WebSocket 帧。"""
         with self._start_lock:
             if self._session is None and self._fallback is None:
-                self._session = self.manager.acquire_official_session(self.device_id, self._owner)
+                self._session = self.manager.acquire_official_session(
+                    self.device_id,
+                    self._owner,
+                    require_decoded_frame=False,
+                )
         if self._session is None:
             if self.manager.is_device_locked(self.device_id):
                 raise ConnectionError("鸿蒙设备处于锁屏状态，等待解锁后启动 H.264 会话")
