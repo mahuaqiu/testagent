@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from common.packaging import get_base_dir
 from worker.platforms.harmony_official.bridge import JavaBridgeError, JavaBridgeProcess
@@ -28,6 +29,71 @@ from worker.platforms.harmony_official.protocol import (
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _H264Subscriber:
+    """一个鸿蒙 H.264 WebSocket 订阅者及其有界发送队列。"""
+
+    queue: Queue[bytes]
+    has_config: bool = False
+    waiting_for_keyframe: bool = True
+
+
+def _find_annexb_start_code(payload: bytes, offset: int = 0) -> tuple[int, int] | None:
+    """查找 Annex-B 起始码，返回位置和长度。"""
+    start3 = payload.find(b"\x00\x00\x01", offset)
+    start4 = payload.find(b"\x00\x00\x00\x01", offset)
+    if start3 < 0:
+        return (start4, 4) if start4 >= 0 else None
+    if start4 >= 0 and start4 <= start3:
+        return start4, 4
+    return start3, 3
+
+
+def _split_annexb_nals(payload: bytes) -> list[tuple[int, bytes]]:
+    """拆分一段完整的 Annex-B access unit，保留每个 NAL 的起始码。"""
+    nals: list[tuple[int, bytes]] = []
+    first = _find_annexb_start_code(payload)
+    if first is None:
+        return nals
+
+    start, start_code_length = first
+    while start >= 0:
+        next_start = _find_annexb_start_code(payload, start + start_code_length)
+        end = next_start[0] if next_start else len(payload)
+        nal = payload[start + start_code_length:end]
+        if nal:
+            nals.append((nal[0] & 0x1F, payload[start:end]))
+        if next_start is None:
+            break
+        start, start_code_length = next_start
+    return nals
+
+
+def _h264_websocket_packets(payload: bytes) -> list[bytes]:
+    """把官方 H.264 access unit 转成现有前端 WebSocket 帧协议。
+
+    每个输出帧首字节为：0x01 参数集、0x02 IDR、0x03 P 帧；后面保持
+    Annex-B 原始数据。官方 SDK 可能把 SPS/PPS 和 IDR 放在同一次回调中，
+    这里拆成两个 WebSocket 帧，确保浏览器先收到参数集再收到关键帧。
+    """
+    nals = _split_annexb_nals(payload)
+    if not nals:
+        return []
+
+    config_nals = [data for nal_type, data in nals if nal_type in (7, 8)]
+    video_nals = [data for nal_type, data in nals if nal_type not in (7, 8)]
+    has_idr = any(nal_type == 5 for nal_type, _ in nals)
+    has_slice = any(nal_type in (1, 5) for nal_type, _ in nals)
+
+    packets: list[bytes] = []
+    if config_nals:
+        packets.append(b"\x01" + b"".join(config_nals))
+    if video_nals and has_slice:
+        prefix = b"\x02" if has_idr else b"\x03"
+        packets.append(prefix + b"".join(video_nals))
+    return packets
 
 
 class HarmonyOfficialError(RuntimeError):
@@ -51,6 +117,9 @@ class HarmonyOfficialSession:
         self.settings = settings
         self._frame_cache = LatestFrameCache()
         self._h264_queue: Queue[bytes] = Queue(maxsize=max(1, int(settings["frame_queue_capacity"])))
+        self._h264_subscribers: dict[str, _H264Subscriber] = {}
+        self._latest_h264_config: bytes | None = None
+        self._latest_h264_keyframe: bytes | None = None
         self._bridge: JavaBridgeProcess | None = None
         self._decoder_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -63,6 +132,8 @@ class HarmonyOfficialSession:
         self._last_idr_request_at = 0.0
         self._dropped_h264_messages = 0
         self._decoder_error = ""
+        self._h264_video_logged = False
+        self._h264_unrecognized_logged = False
 
     @property
     def is_running(self) -> bool:
@@ -126,21 +197,26 @@ class HarmonyOfficialSession:
             raise HarmonyOfficialError(f"鸿蒙官方 SDK 启动失败: {detail}")
 
         first_frame_timeout = max(0.1, float(self.settings["first_frame_timeout_seconds"]))
-        if self._frame_cache.get(timeout=first_frame_timeout) is None:
+        if self._wait_for_first_frame(first_frame_timeout) is None:
             detail = self._decoder_error or self._closed_reason or "未收到可解码视频帧"
-            self.stop()
+            # 启动失败时 Java SDK 可能卡在 gRPC 清理阶段；缩短优雅停止时间，
+            # 让下一次重试尽快接管，避免首连被无效等待拖长。
+            self.stop(timeout=1.0)
             raise HarmonyOfficialError(f"等待鸿蒙官方首个视频帧超时({first_frame_timeout}s): {detail}")
 
         logger.info("鸿蒙官方会话已就绪: %s/%s", self.device_type, self.serial)
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5.0) -> None:
         """停止 Java Bridge 和解码线程。"""
         with self._state_lock:
             self._stop_event.set()
             bridge = self._bridge
             self._bridge = None
+            self._h264_subscribers.clear()
+            self._latest_h264_config = None
+            self._latest_h264_keyframe = None
         if bridge:
-            bridge.stop()
+            bridge.stop(timeout=timeout)
         thread = self._decoder_thread
         if thread and thread is not threading.current_thread():
             thread.join(timeout=3)
@@ -161,12 +237,52 @@ class HarmonyOfficialSession:
             raise HarmonyOfficialError(f"等待鸿蒙官方视频帧超时: {detail}")
         return frame.jpeg
 
-    def request_idr(self) -> None:
+    def subscribe_h264(self, subscriber_id: str) -> Queue[bytes]:
+        """订阅原始 H.264 WebSocket 帧，并请求一组新的参数集/关键帧。"""
+        if not self.is_running:
+            raise HarmonyOfficialError("鸿蒙官方会话未运行")
+        subscriber = _H264Subscriber(
+            queue=Queue(maxsize=max(4, int(self.settings["frame_queue_capacity"]) * 4))
+        )
+        with self._state_lock:
+            self._h264_subscribers[subscriber_id] = subscriber
+            cached_config = self._latest_h264_config
+            cached_keyframe = self._latest_h264_keyframe
+            if cached_config is not None:
+                subscriber.queue.put_nowait(cached_config)
+                subscriber.has_config = True
+            if cached_config is not None and cached_keyframe is not None:
+                subscriber.queue.put_nowait(cached_keyframe)
+                # 缓存回放已经包含一组完整的 SPS/PPS + IDR，新订阅可以直接
+                # 接收后续 P 帧；否则静止画面时可能一直等下一次 IDR。
+                subscriber.waiting_for_keyframe = False
+        logger.info(
+            "鸿蒙 H.264 订阅建立: serial=%s, subscriber=%s, cached_config_bytes=%d, "
+            "cached_idr_bytes=%d, queued_packets=%d",
+            self.serial,
+            subscriber_id,
+            len(cached_config) - 1 if cached_config else 0,
+            len(cached_keyframe) - 1 if cached_keyframe else 0,
+            int(cached_config is not None) + int(cached_keyframe is not None),
+        )
+        # 新连接可能错过了上一次 SPS/PPS，必须从新的 IDR 重新开始。
+        # 强制绕过节流：旧连接刚请求过 IDR 时，静止画面不会自然产生新帧，
+        # 如果这次请求被吞掉，浏览器就只能一直等到设备画面发生变化。
+        self.request_idr(force=True)
+        return subscriber.queue
+
+    def unsubscribe_h264(self, subscriber_id: str) -> None:
+        """取消一个原始 H.264 订阅。"""
+        with self._state_lock:
+            self._h264_subscribers.pop(subscriber_id, None)
+
+    def request_idr(self, force: bool = False) -> None:
         """请求设备端发送关键帧，节流避免连续请求。"""
         now = time.monotonic()
-        if now - self._last_idr_request_at < 0.5:
-            return
-        self._last_idr_request_at = now
+        with self._state_lock:
+            if not force and now - self._last_idr_request_at < 0.5:
+                return
+            self._last_idr_request_at = now
         try:
             self._send(command_request_idr())
         except HarmonyOfficialError:
@@ -253,6 +369,12 @@ class HarmonyOfficialSession:
         self._input_ready_at = 0.0
         self._last_idr_request_at = 0.0
         self._frame_cache.clear()
+        self._h264_video_logged = False
+        self._h264_unrecognized_logged = False
+        with self._state_lock:
+            self._h264_subscribers.clear()
+            self._latest_h264_config = None
+            self._latest_h264_keyframe = None
         while True:
             try:
                 self._h264_queue.get_nowait()
@@ -262,6 +384,7 @@ class HarmonyOfficialSession:
     def _on_bridge_message(self, message: BridgeMessage) -> None:
         if message.message_type == BridgeMessageType.H264:
             self._offer_h264(message.payload)
+            self._broadcast_h264(message.payload)
         elif message.message_type == BridgeMessageType.READY:
             self._input_ready_at = time.monotonic() + float(self.settings["input_ready_delay_seconds"])
             self._ready_event.set()
@@ -300,6 +423,96 @@ class HarmonyOfficialSession:
                 logger.debug("丢弃过期鸿蒙 H.264 数据: serial=%s, count=%d", self.serial, self._dropped_h264_messages)
             except Full:
                 pass
+
+    def _broadcast_h264(self, payload: bytes) -> None:
+        """将官方 H.264 access unit 广播给所有 WebSocket 订阅者。"""
+        packets = _h264_websocket_packets(payload)
+        if not packets:
+            if not self._h264_unrecognized_logged:
+                self._h264_unrecognized_logged = True
+                logger.warning(
+                    "鸿蒙官方 H.264 回调未识别为 Annex-B 数据: serial=%s, bytes=%d",
+                    self.serial,
+                    len(payload),
+                )
+            return
+
+        request_idr = False
+        with self._state_lock:
+            subscribers = list(self._h264_subscribers.values())
+            for packet in packets:
+                frame_type = packet[0]
+                if frame_type in (0x02, 0x03) and not self._h264_video_logged:
+                    self._h264_video_logged = True
+                    logger.info(
+                        "鸿蒙官方 H.264 已收到可转发视频帧: serial=%s, frame_type=%s, bytes=%d",
+                        self.serial,
+                        "IDR" if frame_type == 0x02 else "P",
+                        len(packet) - 1,
+                    )
+                if frame_type == 0x01:
+                    self._latest_h264_config = packet
+                    # 参数集变化后，旧 IDR 可能与新的 SPS/PPS 不匹配，不能跨参数集回放。
+                    self._latest_h264_keyframe = None
+                elif frame_type == 0x02:
+                    self._latest_h264_keyframe = packet
+                for subscriber in subscribers:
+                    if frame_type == 0x03 and (
+                        not subscriber.has_config or subscriber.waiting_for_keyframe
+                    ):
+                        continue
+                    if frame_type == 0x02 and not subscriber.has_config:
+                        # IDR 不携带 SPS/PPS 时，单独发送也无法让浏览器起播。
+                        # 等待参数集后再接收下一个关键帧，避免进入“有数据但白屏”。
+                        request_idr = True
+                        continue
+                    try:
+                        subscriber.queue.put_nowait(packet)
+                    except Full:
+                        if frame_type == 0x03:
+                            # 慢客户端只丢 P 帧，并重新等待下一个关键帧，避免把
+                            # 依赖已丢帧的 P 继续发送给浏览器。
+                            subscriber.waiting_for_keyframe = True
+                            request_idr = True
+                            continue
+                        while True:
+                            try:
+                                subscriber.queue.get_nowait()
+                            except Empty:
+                                break
+                        try:
+                            subscriber.queue.put_nowait(packet)
+                        except Full:
+                            if frame_type == 0x01:
+                                subscriber.has_config = False
+                            continue
+                        if frame_type == 0x01:
+                            subscriber.has_config = True
+                            subscriber.waiting_for_keyframe = True
+                        elif frame_type == 0x02:
+                            subscriber.waiting_for_keyframe = False
+                    else:
+                        if frame_type == 0x01:
+                            subscriber.has_config = True
+                            subscriber.waiting_for_keyframe = True
+                        elif frame_type == 0x02:
+                            subscriber.waiting_for_keyframe = False
+
+        if request_idr:
+            self.request_idr()
+
+    def _wait_for_first_frame(self, timeout: float) -> LatestFrame | None:
+        """等待首帧，并在 Java Bridge 已退出时立即结束等待。"""
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            frame = self._frame_cache.get(timeout=min(0.2, remaining))
+            if frame is not None:
+                return frame
+            if not self.is_running:
+                return None
 
     def _decode_loop(self) -> None:
         try:
@@ -386,7 +599,8 @@ class HarmonyOfficialSessionManager:
         "idle_timeout_seconds": 600,
         "input_ready_delay_seconds": 1.5,
         "reconnect_attempts": 3,
-        "reconnect_backoff_seconds": 2,
+        "reconnect_backoff_seconds": 0.5,
+        "prewarm_on_device_ready": True,
         "frame_queue_capacity": 2,
         "image_scale_size": 720,
         "frame_rate": 30,
@@ -406,6 +620,7 @@ class HarmonyOfficialSessionManager:
         self._idle_timers: dict[str, threading.Timer] = {}
         self._prewarm_threads: dict[str, threading.Thread] = {}
         self._prewarm_generation = 0
+        self._device_lock_checker: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
 
     @property
@@ -420,8 +635,32 @@ class HarmonyOfficialSessionManager:
     def fallback_to_legacy(self) -> bool:
         return self.mode == "auto" and bool(self._settings["fallback_to_legacy"])
 
+    @property
+    def prewarm_on_device_ready(self) -> bool:
+        """设备服务上线后是否后台预热官方 Java 会话。"""
+        return bool(self._settings["prewarm_on_device_ready"])
+
     def set_hdc_path(self, hdc_path: str | None) -> None:
         self._hdc_path = hdc_path
+
+    def set_device_lock_checker(self, checker: Callable[[str], bool] | None) -> None:
+        """设置设备锁屏状态查询器，锁屏时不启动官方视频会话。"""
+        self._device_lock_checker = checker
+
+    def _is_device_locked(self, serial: str) -> bool:
+        checker = self._device_lock_checker
+        if checker is None:
+            return False
+        try:
+            return bool(checker(serial))
+        except Exception as exc:
+            # 无法确认状态时宁可跳过官方启动，避免锁屏设备反复拉起 Java。
+            logger.warning("查询鸿蒙设备锁屏状态失败，按锁屏处理: serial=%s, error=%s", serial, exc)
+            return True
+
+    def is_device_locked(self, serial: str) -> bool:
+        """返回设备当前是否处于锁屏状态，供 H.264 等待逻辑使用。"""
+        return self._is_device_locked(serial)
 
     def get_or_start(self, serial: str) -> HarmonyOfficialSession | None:
         """返回可用官方会话；auto 失败返回 ``None``，official 模式抛异常。"""
@@ -429,13 +668,19 @@ class HarmonyOfficialSessionManager:
             return None
         if not self._hdc_path:
             return self._handle_start_failure("HDC 路径不可用")
+        if self._is_device_locked(serial):
+            detail = "设备处于锁屏状态，等待解锁后启动官方会话"
+            if self.mode == "official" or not self.fallback_to_legacy:
+                raise HarmonyOfficialError(f"鸿蒙官方 HOScrcpy 不可用: {detail}")
+            logger.debug("鸿蒙设备处于锁屏状态，等待解锁后启动官方会话: serial=%s", serial)
+            return None
 
         with self._lock:
             current = self._sessions.get(serial)
             if current and current.is_running:
                 return current
             if current:
-                current.stop()
+                current.stop(timeout=1.0)
                 self._sessions.pop(serial, None)
 
             attempts = max(1, int(self._settings["reconnect_attempts"]))
@@ -453,7 +698,7 @@ class HarmonyOfficialSessionManager:
                     return session
                 except HarmonyOfficialError as exc:
                     last_error = str(exc)
-                    session.stop()
+                    session.stop(timeout=1.0)
                     logger.warning(
                         "启动鸿蒙官方会话失败: serial=%s, attempt=%d/%d, error=%s",
                         serial,
@@ -482,7 +727,10 @@ class HarmonyOfficialSessionManager:
             current = self._sessions.get(serial)
             if current and current.is_running:
                 if not self._owners.get(serial):
-                    self._schedule_idle_release_locked(serial)
+                    # 设备监控会周期性调用预热检查；已有空闲计时器时不能重复
+                    # 续期，否则“10 分钟无调用释放”会永远不会触发。
+                    if serial not in self._idle_timers:
+                        self._schedule_idle_release_locked(serial)
                 return
             thread = self._prewarm_threads.get(serial)
             if thread and thread.is_alive():
@@ -578,6 +826,8 @@ class HarmonyOfficialSessionManager:
 
     def _schedule_idle_release_locked(self, serial: str) -> None:
         if serial not in self._sessions or self._owners.get(serial):
+            return
+        if serial in self._idle_timers:
             return
         self._cancel_idle_timer_locked(serial)
         timeout = max(0.1, float(self._settings["idle_timeout_seconds"]))

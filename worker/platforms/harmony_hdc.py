@@ -89,13 +89,15 @@ def parse_harmony_screen_state(output: str) -> str:
 def parse_harmony_lock_state(output: str) -> Optional[bool]:
     """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。"""
     match = re.search(
-        r"(?:is)?screen[_\s]?locked\b\s*[:=]?\s*(true|false|yes|no|1|0)",
+        r"(?:is\s*)?(?:screen[_\s]?(?:locked|lock[_\s]?state|lock[_\s]?status)|"
+        r"lock[_\s]?(?:state|status))\b\s*[:=]?\s*"
+        r"(true|false|yes|no|locked|unlocked|on|off|1|0)",
         output,
         re.IGNORECASE,
     )
     if not match:
         return None
-    return match.group(1).lower() in ("true", "yes", "1")
+    return match.group(1).lower() in ("true", "yes", "locked", "on", "1")
 
 
 # ============================================================================

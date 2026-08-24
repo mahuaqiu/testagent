@@ -3,7 +3,7 @@
 > 计划日期：2026-08-22，Worker 接入与真机验证更新：2026-08-23  
 > 适用范围：`D:\code\autotest` Worker 的鸿蒙移动端和鸿蒙 PC 推流、截图、实时触摸、鼠标输入  
 > 参考工程：`D:\code\developtools\HOScrcpy-python-main`、`D:\code\developtools\HOScrcpy-main`  
-> 当前阶段：移动端官方会话已接入 Worker，并已完成 Java 会话、H.264 解码、最新帧截图、点击、滑动、HTTP/WebSocket 端到端回归及任务级后台预热/600 秒空闲保活验证；鸿蒙 PC 真机验证待设备到位。
+> 当前阶段：移动端官方会话已接入 Worker，并已完成 Java 会话、H.264 解码、最新帧截图、点击、滑动、HTTP/WebSocket 端到端回归及设备上线后台预热/600 秒空闲保活验证；鸿蒙移动和鸿蒙 PC 已开放 H.264 WebSocket 直通，鸿蒙 PC 真机验证待设备到位。
 
 ## 1. 目标与非目标
 
@@ -12,13 +12,13 @@
 1. 将鸿蒙实时画面采集从当前 `uitest agent/fport` 和 `snapshot_display` 轮询路径，逐步迁移到官方 `HosRemoteDevice` Java SDK 的 H.264 长连接会话。
 2. 让鸿蒙移动端触摸和鸿蒙 PC 鼠标事件复用官方 Java API，减少高频 HDC shell 往返造成的延迟。
 3. 复用同一个设备级会话提供推流、最新帧截图、失败截图和 OCR 图像，避免每次截图重新执行远程文件操作。
-4. 保持现有 Worker 任务接口、ArtifactService、OCR 调用和第一阶段 JPEG WebSocket 外部协议兼容。
+4. 保持现有 Worker 任务接口、ArtifactService、OCR 调用和 JPEG WebSocket 兼容，同时为鸿蒙开放 H.264 WebSocket 直通。
 5. 在真实鸿蒙移动设备和真实鸿蒙 PC 上分别验证启动、首帧、输入、断线重连、设备拔出和资源回收。
 
 ### 1.2 非目标
 
 1. 第一阶段不把 HOScrcpy GUI 搬进 Worker，也不引入 Swing、Java WebSocket 服务或 GUI 事件循环。
-2. 第一阶段不修改前端协议，不默认开放鸿蒙 H.264 WebSocket，不改变 `api.yaml` 的现有外部行为。
+2. 不改变 `api.yaml` 的现有外部行为；鸿蒙 H.264 WebSocket 复用现有前端一字节帧类型前缀协议，不新增平台专属媒体协议。
 3. 不修改 OCR 服务、用例工程、Windows sidecar、推流协议、安装升级流程和平台动作底层实现，除非后续验证证明是接入所必需。
 4. 不承诺完全移除 HDC。官方 SDK 的设备发现、启动准备和部分控制能力仍可能依赖 HDC。
 
@@ -42,7 +42,8 @@
      ├── latest frame cache（JPEG/RGB/尺寸/时间戳/序号）
      └── 会话状态、重连、指标、资源回收
      │
-     ├── ScreenManager/FrameSource -> 第一阶段 JPEG WebSocket
+     ├── ScreenManager/FrameSource -> JPEG WebSocket（兼容）
+     ├── HarmonyOfficialFrameSource -> H.264 Binary WebSocket（直通）
      ├── HarmonyPlatformManager -> screenshot/input/action
      └── ArtifactService/OCR -> latest frame，必要时 HDC fallback
 ```
@@ -241,17 +242,17 @@ STOPPED -> STARTING -> READY -> STREAMING
 - move 事件采用最大频率、最小位移和有界发送队列，不能为了“平滑”让队列堆积。
 - Java session 不支持的 key/text 能力继续走 HDC；后续若确认官方公共接口，再单独替换。
 
-### 阶段 4：鸿蒙 H.264 Binary WebSocket（可选）
+### 阶段 4：鸿蒙 H.264 Binary WebSocket（已实施）
 
-**目的**：在第一阶段稳定后，像 Windows sidecar 一样去掉 Worker 内部 H.264 到 JPEG 的重复编码。
+**目的**：像 Windows sidecar 一样去掉鸿蒙实时推流链路中 H.264 到 JPEG 的重复编码。
 
-这一步需要同时修改 Worker 与前端协议，不能只在后端打开开关：
+当前实现已同时完成 Worker 与平台前端接入：
 
-1. 定义鸿蒙媒体 packet 的 magic、版本、序号、PTS、尺寸、flags、payload 和关键帧规则。
-2. 复用 Windows RSM1 的设计思想，但不要直接复用 Windows 专属实现或假设同一编码器元数据。
-3. 新连接先发送 SPS/PPS，再发送 IDR；队列溢出后清空 P 帧并重新等待关键帧。
-4. 更新 `api.yaml`、前端解码器和连接参数说明。
-5. 兼容 `codec=jpeg`，H.264 不可用时明确返回或降级，不改变旧客户端行为。
+1. 复用现有 WebSocket 帧协议：`0x01` 参数集、`0x02` IDR、`0x03` P 帧，后接 Annex-B payload。
+2. 直接转发 Java SDK 回调的 H.264 数据，不经过 Pillow/JPEG 重编码。
+3. 新订阅请求 IDR；队列溢出后丢弃 P 帧并重新等待关键帧，避免向浏览器发送断链 P 帧。
+4. 平台设备调试页对 `harmony_mobile`、`harmony_pc` 默认选择 H.264，MSE/JMuxer 复用现有实现。
+5. 继续兼容 `codec=jpeg`；官方 H.264 会话不可用时不伪装成 H.264，连接明确失败并由前端按既有策略降级。
 
 ## 4. 配置和发布计划
 
@@ -266,7 +267,8 @@ harmony_official:
   bridge_path: ""
   startup_timeout_seconds: 30
   reconnect_attempts: 3
-  reconnect_backoff_seconds: 2
+  reconnect_backoff_seconds: 0.5
+  prewarm_on_device_ready: true
   frame_queue_capacity: 2
   max_decode_width: 1600
   fallback_to_legacy: true
@@ -431,19 +433,19 @@ READY 耗时：
 1. 已有真实 JAR 的 API 签名和 native 资产清单。
 2. 移动端至少能完成一轮视频、触摸和截图验证。
 3. PC 端至少能确认视频和鼠标 API 的可用性；如果暂时没有 PC 真机，可以先实现移动端受配置保护的会话层，但 PC 必须保持 legacy/未启用，不能默认切换。
-4. 已决定 Python 侧 H.264 解码路径，并能在无真机环境用 fixture 回归。
+4. 已决定 Python 侧 H.264 解码路径，并能在无真机环境用 fixture 回归；鸿蒙 H.264 WebSocket 直通帧协议也已完成 fixture 回归。
 5. 已确定 Java Bridge 的 framing、停止、错误和重连协议。
 6. 已确定官方模式失败时的 legacy fallback 和配置开关。
-7. 已确认不会破坏现有 `GET /worker_devices`、任务截图、失败附件和 JPEG WebSocket 行为。
+7. 已确认不会破坏现有 `GET /worker_devices`、任务截图、失败附件和 JPEG WebSocket 行为；鸿蒙 H.264 由官方会话直接转发。
 
-当前状态：移动端的第 1、2、4、5、6、7 项已完成实现，Java Bridge 与 Python 单元测试通过，移动端 Java 会话、H.264 解码、最新帧截图、点击、滑动、HTTP/WebSocket 端到端回归及任务级预热/600 秒空闲保活已验证。PC 的第 3 项仍等待真机；移动端长稳和断线恢复仍需继续执行。
+当前状态：移动端的第 1、2、4、5、6、7 项已完成实现，Java Bridge、H.264 WebSocket 帧拆分与 Worker 单元测试通过，移动端 Java 会话、H.264 解码、最新帧截图、点击、滑动、HTTP/WebSocket 端到端回归及设备上线预热/600 秒空闲保活已验证；启动失败时会在 Bridge 退出后立即结束首帧等待并快速重试。鸿蒙 PC 的官方视频和鼠标真机验收仍待设备到位；两端长稳和断线恢复仍需继续执行。
 
 ## 9. 推荐执行顺序
 
 1. 完成移动端 Worker HTTP 和 JPEG WebSocket 端到端回归，确认任务动作和推流会话复用。
 2. 补充移动端长按、旋转、断线恢复、设备拔出和 30 分钟稳定性数据。
 3. 连接鸿蒙 PC 后，单独验证视频、鼠标、滚轮、多屏和缩放，不从移动端结果外推。
-4. 两端稳定后，再评估阶段 4 的 H.264 binary WebSocket 和前端改造。
+4. 在鸿蒙 PC 真机到位后完成 H.264 WebSocket 首帧、断线重连和连续推流验收，并补充两端长稳数据。
 
 最终目标不是复制 HOScrcpy 项目，而是把官方 SDK 封装成 Worker 的一个可观测、可回收、可降级的设备级实时能力层。
 

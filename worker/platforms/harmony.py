@@ -90,6 +90,7 @@ class HarmonyPlatformManager(PlatformManager):
             device_type,
             official_config,
         )
+        self._official_sessions.set_device_lock_checker(self._is_device_locked_for_official)
 
     @property
     def platform(self) -> str:
@@ -164,6 +165,8 @@ class HarmonyPlatformManager(PlatformManager):
             if client:
                 # 检查现有连接是否有效
                 if client.is_online():
+                    if self._official_sessions.prewarm_on_device_ready:
+                        self._prewarm_if_screen_available(udid, client)
                     return ("online", "OK")
                 else:
                     # 连接失效，移除旧的客户端
@@ -174,6 +177,8 @@ class HarmonyPlatformManager(PlatformManager):
             self._device_clients[udid] = client
 
             logger.info(f"Harmony device service ready: {udid}")
+            if self._official_sessions.prewarm_on_device_ready:
+                self._prewarm_if_screen_available(udid, client)
             return ("online", "OK")
 
         except DeviceNotFoundError as e:
@@ -185,6 +190,26 @@ class HarmonyPlatformManager(PlatformManager):
         except Exception as e:
             logger.error(f"Failed to ensure device service: {udid}, {e}")
             return ("faulty", str(e))
+
+    @staticmethod
+    def _is_locked_client(client: HarmonyHdcWrapper) -> bool:
+        """查询客户端锁屏状态；查询失败时按锁屏处理。"""
+        try:
+            return bool(client.is_locked())
+        except Exception:
+            return True
+
+    def _is_device_locked_for_official(self, udid: str) -> bool:
+        """供官方会话管理器判断设备是否可启动屏幕采集。"""
+        client = self._device_clients.get(udid)
+        return self._is_locked_client(client) if client is not None else False
+
+    def _prewarm_if_screen_available(self, udid: str, client: HarmonyHdcWrapper) -> None:
+        """屏幕已解锁时才预热官方链路，避免设备启动阶段反复拉起 Java。"""
+        if self._is_locked_client(client):
+            logger.debug("Harmony 设备处于锁屏状态，跳过官方会话预热: %s", udid)
+            return
+        self._official_sessions.prewarm(udid)
 
     def mark_device_faulty(self, udid: str) -> None:
         """
@@ -359,6 +384,10 @@ class HarmonyPlatformManager(PlatformManager):
     def acquire_official_session(self, udid: str, owner: str) -> Optional[HarmonyOfficialSession]:
         """获取一份带生命周期租约的官方会话。"""
         return self._official_sessions.acquire(udid, owner)
+
+    def is_device_locked(self, udid: str) -> bool:
+        """查询设备锁屏状态，供实时 H.264 链路等待解锁使用。"""
+        return self._official_sessions.is_device_locked(udid)
 
     def release_official_session(self, udid: str, owner: str) -> None:
         """释放一份官方会话租约。"""

@@ -321,7 +321,6 @@ public final class StreamBridge {
                 + " queue_size=" + frameQueue.size()
                 + " elapsed_ms=" + elapsedMs();
         sendText(STATS, payload);
-        System.err.println("STATS " + payload);
     }
 
     private void requestIdr(String source) {

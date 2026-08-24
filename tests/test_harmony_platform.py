@@ -552,11 +552,35 @@ def test_harmony_unlock_uses_mobile_branch() -> None:
     assert action._get_keypad_coords(platform, client)
 
 
+def test_harmony_unlock_uses_1260x2720_keypad_coordinates() -> None:
+    action = UnlockScreenAction()
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _unlock_config={
+            "harmony_keypad": {
+                "1260x2720": {
+                    "1": {"x": 340, "y": 1475},
+                    "4": {"x": 340, "y": 1785},
+                },
+            },
+        },
+    )
+
+    action._get_device_resolution = lambda _platform, _context: (1260, 2720)  # type: ignore[method-assign]
+
+    coords = action._get_keypad_coords(platform, object())
+
+    assert coords["1"] == {"x": 340, "y": 1475}
+    assert coords["4"] == {"x": 340, "y": 1785}
+
+
 def test_harmony_lock_state_parsing_tolerates_dump_variants() -> None:
     assert harmony_hdc.parse_harmony_lock_state("screenLocked: true") is True
     assert harmony_hdc.parse_harmony_lock_state(" screenLocked          False") is False
     assert harmony_hdc.parse_harmony_lock_state("isScreenLocked = 1") is True
     assert harmony_hdc.parse_harmony_lock_state("screen_locked no") is False
+    assert harmony_hdc.parse_harmony_lock_state("screenLockStatus: LOCKED") is True
+    assert harmony_hdc.parse_harmony_lock_state("lockState = unlocked") is False
     assert harmony_hdc.parse_harmony_lock_state("no lock info here") is None
 
 

@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import tempfile
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -430,6 +431,13 @@ class HarmonyOfficialFrameSource(FrameSource):
         self._fallback: HarmonyFrameSource | None = None
         self._screen_size: Optional[tuple[int, int]] = None
         self._owner = f"stream:{id(self)}"
+        self._h264_subscribers: set[str] = set()
+        self._start_lock = threading.Lock()
+
+    @property
+    def supports_h264(self) -> bool:
+        """官方会话可直接输出 Annex-B H.264；旧帧源不具备此能力。"""
+        return True
 
     @property
     def prefers_latest_frame(self) -> bool:
@@ -438,19 +446,23 @@ class HarmonyOfficialFrameSource(FrameSource):
 
     def start(self) -> None:
         """启动或获取官方会话；无法启动时在 auto 模式创建旧帧源。"""
-        if self._session is not None or self._fallback is not None:
-            return
-        self._session = self.manager.acquire_official_session(self.device_id, self._owner)
-        if self._session is not None:
-            logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
-            return
+        with self._start_lock:
+            if self._session is not None or self._fallback is not None:
+                return
+            self._session = self.manager.acquire_official_session(self.device_id, self._owner)
+            if self._session is not None:
+                logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
+                return
 
-        client = self.manager._device_clients.get(self.device_id)
-        if client is None:
-            raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
-        self._fallback = HarmonyFrameSource(self.device_id, client)
-        self._fallback.start()
-        logger.warning("HarmonyOfficialFrameSource 已回退旧帧源: %s", self.device_id)
+            client = self.manager._device_clients.get(self.device_id)
+            if client is None:
+                raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
+            self._fallback = HarmonyFrameSource(self.device_id, client)
+            self._fallback.start()
+            if self.manager.is_device_locked(self.device_id):
+                logger.debug("HarmonyOfficialFrameSource 等待解锁，使用旧帧源: %s", self.device_id)
+            else:
+                logger.warning("HarmonyOfficialFrameSource 已回退旧帧源: %s", self.device_id)
 
     def get_frame(self) -> bytes:
         if self._session is None and self._fallback is None:
@@ -486,8 +498,43 @@ class HarmonyOfficialFrameSource(FrameSource):
             return self._screen_size
         return (0, 0)
 
+    def subscribe_h264(self, subscriber_id: str):
+        """订阅官方会话的 H.264 WebSocket 帧。"""
+        with self._start_lock:
+            if self._session is None and self._fallback is None:
+                self._session = self.manager.acquire_official_session(self.device_id, self._owner)
+        if self._session is None:
+            if self.manager.is_device_locked(self.device_id):
+                raise ConnectionError("鸿蒙设备处于锁屏状态，等待解锁后启动 H.264 会话")
+            raise ConnectionError("鸿蒙官方 H.264 会话不可用，不能使用 codec=h264")
+        queue = self._session.subscribe_h264(subscriber_id)
+        self._h264_subscribers.add(subscriber_id)
+        return queue
+
+    def h264_waiting_for_unlock(self) -> bool:
+        """返回 H.264 是否因锁屏暂时等待官方会话。"""
+        return (
+            self._session is None
+            and self._fallback is None
+            and self.manager.is_device_locked(self.device_id)
+        )
+
+    def unsubscribe_h264(self, subscriber_id: str) -> None:
+        """取消官方 H.264 WebSocket 订阅。"""
+        if self._session is not None:
+            self._session.unsubscribe_h264(subscriber_id)
+        self._h264_subscribers.discard(subscriber_id)
+
+    def h264_stream_running(self) -> bool:
+        """返回官方 H.264 会话是否仍在运行。"""
+        return bool(self._session and self._session.is_running)
+
     def stop(self) -> None:
         """停止帧源并释放官方会话租约。"""
+        if self._session is not None:
+            for subscriber_id in tuple(self._h264_subscribers):
+                self._session.unsubscribe_h264(subscriber_id)
+        self._h264_subscribers.clear()
         if self._fallback is not None:
             self._fallback.stop()
             self._fallback = None

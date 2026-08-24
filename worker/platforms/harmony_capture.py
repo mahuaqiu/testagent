@@ -289,7 +289,14 @@ class HarmonyScreenCapture:
             except socket.timeout:
                 continue
             except Exception as exc:
-                if not self._stop_event.is_set():
+                winerror = getattr(exc, "winerror", None)
+                expected_disconnect = isinstance(
+                    exc,
+                    (ConnectionAbortedError, ConnectionResetError, BrokenPipeError),
+                ) or winerror in (10053, 10054)
+                if expected_disconnect:
+                    logger.debug("帧流连接已断开: %s", exc)
+                elif not self._stop_event.is_set():
                     logger.warning(f"帧流接收异常: {exc}")
                 break
             if not chunk:

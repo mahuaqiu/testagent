@@ -116,9 +116,10 @@ harmony_official:
   startup_timeout_seconds: 35
   first_frame_timeout_seconds: 10
   idle_timeout_seconds: 600       # 无截图、推流或鸿蒙动作 10 分钟后释放官方会话
+  prewarm_on_device_ready: false  # 临时禁用预热，避免锁屏时反复重试
   input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
   reconnect_attempts: 3
-  reconnect_backoff_seconds: 2
+  reconnect_backoff_seconds: 0.5   # 首次通道抖动时快速重试
   frame_queue_capacity: 2          # 丢弃旧 H.264 数据，只保留最新画面
   image_scale_size: 720
   frame_rate: 30
@@ -283,6 +284,20 @@ unlock:
 
   # HarmonyOS password keypad coordinates (physical resolution)
   harmony_keypad:
+    # HUAWEI Mate 60 Pro / 1260x2720。
+    # 根据远程页面实测的 1=(335,1466)、4=(343,1783)、2=(645,1481)
+    # 推算为三列四行固定键盘中心点，实际点击使用物理坐标。
+    "1260x2720":
+      "1": {x: 340, y: 1475}
+      "2": {x: 645, y: 1475}
+      "3": {x: 950, y: 1475}
+      "4": {x: 340, y: 1785}
+      "5": {x: 645, y: 1785}
+      "6": {x: 950, y: 1785}
+      "7": {x: 340, y: 2095}
+      "8": {x: 645, y: 2095}
+      "9": {x: 950, y: 2095}
+      "0": {x: 645, y: 2405}
     "1080x2400":
       "1": {x: 180, y: 850}
       "2": {x: 540, y: 850}

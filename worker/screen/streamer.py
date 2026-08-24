@@ -20,8 +20,10 @@ class WebSocketStreamer:
 
     def start(self, codec: str = "jpeg") -> None:
         """启动推流。"""
-        # 非 Windows 平台不支持 H.264 硬编推流（Windows 走 sidecar RSM1 通道），降级 JPEG
-        if codec == "h264":
+        # Windows 走 sidecar RSM1；鸿蒙官方帧源可直接输出 H.264。其它旧帧源
+        # 没有编码器，继续安全降级为 JPEG，避免误把 JPEG 送进前端 MSE。
+        frame_source = getattr(self.screen_manager, "_frame_source", None)
+        if codec == "h264" and not getattr(frame_source, "supports_h264", False):
             logger.warning("H.264 streaming not supported on this path, falling back to JPEG")
             codec = "jpeg"
         self.codec = codec

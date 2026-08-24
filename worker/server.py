@@ -11,6 +11,8 @@ import logging
 import os
 import re
 import threading
+import time
+from queue import Empty
 from typing import Any
 
 import yaml
@@ -66,9 +68,29 @@ DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=Hi
 # 鸿蒙 JPEG 推流重编码默认参数（会被 worker.config 覆盖）
 DEFAULT_HARMONY_STREAMING_FPS = 8
 DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
+# 官方会话已经就绪后，H.264 新订阅等待首个视频帧的最大时间。
+# 不复用通用 WebSocket send_timeout，避免降级被拖到 30 秒。
+DEFAULT_HARMONY_H264_FIRST_VIDEO_TIMEOUT = 5.0
+# 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
+DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
 # 降采样长边上限：流开头已通过 meta 文本帧把真机分辨率下发给前端做坐标
 # 基准（与推流尺寸解耦），故此处缩小不会影响坐标；<=0 表示不缩放。
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
+
+
+async def _send_harmony_h264_fallback(websocket: WebSocket, reason: str) -> None:
+    """通知前端鸿蒙 H.264 不可用，并请求切换到 JPEG。"""
+    logger.warning("鸿蒙 H.264 推流降级 JPEG: %s", reason)
+    try:
+        await websocket.send_text(
+            json.dumps(
+                {"type": "codec_fallback", "codec": "jpeg", "reason": reason},
+                ensure_ascii=False,
+            )
+        )
+        await websocket.close(code=4001, reason="codec_fallback:jpeg")
+    except Exception as exc:
+        logger.debug("发送鸿蒙 H.264 降级通知失败: %s", exc)
 
 
 def _recompress_jpeg(
@@ -1007,9 +1029,9 @@ async def screen_stream(
         logger.error(f"{platform} does not support H.264 codec, falling back to jpeg")
         codec = "jpeg"
 
-    # 鸿蒙帧源只产出 JPEG，h264/mjpeg 均降级为 jpeg
-    if platform in ("harmony_mobile", "harmony_pc") and codec != "jpeg":
-        logger.error(f"{platform} only supports JPEG codec, falling back to jpeg")
+    # 鸿蒙官方会话支持原始 H.264；仅保留 MJPEG 的 JPEG 兼容处理。
+    if platform in ("harmony_mobile", "harmony_pc") and codec == "mjpeg":
+        logger.error(f"{platform} does not support MJPEG codec, falling back to jpeg")
         codec = "jpeg"
 
     # 从配置读取参数（使用默认值作为 fallback）
@@ -1058,6 +1080,17 @@ async def screen_stream(
     log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
     logger.info(f"WebSocket connected: platform={platform}, device={log_device}, count={current_count + 1}")
 
+    frame_source = None
+    screen_manager = None
+    direct_h264_frame_source = is_harmony and codec == "h264"
+    h264_subscriber_id = None
+    h264_queue = None
+    h264_diag_started_at = None
+    h264_diag_sent_packets = 0
+    h264_diag_sent_bytes = 0
+    h264_diag_first_packet_at = None
+    h264_diag_first_video_at = None
+    h264_diag_packet_types: list[str] = []
     try:
         # 获取 ScreenManager
         from worker.screen.manager import _screen_managers, get_screen_manager
@@ -1097,7 +1130,11 @@ async def screen_stream(
                     await websocket.close(code=1008, reason=f"Harmony device not available: {device_id}")
                     return
 
-        if platform == "windows":
+        if direct_h264_frame_source:
+            # 官方 H.264 不需要 ScreenManager 的 JPEG 捕获线程；锁屏时保留
+            # 独立帧源，等待解锁后再启动 Java Bridge，避免直接降级成旧 JPEG。
+            frame_source = _create_frame_source(platform, device_id, monitor)
+        elif platform == "windows":
             from worker.screen.windows_sidecar import get_windows_sidecar_manager
 
             screen_manager = get_windows_sidecar_manager(
@@ -1134,7 +1171,49 @@ async def screen_stream(
         }
         if use_binary_media:
             stream_options["binary"] = True
-        streamer = screen_manager.start_streaming(**stream_options)
+        streamer = None
+        if not direct_h264_frame_source:
+            streamer = screen_manager.start_streaming(**stream_options)
+
+        # 鸿蒙官方 H.264 直接转发 Java SDK 的 Annex-B 数据，不经过
+        # ScreenManager 的 JPEG 队列和 Pillow 重编码。
+        if is_harmony and codec == "h264":
+            if not getattr(frame_source, "supports_h264", False):
+                await _send_harmony_h264_fallback(
+                    websocket,
+                    f"{platform} 当前帧源不支持 H.264",
+                )
+                return
+            h264_subscriber_id = f"{conn_key}/h264/{id(websocket)}"
+            h264_wait_deadline = time.monotonic() + DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT
+            h264_wait_logged = False
+            while True:
+                try:
+                    h264_queue = await asyncio.to_thread(
+                        frame_source.subscribe_h264,
+                        h264_subscriber_id,
+                    )
+                    break
+                except ConnectionError as exc:
+                    if (
+                        getattr(frame_source, "h264_waiting_for_unlock", lambda: False)()
+                        and time.monotonic() < h264_wait_deadline
+                    ):
+                        if not h264_wait_logged:
+                            logger.info(
+                                "screen_stream: 鸿蒙设备锁屏，等待解锁后启动 H.264: conn_key=%s",
+                                conn_key,
+                            )
+                            h264_wait_logged = True
+                        await asyncio.sleep(1.0)
+                        continue
+                    await _send_harmony_h264_fallback(websocket, str(exc))
+                    return
+                except Exception as exc:
+                    await _send_harmony_h264_fallback(websocket, str(exc))
+                    return
+            h264_diag_started_at = time.monotonic()
+            logger.info("screen_stream: 使用鸿蒙官方 H.264 直通通道, conn_key=%s", conn_key)
 
         # Windows H.264 推流使用推模式
         if platform == "windows" and codec == "h264" and streamer.uses_binary_media:
@@ -1258,8 +1337,67 @@ async def screen_stream(
             finally:
                 # 停止推流模式
                 reader.stop_push()
+        elif is_harmony and codec == "h264":
+            # 鸿蒙官方 H.264：订阅队列中的协议帧并直接转发。
+            first_video_deadline = time.monotonic() + DEFAULT_HARMONY_H264_FIRST_VIDEO_TIMEOUT
+            while frame_source.h264_stream_running():
+                try:
+                    frame = await asyncio.to_thread(h264_queue.get, timeout=1.0)
+                except Empty:
+                    if time.monotonic() >= first_video_deadline:
+                        await _send_harmony_h264_fallback(
+                            websocket,
+                            "官方会话已就绪但超时未收到可转发的 H.264 视频帧",
+                        )
+                        return
+                    continue
+                # SPS/PPS 只是解码参数集，不能算作已经出画面的首帧；
+                # 只有 IDR/P 才能结束首帧等待窗口。
+                if frame and frame[0] in (0x02, 0x03):
+                    first_video_deadline = float("inf")
+                h264_diag_sent_packets += 1
+                h264_diag_sent_bytes += len(frame)
+                frame_type = {
+                    0x01: "config",
+                    0x02: "idr",
+                    0x03: "p",
+                }.get(frame[0] if frame else -1, "unknown")
+                if len(h264_diag_packet_types) < 8:
+                    h264_diag_packet_types.append(frame_type)
+                if h264_diag_first_packet_at is None:
+                    h264_diag_first_packet_at = time.monotonic()
+                    logger.info(
+                        "鸿蒙 H.264 WebSocket 首包: conn_key=%s, frame_type=%s, bytes=%d, elapsed_ms=%.1f",
+                        conn_key,
+                        frame_type,
+                        len(frame),
+                        (h264_diag_first_packet_at - h264_diag_started_at) * 1000
+                        if h264_diag_started_at is not None
+                        else -1,
+                    )
+                if frame and frame[0] in (0x02, 0x03) and h264_diag_first_video_at is None:
+                    h264_diag_first_video_at = time.monotonic()
+                    logger.info(
+                        "鸿蒙 H.264 WebSocket 首个视频包: conn_key=%s, frame_type=%s, bytes=%d, elapsed_ms=%.1f",
+                        conn_key,
+                        frame_type,
+                        len(frame),
+                        (h264_diag_first_video_at - h264_diag_started_at) * 1000
+                        if h264_diag_started_at is not None
+                        else -1,
+                    )
+                await asyncio.wait_for(
+                    websocket.send_bytes(frame),
+                    timeout=send_timeout,
+                )
+
+            if frame_source.h264_stream_running():
+                await _send_harmony_h264_fallback(
+                    websocket,
+                    "鸿蒙官方 H.264 会话已停止",
+                )
         else:
-            # 非 Windows：拉模式推流（jpeg/mjpeg；h264 已在 streamer 内降级为 jpeg）
+            # 非 Windows/鸿蒙 H.264 之外的路径使用 JPEG/MJPEG 拉模式。
             # 鸿蒙：设备端 agent.so 出高画质大 JPEG，转发前在主机重编码（缩小+降质）压带宽
             harmony_recompress = is_harmony and codec == "jpeg" and harmony_jpeg_quality > 0
 
@@ -1324,15 +1462,51 @@ async def screen_stream(
         logger.info(f"WebSocket disconnected: platform={platform}, device={log_device}")
     except Exception as e:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
-        logger.error(f"WebSocket error: {e}")
+        winerror = getattr(e, "winerror", None)
+        expected_disconnect = isinstance(
+            e,
+            (ConnectionAbortedError, ConnectionResetError, BrokenPipeError),
+        ) or winerror in (10053, 10054)
+        if expected_disconnect:
+            logger.debug(f"WebSocket client disconnected: platform={platform}, device={log_device}, error={e}")
+        else:
+            logger.error(f"WebSocket error: {e}")
     finally:
+        if h264_queue is not None:
+            logger.info(
+                "鸿蒙 H.264 WebSocket 发送统计: conn_key=%s, packets=%d, bytes=%d, "
+                "first_packet_ms=%s, first_video_ms=%s, first_types=%s",
+                conn_key,
+                h264_diag_sent_packets,
+                h264_diag_sent_bytes,
+                f"{(h264_diag_first_packet_at - h264_diag_started_at) * 1000:.1f}"
+                if h264_diag_started_at is not None and h264_diag_first_packet_at is not None
+                else "none",
+                f"{(h264_diag_first_video_at - h264_diag_started_at) * 1000:.1f}"
+                if h264_diag_started_at is not None and h264_diag_first_video_at is not None
+                else "none",
+                ",".join(h264_diag_packet_types) or "none",
+            )
+        if h264_subscriber_id and frame_source is not None:
+            try:
+                frame_source.unsubscribe_h264(h264_subscriber_id)
+            except Exception as exc:
+                logger.warning("取消鸿蒙 H.264 订阅失败: %s", exc)
+        if direct_h264_frame_source and frame_source is not None:
+            try:
+                frame_source.stop()
+            except Exception as exc:
+                logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
         # 确保减少连接计数
         _ws_connections[conn_key] = _ws_connections.get(conn_key, 1) - 1
 
         # 当连接计数降至 0 时，关闭 ScreenManager 以停止后台帧捕获线程
         if _ws_connections[conn_key] <= 0:
             del _ws_connections[conn_key]
-            if platform == "windows":
+            if direct_h264_frame_source:
+                # 官方 H.264 使用独立帧源，不创建 ScreenManager。
+                pass
+            elif platform == "windows":
                 from worker.screen.windows_sidecar import close_windows_sidecar_manager
 
                 close_windows_sidecar_manager(conn_key)
@@ -1341,8 +1515,9 @@ async def screen_stream(
                 from worker.screen.manager import close_screen_manager
 
                 close_screen_manager(conn_key)
-            log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
-            logger.info(f"ScreenManager closed: conn_key={conn_key}, last WebSocket disconnected")
+            if not direct_h264_frame_source:
+                log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+                logger.info(f"ScreenManager closed: conn_key={conn_key}, last WebSocket disconnected")
 
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
