@@ -170,6 +170,7 @@ class HarmonyPlatformManager(PlatformManager):
                     return ("online", "OK")
                 else:
                     # 连接失效，移除旧的客户端
+                    self._official_sessions.stop_session(udid)
                     del self._device_clients[udid]
 
             # 创建新的客户端

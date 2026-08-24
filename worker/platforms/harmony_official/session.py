@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 class _H264Subscriber:
     """一个鸿蒙 H.264 WebSocket 订阅者及其有界发送队列。"""
 
+    subscriber_id: str
     queue: Queue[bytes]
     has_config: bool = False
     waiting_for_keyframe: bool = True
@@ -118,6 +119,7 @@ class HarmonyOfficialSession:
         self._frame_cache = LatestFrameCache()
         self._h264_queue: Queue[bytes] = Queue(maxsize=max(1, int(settings["frame_queue_capacity"])))
         self._h264_subscribers: dict[str, _H264Subscriber] = {}
+        self._h264_idr_retry_timers: dict[str, threading.Timer] = {}
         self._latest_h264_config: bytes | None = None
         self._latest_h264_keyframe: bytes | None = None
         self._bridge: JavaBridgeProcess | None = None
@@ -213,8 +215,12 @@ class HarmonyOfficialSession:
             bridge = self._bridge
             self._bridge = None
             self._h264_subscribers.clear()
+            retry_timers = list(self._h264_idr_retry_timers.values())
+            self._h264_idr_retry_timers.clear()
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
+        for timer in retry_timers:
+            timer.cancel()
         if bridge:
             bridge.stop(timeout=timeout)
         thread = self._decoder_thread
@@ -242,6 +248,7 @@ class HarmonyOfficialSession:
         if not self.is_running:
             raise HarmonyOfficialError("鸿蒙官方会话未运行")
         subscriber = _H264Subscriber(
+            subscriber_id=subscriber_id,
             queue=Queue(maxsize=max(4, int(self.settings["frame_queue_capacity"]) * 4))
         )
         with self._state_lock:
@@ -269,12 +276,16 @@ class HarmonyOfficialSession:
         # 强制绕过节流：旧连接刚请求过 IDR 时，静止画面不会自然产生新帧，
         # 如果这次请求被吞掉，浏览器就只能一直等到设备画面发生变化。
         self.request_idr(force=True)
+        self._schedule_h264_idr_retry(subscriber_id)
         return subscriber.queue
 
     def unsubscribe_h264(self, subscriber_id: str) -> None:
         """取消一个原始 H.264 订阅。"""
         with self._state_lock:
             self._h264_subscribers.pop(subscriber_id, None)
+            timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
+        if timer:
+            timer.cancel()
 
     def request_idr(self, force: bool = False) -> None:
         """请求设备端发送关键帧，节流避免连续请求。"""
@@ -373,8 +384,12 @@ class HarmonyOfficialSession:
         self._h264_unrecognized_logged = False
         with self._state_lock:
             self._h264_subscribers.clear()
+            retry_timers = list(self._h264_idr_retry_timers.values())
+            self._h264_idr_retry_timers.clear()
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
+        for timer in retry_timers:
+            timer.cancel()
         while True:
             try:
                 self._h264_queue.get_nowait()
@@ -438,6 +453,7 @@ class HarmonyOfficialSession:
             return
 
         request_idr = False
+        retry_timers: list[threading.Timer] = []
         with self._state_lock:
             subscribers = list(self._h264_subscribers.values())
             for packet in packets:
@@ -491,15 +507,49 @@ class HarmonyOfficialSession:
                             subscriber.waiting_for_keyframe = True
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
+                            timer = self._h264_idr_retry_timers.pop(subscriber.subscriber_id, None)
+                            if timer:
+                                retry_timers.append(timer)
                     else:
                         if frame_type == 0x01:
                             subscriber.has_config = True
                             subscriber.waiting_for_keyframe = True
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
+                            timer = self._h264_idr_retry_timers.pop(subscriber.subscriber_id, None)
+                            if timer:
+                                retry_timers.append(timer)
+
+        for timer in retry_timers:
+            timer.cancel()
 
         if request_idr:
             self.request_idr()
+
+    def _schedule_h264_idr_retry(self, subscriber_id: str) -> None:
+        """首个 IDR 请求未生效时，为静止画面订阅补发一次请求。"""
+        def _retry() -> None:
+            with self._state_lock:
+                current_timer = self._h264_idr_retry_timers.get(subscriber_id)
+                if current_timer is not threading.current_thread():
+                    return
+                self._h264_idr_retry_timers.pop(subscriber_id, None)
+                subscriber = self._h264_subscribers.get(subscriber_id)
+                should_retry = bool(
+                    subscriber
+                    and (not subscriber.has_config or subscriber.waiting_for_keyframe)
+                )
+            if should_retry and self.is_running:
+                self.request_idr(force=True)
+
+        timer = threading.Timer(0.8, _retry)
+        timer.daemon = True
+        with self._state_lock:
+            old_timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
+            self._h264_idr_retry_timers[subscriber_id] = timer
+        if old_timer:
+            old_timer.cancel()
+        timer.start()
 
     def _wait_for_first_frame(self, timeout: float) -> LatestFrame | None:
         """等待首帧，并在 Java Bridge 已退出时立即结束等待。"""
