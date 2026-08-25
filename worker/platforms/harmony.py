@@ -63,6 +63,7 @@ class HarmonyPlatformManager(PlatformManager):
     }
 
     KEY_MAP = HARMONY_KEY_MAP
+    HARMONY_SCREENSHOT_MAX_AGE_SECONDS = 0.1
 
     def __init__(
         self,
@@ -354,20 +355,20 @@ class HarmonyPlatformManager(PlatformManager):
             )
         )
         if use_official_frame:
-            try:
-                return official_session.get_latest_jpeg(timeout=2.0, require_new=True)
-            except HarmonyOfficialError as exc:
-                if official_session.has_h264_subscribers:
-                    logger.warning(
-                        "官方实时截图等待新帧超时，保留正在运行的推流: device=%s, error=%s",
-                        serial,
-                        exc,
-                    )
-                else:
-                    self._handle_official_failure(serial, "截图", exc)
-            finally:
+            fresh_jpeg = official_session.get_latest_jpeg_if_fresh(
+                self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS,
+            )
+            if fresh_jpeg is not None:
                 if official_owner:
                     self._official_sessions.release(serial, official_owner)
+                return fresh_jpeg
+            logger.debug(
+                "官方截图缓存帧已超过 %.0fms，改用 HDC 实时截图: device=%s",
+                self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS * 1000,
+                serial,
+            )
+            if official_owner:
+                self._official_sessions.release(serial, official_owner)
         if serial and self._official_sessions.fallback_to_legacy:
             self._official_sessions.prewarm(serial)
         return self._get_hdc_screenshot(client)

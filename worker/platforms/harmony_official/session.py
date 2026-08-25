@@ -256,6 +256,18 @@ class HarmonyOfficialSession:
             raise HarmonyOfficialError(f"等待鸿蒙官方视频帧超时: {detail}")
         return frame.jpeg
 
+    def get_latest_jpeg_if_fresh(self, max_age_seconds: float = 0.1) -> bytes | None:
+        """仅返回最近的解码帧，过期时立即返回 None，不等待下一帧。"""
+        if not self.is_running:
+            return None
+        frame = self.latest_frame
+        if frame is None:
+            return None
+        age_seconds = max(0.0, time.monotonic() - frame.captured_at)
+        if age_seconds > max(0.0, float(max_age_seconds)):
+            return None
+        return frame.jpeg
+
     def subscribe_h264(self, subscriber_id: str) -> Queue[bytes]:
         """订阅原始 H.264 WebSocket 帧，并请求一组新的参数集/关键帧。"""
         if not self.is_running:
