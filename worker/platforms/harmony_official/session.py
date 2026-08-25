@@ -152,6 +152,12 @@ class HarmonyOfficialSession:
         frame = self.latest_frame
         return (frame.width, frame.height) if frame else (0, 0)
 
+    @property
+    def has_h264_subscribers(self) -> bool:
+        """判断官方 H.264 会话是否有实时订阅者。"""
+        with self._state_lock:
+            return bool(self._h264_subscribers)
+
     def start(self, *, wait_for_decoded_frame: bool = True) -> None:
         """启动 Java 采集和 H.264 解码线程，等待 SDK READY。"""
         with self._state_lock:

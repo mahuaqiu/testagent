@@ -332,12 +332,47 @@ class HarmonyPlatformManager(PlatformManager):
             bytes: 截图数据（JPEG 格式）
         """
         client: HarmonyHdcWrapper = context
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
+        serial = getattr(client, "serial", None)
+        official_session = self._official_sessions.get(serial) if serial else None
+        official_owner = None
+        if (
+            official_session is None
+            and serial
+            and self._official_sessions.mode == "official"
+        ):
+            official_owner = f"screenshot:{id(client)}"
+            official_session = self._official_sessions.acquire(
+                serial,
+                official_owner,
+                require_decoded_frame=True,
+            )
+        use_official_frame = bool(
+            official_session
+            and (
+                self._official_sessions.mode == "official"
+                or official_session.has_h264_subscribers
+            )
+        )
+        if use_official_frame:
             try:
-                return official_session.get_latest_jpeg(timeout=5.0)
+                return official_session.get_latest_jpeg(timeout=2.0, require_new=True)
             except HarmonyOfficialError as exc:
-                self._handle_official_failure(serial, "截图", exc)
+                if official_session.has_h264_subscribers:
+                    logger.warning(
+                        "官方实时截图等待新帧超时，保留正在运行的推流: device=%s, error=%s",
+                        serial,
+                        exc,
+                    )
+                else:
+                    self._handle_official_failure(serial, "截图", exc)
+            finally:
+                if official_owner:
+                    self._official_sessions.release(serial, official_owner)
+        if serial and self._official_sessions.fallback_to_legacy:
+            self._official_sessions.prewarm(serial)
+        return self._get_hdc_screenshot(client)
+
+    def _get_hdc_screenshot(self, client: HarmonyHdcWrapper) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".jpeg", delete=False) as f:
             temp_path = f.name
         try:
