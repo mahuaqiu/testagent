@@ -138,6 +138,9 @@ public final class StreamBridge {
                     long readyMs = elapsedMs();
                     System.err.printf("SDK_READY serial=%s elapsed_ms=%d%n", serial, readyMs);
                     if (CAPTURE_VIDEO.equals(captureMode)) {
+                        // 官方 HOScrcpy 在 onReady 后先用一次极小鼠标/触摸轨迹
+                        // 让静止屏幕产生新的合成帧，否则 onData 可能一直不回调。
+                        wakeStream();
                         requestIdr("SDK_READY");
                     }
                     sendText(READY, "serial=" + serial + " device_type=" + deviceType
@@ -343,13 +346,9 @@ public final class StreamBridge {
             return;
         }
         try {
-            // 官方桌面端在 onReady 后用一次极小鼠标移动唤醒静止画面的首个视频帧。
-            // 移动端使用同样的无点击轨迹，不改变应用内容，只让屏幕合成器产生一次更新。
-            if (TYPE_PC.equals(deviceType)) {
-                device.executeShellCommand("uinput -M -m 100 100 200 200 --trace", 2);
-            } else {
-                device.executeShellCommand("uinput -M -m 1 1 2 2 --trace", 2);
-            }
+            // 与官方 HOScrcpy MainForm 的 onReady 实现保持一致。该命令只
+            // 产生移动轨迹，不执行点击，不改变应用当前页面。
+            device.executeShellCommand("uinput -M -m 100 100 200 200 --trace", 2);
             System.err.println("WAKE_STREAM completed");
         } catch (Throwable throwable) {
             // 唤醒只是静止画面的优化，失败不应中断已经 READY 的官方会话。

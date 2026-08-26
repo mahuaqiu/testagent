@@ -121,6 +121,7 @@ class HarmonyOfficialSession:
         self._h264_queue: Queue[bytes] = Queue(maxsize=max(1, int(settings["frame_queue_capacity"])))
         self._h264_subscribers: dict[str, _H264Subscriber] = {}
         self._h264_idr_retry_timers: dict[str, threading.Timer] = {}
+        self._h264_action_refresh_timer: threading.Timer | None = None
         self._latest_h264_config: bytes | None = None
         self._latest_h264_keyframe: bytes | None = None
         self._bridge: JavaBridgeProcess | None = None
@@ -233,10 +234,14 @@ class HarmonyOfficialSession:
             self._h264_subscribers.clear()
             retry_timers = list(self._h264_idr_retry_timers.values())
             self._h264_idr_retry_timers.clear()
+            action_refresh_timer = self._h264_action_refresh_timer
+            self._h264_action_refresh_timer = None
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
         for timer in retry_timers:
             timer.cancel()
+        if action_refresh_timer:
+            action_refresh_timer.cancel()
         if bridge:
             bridge.stop(timeout=timeout)
         thread = self._decoder_thread
@@ -294,8 +299,9 @@ class HarmonyOfficialSession:
                 subscriber.has_config = True
             if cached_config is not None and cached_keyframe is not None:
                 subscriber.queue.put_nowait(cached_keyframe)
-                # 缓存回放已经包含一组完整的 SPS/PPS + IDR，新订阅可以直接
-                # 接收后续 P 帧；否则静止画面时可能一直等下一次 IDR。
+                # 缓存的 SPS/PPS + IDR 与当前官方会话属于同一条编码链路，
+                # 可以立即接收后续 P 帧。新连接同时会请求一组当前 IDR，
+                # 用于覆盖设备在断开期间发生变化的画面。
                 subscriber.waiting_for_keyframe = False
         logger.info(
             "鸿蒙 H.264 订阅建立: serial=%s, subscriber=%s, cached_config_bytes=%d, "
@@ -310,7 +316,8 @@ class HarmonyOfficialSession:
         # 强制绕过节流：旧连接刚请求过 IDR 时，静止画面不会自然产生新帧，
         # 如果这次请求被吞掉，浏览器就只能一直等到设备画面发生变化。
         self.request_idr(force=True)
-        self.wake_stream()
+        if cached_config is None or cached_keyframe is None:
+            self.wake_stream()
         self._schedule_h264_idr_retry(subscriber_id)
         return subscriber.queue
 
@@ -319,8 +326,14 @@ class HarmonyOfficialSession:
         with self._state_lock:
             self._h264_subscribers.pop(subscriber_id, None)
             timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
+            action_refresh_timer = None
+            if not self._h264_subscribers:
+                action_refresh_timer = self._h264_action_refresh_timer
+                self._h264_action_refresh_timer = None
         if timer:
             timer.cancel()
+        if action_refresh_timer:
+            action_refresh_timer.cancel()
 
     def request_idr(self, force: bool = False) -> None:
         """请求设备端发送关键帧，节流避免连续请求。"""
@@ -351,8 +364,10 @@ class HarmonyOfficialSession:
                 time.sleep(max(duration_ms, 80) / 1000.0)
             finally:
                 self._send(command_touch_up(x, y))
+            self._schedule_h264_action_refresh()
             return
         self._mouse_click("LEFT", x, y, duration_ms)
+        self._schedule_h264_action_refresh()
 
     def double_click(self, x: int, y: int) -> None:
         """执行双击。"""
@@ -365,6 +380,7 @@ class HarmonyOfficialSession:
         self._require_pc()
         self._wait_input_ready()
         self._mouse_click("RIGHT", x, y, 0)
+        self._schedule_h264_action_refresh()
 
     def move_mouse(self, x: int, y: int, button: str | None = None) -> None:
         """移动鸿蒙 PC 鼠标；拖拽期间携带按键类型。"""
@@ -396,6 +412,7 @@ class HarmonyOfficialSession:
                 time.sleep(0.02)
             finally:
                 self._send(command_touch_up(end_x, end_y))
+            self._schedule_h264_action_refresh()
             return
 
         self._send(command_mouse_down("LEFT", start_x, start_y))
@@ -407,12 +424,14 @@ class HarmonyOfficialSession:
             time.sleep(0.02)
         finally:
             self._send(command_mouse_up("LEFT", end_x, end_y))
+        self._schedule_h264_action_refresh()
 
     def wheel(self, direction: str, x: int, y: int) -> None:
         """发送鸿蒙 PC 官方滚轮事件。"""
         self._require_pc()
         self._wait_input_ready()
         self._send(command_wheel(direction, x, y))
+        self._schedule_h264_action_refresh()
 
     def _reset_start_state(self) -> None:
         self._stop_event.clear()
@@ -433,10 +452,14 @@ class HarmonyOfficialSession:
             self._h264_subscribers.clear()
             retry_timers = list(self._h264_idr_retry_timers.values())
             self._h264_idr_retry_timers.clear()
+            action_refresh_timer = self._h264_action_refresh_timer
+            self._h264_action_refresh_timer = None
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
         for timer in retry_timers:
             timer.cancel()
+        if action_refresh_timer:
+            action_refresh_timer.cancel()
         while True:
             try:
                 self._h264_queue.get_nowait()
@@ -585,7 +608,7 @@ class HarmonyOfficialSession:
         if request_idr:
             self.request_idr()
 
-    def _schedule_h264_idr_retry(self, subscriber_id: str) -> None:
+    def _schedule_h264_idr_retry(self, subscriber_id: str, *, force: bool = False) -> None:
         """首个 IDR 请求未生效时，为静止画面订阅补发一次请求。"""
         def _retry() -> None:
             with self._state_lock:
@@ -596,7 +619,11 @@ class HarmonyOfficialSession:
                 subscriber = self._h264_subscribers.get(subscriber_id)
                 should_retry = bool(
                     subscriber
-                    and (not subscriber.has_config or subscriber.waiting_for_keyframe)
+                    and (
+                        force
+                        or not subscriber.has_config
+                        or subscriber.waiting_for_keyframe
+                    )
                 )
             if should_retry and self.is_running:
                 self.request_idr(force=True)
@@ -609,6 +636,46 @@ class HarmonyOfficialSession:
         if old_timer:
             old_timer.cancel()
         timer.start()
+
+    def _schedule_h264_action_refresh(self) -> None:
+        """动作完成后等待页面转场，再请求关键帧刷新远程画面。"""
+        with self._state_lock:
+            if not self._h264_subscribers or self._stop_event.is_set():
+                return
+            old_timer = self._h264_action_refresh_timer
+            timer = threading.Timer(0.18, self._refresh_h264_after_action)
+            timer.daemon = True
+            self._h264_action_refresh_timer = timer
+        if old_timer:
+            old_timer.cancel()
+        timer.start()
+
+    def _refresh_h264_after_action(self) -> None:
+        """发送动作后的强制 IDR，避免浏览器停留在动作前的 P 帧链。"""
+        with self._state_lock:
+            if self._h264_action_refresh_timer is not threading.current_thread():
+                return
+            self._h264_action_refresh_timer = None
+            subscriber_ids = tuple(self._h264_subscribers)
+            for subscriber in self._h264_subscribers.values():
+                # 动作可能只产生 P 帧，或者官方 SDK 暂时没有回调；先阻止
+                # 继续发送依赖动作前状态的 P 帧，直到拿到新的 IDR。
+                subscriber.waiting_for_keyframe = True
+                # 清除动作完成前已经排队的 config/IDR/P，避免它们在新的
+                # 关键帧之后又被 WebSocket 发送，覆盖动作后的画面。
+                while True:
+                    try:
+                        subscriber.queue.get_nowait()
+                    except Empty:
+                        break
+        if subscriber_ids and self.is_running:
+            logger.debug("鸿蒙 H.264 动作后请求 IDR: serial=%s", self.serial)
+            # 官方 SDK 在静止画面下可能只回调 onReady；模拟一次极小轨迹
+            # 触发屏幕合成器更新，再由 requestIDRFrame 输出完整关键帧。
+            self.wake_stream()
+            self.request_idr(force=True)
+            for subscriber_id in subscriber_ids:
+                self._schedule_h264_idr_retry(subscriber_id, force=True)
 
     def _wait_for_first_frame(self, timeout: float) -> LatestFrame | None:
         """等待首帧，并在 Java Bridge 已退出时立即结束等待。"""

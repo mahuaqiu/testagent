@@ -6,7 +6,7 @@ import io
 import threading
 import time
 from types import SimpleNamespace
-from queue import Empty
+from queue import Empty, Queue
 
 import pytest
 
@@ -90,9 +90,9 @@ def test_h264_subscription_replay_allows_static_screen_p_frames() -> None:
 
     assert queue.get_nowait() == session._latest_h264_config
     assert queue.get_nowait() == session._latest_h264_keyframe
-    assert sent_commands == [b"REQUEST_IDR\n", b"WAKE_STREAM\n"]
+    # 已有完整缓存时，订阅可以立即显示缓存首屏；唤醒只在没有缓存时需要。
+    assert sent_commands == [b"REQUEST_IDR\n"]
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
-
     assert queue.get_nowait() == b"\x03\x00\x00\x01\x41\x09"
     session.stop()
 
@@ -119,6 +119,28 @@ def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
 
     with pytest.raises(Empty):
         queue.get_nowait()
+    session.stop()
+
+
+def test_h264_action_refresh_requests_idr_after_input() -> None:
+    sent_commands: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+    session._h264_subscribers["subscriber-1"] = SimpleNamespace(queue=Queue())  # type: ignore[assignment]
+
+    session._schedule_h264_action_refresh()
+    time.sleep(0.25)
+
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
     session.stop()
 
 

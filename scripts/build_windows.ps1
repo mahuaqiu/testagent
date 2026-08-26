@@ -7,6 +7,7 @@ param(
     [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.2.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
     [string]$JavaRuntimePath = "",  # JRE 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
+    [string]$JavaCompilerPath = "",  # 可选：JDK 中 javac.exe 的路径；未指定时从 PATH 查找
     [switch]$Clean,
     [switch]$BuildInstaller
 )
@@ -28,6 +29,60 @@ Write-Host "=========================================="
 
 # Change to project root directory
 Set-Location $ProjectRoot
+
+# 编译鸿蒙官方 Java Bridge。目标机器运行时只需要 JRE，javac 仅在打包机上使用。
+$HarmonyJar = "$ProjectRoot\tools\harmony\hosScrcpy-1.0.15-beta.jar"
+$HarmonyBridgeSource = "$ProjectRoot\worker\platforms\harmony_official\java\StreamBridge.java"
+$HarmonyBridgeOutput = "$ProjectRoot\tools\harmony\bridge"
+$JavacExe = $null
+
+if ($JavaCompilerPath -ne "") {
+    $JavaCompilerCandidate = $JavaCompilerPath
+    if (Test-Path $JavaCompilerCandidate -PathType Container) {
+        $JavaCompilerCandidate = Join-Path $JavaCompilerCandidate "bin\javac.exe"
+    }
+    if (-not (Test-Path $JavaCompilerCandidate -PathType Leaf)) {
+        Write-Error "javac not found at: $JavaCompilerPath"
+        exit 1
+    }
+    $JavacExe = (Resolve-Path $JavaCompilerCandidate).Path
+} else {
+    $JavacCommand = Get-Command javac -ErrorAction SilentlyContinue
+    if ($JavacCommand) {
+        $JavacExe = $JavacCommand.Source
+    }
+}
+
+if (-not $JavacExe) {
+    Write-Error "未找到 javac。构建鸿蒙官方 Bridge 需要安装 JDK，运行目标机仍只需要 JRE。可通过 -JavaCompilerPath 指定 javac.exe。"
+    exit 1
+}
+if (-not (Test-Path $HarmonyJar -PathType Leaf)) {
+    Write-Error "HOScrcpy JAR 不存在: $HarmonyJar"
+    exit 1
+}
+if (-not (Test-Path $HarmonyBridgeSource -PathType Leaf)) {
+    Write-Error "StreamBridge Java 源码不存在: $HarmonyBridgeSource"
+    exit 1
+}
+
+Write-Host "[0/6] Compiling Harmony official Java Bridge..."
+New-Item -ItemType Directory -Force -Path $HarmonyBridgeOutput | Out-Null
+# 清理旧的内部类，防止源码删除内部类后旧 class 仍被打进发布包。
+Get-ChildItem -Path $HarmonyBridgeOutput -Filter "StreamBridge*.class" -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
+& $JavacExe -encoding UTF-8 -cp $HarmonyJar -d $HarmonyBridgeOutput $HarmonyBridgeSource
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Harmony StreamBridge 编译失败"
+    exit 1
+}
+if (-not (Test-Path "$HarmonyBridgeOutput\StreamBridge.class" -PathType Leaf)) {
+    Write-Error "Harmony StreamBridge 编译完成但未生成 StreamBridge.class"
+    exit 1
+}
+Write-Host "  Java Bridge compiled with: $JavacExe"
+
 if ($PythonPath -ne "") {
     $PythonExe = $PythonPath
     if (-not (Test-Path $PythonExe)) {
