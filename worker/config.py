@@ -102,7 +102,7 @@ class WorkerConfig:
 
     # 鸿蒙 JPEG 推流独立参数（仅作用于实时推流，不影响 Windows/iOS/Android/Mac，
     # 也不影响截图/录屏——截图走设备端 snapshot_display，画质保持高清）
-    harmony_streaming_fps: int = 8  # 鸿蒙推流帧率（前端只需 <=10fps）
+    harmony_streaming_fps: int = 10  # 鸿蒙推流帧率（官方 H.264/JPEG 统一不超过 10fps）
     harmony_streaming_jpeg_quality: int = 60  # 鸿蒙推流重编码质量（0 表示不重编码，原样转发）
     # 鸿蒙推流长边上限，超过则等比缩小；<=0 表示不缩放。
     # 【默认 1600 降采样】WS 流开头已通过 meta 文本帧把真机原生分辨率
@@ -235,7 +235,7 @@ class WorkerConfig:
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
             websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
             websocket_streaming_profile=websocket_cfg.get("streaming_profile", 66),
-            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 8),
+            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 10),
             harmony_streaming_jpeg_quality=websocket_cfg.get("harmony_streaming_jpeg_quality", 60),
             harmony_streaming_max_long_edge=websocket_cfg.get("harmony_streaming_max_long_edge", 1600),
         )

@@ -90,7 +90,7 @@ def test_h264_subscription_replay_allows_static_screen_p_frames() -> None:
 
     assert queue.get_nowait() == session._latest_h264_config
     assert queue.get_nowait() == session._latest_h264_keyframe
-    assert sent_commands == [b"REQUEST_IDR\n"]
+    assert sent_commands == [b"REQUEST_IDR\n", b"WAKE_STREAM\n"]
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
 
     assert queue.get_nowait() == b"\x03\x00\x00\x01\x41\x09"

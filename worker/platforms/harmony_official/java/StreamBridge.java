@@ -76,7 +76,7 @@ public final class StreamBridge {
         String ip = args.length > 3 ? args[3] : "127.0.0.1";
         int port = args.length > 4 ? Integer.parseInt(args[4]) : 8710;
         int scale = args.length > 5 ? Integer.parseInt(args[5]) : 720;
-        int fps = args.length > 6 ? Integer.parseInt(args[6]) : 30;
+        int fps = args.length > 6 ? Integer.parseInt(args[6]) : 10;
         int bitrate = args.length > 7 ? Integer.parseInt(args[7]) : 4_000_000;
         String captureMode = args.length > 8 ? args[8].toLowerCase() : CAPTURE_VIDEO;
         if (!CAPTURE_VIDEO.equals(captureMode) && !CAPTURE_IMAGE.equals(captureMode)) {
@@ -224,6 +224,9 @@ public final class StreamBridge {
                 case "REQUEST_IDR":
                     requestIdr("COMMAND");
                     return parts.length == 1;
+                case "WAKE_STREAM":
+                    wakeStream();
+                    return parts.length == 1;
                 case "TOUCH_DOWN":
                     requireMobile();
                     device.onTouchDown(parseInt(parts, 1), parseInt(parts, 2));
@@ -332,6 +335,25 @@ public final class StreamBridge {
             System.err.println("REQUEST_IDR source=" + source);
         } catch (Throwable throwable) {
             reportError("REQUEST_IDR_FAILED source=" + source + " error=" + safeMessage(throwable));
+        }
+    }
+
+    private void wakeStream() {
+        if (!CAPTURE_VIDEO.equals(captureMode)) {
+            return;
+        }
+        try {
+            // 官方桌面端在 onReady 后用一次极小鼠标移动唤醒静止画面的首个视频帧。
+            // 移动端使用同样的无点击轨迹，不改变应用内容，只让屏幕合成器产生一次更新。
+            if (TYPE_PC.equals(deviceType)) {
+                device.executeShellCommand("uinput -M -m 100 100 200 200 --trace", 2);
+            } else {
+                device.executeShellCommand("uinput -M -m 1 1 2 2 --trace", 2);
+            }
+            System.err.println("WAKE_STREAM completed");
+        } catch (Throwable throwable) {
+            // 唤醒只是静止画面的优化，失败不应中断已经 READY 的官方会话。
+            System.err.println("WAKE_STREAM_FAILED error=" + safeMessage(throwable));
         }
     }
 

@@ -120,6 +120,10 @@ def command_request_idr() -> bytes:
     return b"REQUEST_IDR\n"
 
 
+def command_wake_stream() -> bytes:
+    return b"WAKE_STREAM\n"
+
+
 def command_stop() -> bytes:
     return b"STOP\n"
 

@@ -116,13 +116,14 @@ harmony_official:
   startup_timeout_seconds: 35
   first_frame_timeout_seconds: 10
   idle_timeout_seconds: 600       # 无截图、推流或鸿蒙动作 10 分钟后释放官方会话
-  prewarm_on_device_ready: false  # 临时禁用预热，避免锁屏时反复重试
+  prewarm_on_device_ready: true   # 设备解锁且发现在线后后台预热官方 Java 会话
+  prewarm_failure_cooldown_seconds: 60  # 预热失败后冷却，避免后台反复拉起 Java
   input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
   reconnect_attempts: 3
   reconnect_backoff_seconds: 0.5   # 首次通道抖动时快速重试
   frame_queue_capacity: 2          # 丢弃旧 H.264 数据，只保留最新画面
   image_scale_size: 720
-  frame_rate: 30
+  frame_rate: 10                  # 官方 H.264 采集帧率，直通推流按此帧率输出
   bit_rate: 4000000
   jpeg_quality: 90
   fallback_to_legacy: true
@@ -333,6 +334,7 @@ websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
   streaming_fps: 10              # Streaming frame rate
+  harmony_streaming_fps: 10      # Harmony 推流帧率（官方 H.264/JPEG 统一不超过 10fps）
   streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). Keep jpeg by default.
                                   # server.py selects the actual codec from the WebSocket codec query parameter (for example, ?codec=h264).
                                   # This value is only the fallback when no query parameter is supplied and does not conflict with H.264 streaming optimizations.

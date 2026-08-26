@@ -66,11 +66,8 @@ DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时�
 DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
 # 鸿蒙 JPEG 推流重编码默认参数（会被 worker.config 覆盖）
-DEFAULT_HARMONY_STREAMING_FPS = 8
+DEFAULT_HARMONY_STREAMING_FPS = 10
 DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
-# 官方会话已经就绪后，H.264 新订阅等待首个视频帧的最大时间。
-# 不复用通用 WebSocket send_timeout，避免降级被拖到 30 秒。
-DEFAULT_HARMONY_H264_FIRST_VIDEO_TIMEOUT = 5.0
 # 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
 DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
 # 降采样长边上限：流开头已通过 meta 文本帧把真机分辨率下发给前端做坐标
@@ -1339,22 +1336,13 @@ async def screen_stream(
                 reader.stop_push()
         elif is_harmony and codec == "h264":
             # 鸿蒙官方 H.264：订阅队列中的协议帧并直接转发。
-            first_video_deadline = time.monotonic() + DEFAULT_HARMONY_H264_FIRST_VIDEO_TIMEOUT
             while frame_source.h264_stream_running():
                 try:
                     frame = await asyncio.to_thread(h264_queue.get, timeout=1.0)
                 except Empty:
-                    if time.monotonic() >= first_video_deadline:
-                        await _send_harmony_h264_fallback(
-                            websocket,
-                            "官方会话已就绪但超时未收到可转发的 H.264 视频帧",
-                        )
-                        return
+                    # 官方 HOScrcpy 在静止画面下可能只回调 READY，不持续产生 onData。
+                    # 空队列不代表会话失败，只有 Bridge/帧源明确停止时才结束连接。
                     continue
-                # SPS/PPS 只是解码参数集，不能算作已经出画面的首帧；
-                # 只有 IDR/P 才能结束首帧等待窗口。
-                if frame and frame[0] in (0x02, 0x03):
-                    first_video_deadline = float("inf")
                 h264_diag_sent_packets += 1
                 h264_diag_sent_bytes += len(frame)
                 frame_type = {

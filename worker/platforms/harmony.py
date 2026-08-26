@@ -12,6 +12,7 @@ import os
 import io
 from typing import Any, Optional
 
+from common.utils import compress_image_to_jpeg
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
@@ -64,6 +65,7 @@ class HarmonyPlatformManager(PlatformManager):
 
     KEY_MAP = HARMONY_KEY_MAP
     HARMONY_SCREENSHOT_MAX_AGE_SECONDS = 0.1
+    HARMONY_SCREENSHOT_JPEG_QUALITY = 80
 
     def __init__(
         self,
@@ -345,7 +347,7 @@ class HarmonyPlatformManager(PlatformManager):
             official_session = self._official_sessions.acquire(
                 serial,
                 official_owner,
-                require_decoded_frame=True,
+                require_decoded_frame=False,
             )
         use_official_frame = bool(
             official_session
@@ -355,20 +357,40 @@ class HarmonyPlatformManager(PlatformManager):
             )
         )
         if use_official_frame:
-            fresh_jpeg = official_session.get_latest_jpeg_if_fresh(
-                self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS,
-            )
-            if fresh_jpeg is not None:
+            try:
+                if official_session.has_h264_subscribers:
+                    # H.264 直通正在复用官方会话时，截图必须等待旁路产生新解码帧，
+                    # 不能把上一次远程画面的缓存帧当成当前截图。
+                    screenshot_jpeg = official_session.get_latest_jpeg(
+                        timeout=5.0,
+                        require_new=True,
+                    )
+                elif official_session.latest_frame is None:
+                    # 没有远程 H.264 订阅时，只有第一次真正需要截图才启动旁路。
+                    screenshot_jpeg = official_session.get_latest_jpeg(
+                        timeout=5.0,
+                        require_new=False,
+                    )
+                else:
+                    screenshot_jpeg = official_session.get_latest_jpeg_if_fresh(
+                        self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS,
+                    )
+                if screenshot_jpeg is not None:
+                    return compress_image_to_jpeg(
+                        screenshot_jpeg,
+                        quality=self.HARMONY_SCREENSHOT_JPEG_QUALITY,
+                    )
+            except HarmonyOfficialError as exc:
+                logger.warning("官方截图旁路解码失败，回退 HDC: device=%s, error=%s", serial, exc)
+            finally:
                 if official_owner:
                     self._official_sessions.release(serial, official_owner)
-                return fresh_jpeg
-            logger.debug(
-                "官方截图缓存帧已超过 %.0fms，改用 HDC 实时截图: device=%s",
-                self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS * 1000,
-                serial,
-            )
-            if official_owner:
-                self._official_sessions.release(serial, official_owner)
+            if official_session.latest_frame is not None:
+                logger.debug(
+                    "官方截图缓存帧已超过 %.0fms，改用 HDC 实时截图: device=%s",
+                    self.HARMONY_SCREENSHOT_MAX_AGE_SECONDS * 1000,
+                    serial,
+                )
         if serial and self._official_sessions.fallback_to_legacy:
             self._official_sessions.prewarm(serial)
         return self._get_hdc_screenshot(client)
@@ -390,7 +412,9 @@ class HarmonyPlatformManager(PlatformManager):
                     image.verify()
             except Exception as exc:
                 raise HarmonyError(f"HDC 截图格式无效: {exc}") from exc
-            return data
+            # HDC snapshot_display 的原始 JPEG 质量由设备决定，统一压到与 Windows
+            # sidecar 截图相同的质量，避免官方链路与回退链路输出差异过大。
+            return compress_image_to_jpeg(data, quality=self.HARMONY_SCREENSHOT_JPEG_QUALITY)
         finally:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -416,14 +440,14 @@ class HarmonyPlatformManager(PlatformManager):
         ``auto`` 模式失败时返回 ``None``，调用方继续走 HDC；``official``
         模式失败时抛出异常，避免静默退回高延迟路径。
         """
-        return self._official_sessions.get_or_start(udid)
+        return self._official_sessions.get_or_start(udid, require_decoded_frame=False)
 
     def acquire_official_session(
         self,
         udid: str,
         owner: str,
         *,
-        require_decoded_frame: bool = True,
+        require_decoded_frame: bool = False,
     ) -> Optional[HarmonyOfficialSession]:
         """获取一份带生命周期租约的官方会话。"""
         return self._official_sessions.acquire(
@@ -445,7 +469,7 @@ class HarmonyPlatformManager(PlatformManager):
         self._official_sessions.stop_all()
 
     def prewarm_official_session(self, udid: str, owner: str | None = None) -> None:
-        """后台预热官方会话，让后续截图/推流直接复用已解码链路。"""
+        """后台预热官方 Java/采集链路，让后续截图或推流直接复用。"""
         self._official_sessions.prewarm(udid, owner=owner)
 
     def _get_official_session_for_client(
@@ -460,7 +484,11 @@ class HarmonyPlatformManager(PlatformManager):
         serial = getattr(client, "serial", None)
         if not serial:
             return None, None
-        return serial, self.acquire_official_session(serial, f"task:{id(client)}")
+        return serial, self.acquire_official_session(
+            serial,
+            f"task:{id(client)}",
+            require_decoded_frame=False,
+        )
 
     def _handle_official_failure(
         self,

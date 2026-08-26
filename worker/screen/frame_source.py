@@ -449,7 +449,12 @@ class HarmonyOfficialFrameSource(FrameSource):
         with self._start_lock:
             if self._session is not None or self._fallback is not None:
                 return
-            self._session = self.manager.acquire_official_session(self.device_id, self._owner)
+            # JPEG/H.264 流先建立官方原始通道；本地 JPEG 旁路由 get_frame() 按需启动。
+            self._session = self.manager.acquire_official_session(
+                self.device_id,
+                self._owner,
+                require_decoded_frame=False,
+            )
             if self._session is not None:
                 logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
                 return
