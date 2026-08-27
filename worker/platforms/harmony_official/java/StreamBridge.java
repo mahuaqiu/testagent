@@ -20,22 +20,16 @@ public final class StreamBridge {
     private static final byte VERSION = 1;
     private static final byte READY = 1;
     private static final byte H264 = 2;
-    private static final byte SIZE = 3;
     private static final byte ERROR = 4;
     private static final byte STATS = 5;
     private static final byte EOF = 6;
-    private static final byte IMAGE = 7;
 
     private static final String TYPE_MOBILE = "mobile";
     private static final String TYPE_PC = "pc";
-    private static final String CAPTURE_VIDEO = "video";
-    private static final String CAPTURE_IMAGE = "image";
     private static final int FRAME_QUEUE_CAPACITY = 8;
 
     private final String serial;
     private final String deviceType;
-    private final String captureMode;
-    private final byte frameMessageType;
     private final HosRemoteDevice device;
     private final ProtocolWriter writer;
     private final ArrayBlockingQueue<byte[]> frameQueue =
@@ -51,19 +45,16 @@ public final class StreamBridge {
     private StreamBridge(
             String serial,
             String deviceType,
-            String captureMode,
             HosRemoteDevice device) {
         this.serial = serial;
         this.deviceType = deviceType;
-        this.captureMode = captureMode;
-        this.frameMessageType = CAPTURE_VIDEO.equals(captureMode) ? H264 : IMAGE;
         this.device = device;
         this.writer = new ProtocolWriter(System.out);
     }
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println("用法: StreamBridge <serial> [mobile|pc] [hdc] [ip] [port] [scale] [fps] [bitrate] [video|image]");
+            System.err.println("用法: StreamBridge <serial> [mobile|pc] [hdc] [ip] [port] [scale] [fps] [bitrate]");
             System.exit(2);
         }
 
@@ -78,10 +69,6 @@ public final class StreamBridge {
         int scale = args.length > 5 ? Integer.parseInt(args[5]) : 720;
         int fps = args.length > 6 ? Integer.parseInt(args[6]) : 10;
         int bitrate = args.length > 7 ? Integer.parseInt(args[7]) : 4_000_000;
-        String captureMode = args.length > 8 ? args[8].toLowerCase() : CAPTURE_VIDEO;
-        if (!CAPTURE_VIDEO.equals(captureMode) && !CAPTURE_IMAGE.equals(captureMode)) {
-            throw new IllegalArgumentException("采集模式必须是 video 或 image: " + captureMode);
-        }
 
         HosRemoteConfig config = new HosRemoteConfig(serial);
         config.setIp(ip);
@@ -94,7 +81,6 @@ public final class StreamBridge {
         StreamBridge bridge = new StreamBridge(
                 serial,
                 deviceType,
-                captureMode,
                 new HosRemoteDevice(config));
         bridge.run();
     }
@@ -105,10 +91,9 @@ public final class StreamBridge {
         startInputThread();
 
         System.err.printf(
-                "STREAM_START serial=%s device_type=%s capture_mode=%s%n",
+                "STREAM_START serial=%s device_type=%s capture_mode=video%n",
                 serial,
-                deviceType,
-                captureMode);
+                deviceType);
         try {
             ScreenCapCallback callback = new ScreenCapCallback() {
                 @Override
@@ -137,22 +122,12 @@ public final class StreamBridge {
                 public void onReady() {
                     long readyMs = elapsedMs();
                     System.err.printf("SDK_READY serial=%s elapsed_ms=%d%n", serial, readyMs);
-                    if (CAPTURE_VIDEO.equals(captureMode)) {
-                        // 官方 HOScrcpy 在 onReady 后先用一次极小鼠标/触摸轨迹
-                        // 让静止屏幕产生新的合成帧，否则 onData 可能一直不回调。
-                        wakeStream();
-                        requestIdr("SDK_READY");
-                    }
                     sendText(READY, "serial=" + serial + " device_type=" + deviceType
-                            + " capture_mode=" + captureMode + " ready_ms=" + readyMs);
+                            + " capture_mode=video ready_ms=" + readyMs);
                     ready.countDown();
                 }
             };
-            if (CAPTURE_VIDEO.equals(captureMode)) {
-                device.startCaptureScreen(callback);
-            } else {
-                device.startImageScreenCapture(callback);
-            }
+            device.startCaptureScreen(callback);
 
             if (!ready.await(30, TimeUnit.SECONDS)) {
                 reportError("READY_TIMEOUT serial=" + serial);
@@ -180,7 +155,7 @@ public final class StreamBridge {
                 while (running || !frameQueue.isEmpty()) {
                     byte[] frame = frameQueue.poll(200, TimeUnit.MILLISECONDS);
                     if (frame != null) {
-                        writer.write(frameMessageType, frame);
+                        writer.write(H264, frame);
                     }
                 }
             } catch (InterruptedException interrupted) {
@@ -320,7 +295,7 @@ public final class StreamBridge {
 
     private void sendStats() {
         String payload = "serial=" + serial
-                + " capture_mode=" + captureMode
+                + " capture_mode=video"
                 + " capture_messages=" + h264Messages.get()
                 + " capture_bytes=" + h264Bytes.get()
                 + " dropped_frames=" + droppedFrames.get()
@@ -330,9 +305,6 @@ public final class StreamBridge {
     }
 
     private void requestIdr(String source) {
-        if (!CAPTURE_VIDEO.equals(captureMode)) {
-            return;
-        }
         try {
             device.requestIDRFrame();
             System.err.println("REQUEST_IDR source=" + source);
@@ -342,13 +314,9 @@ public final class StreamBridge {
     }
 
     private void wakeStream() {
-        if (!CAPTURE_VIDEO.equals(captureMode)) {
-            return;
-        }
         try {
-            // 与官方 HOScrcpy MainForm 的 onReady 实现保持一致。该命令只
-            // 产生移动轨迹，不执行点击，不改变应用当前页面。
-            device.executeShellCommand("uinput -M -m 100 100 200 200 --trace", 2);
+            // 只产生很小的移动轨迹，不执行点击，不改变应用当前页面，也不显示轨迹。
+            device.executeShellCommand("uinput -M -m 100 100 200 200", 2);
             System.err.println("WAKE_STREAM completed");
         } catch (Throwable throwable) {
             // 唤醒只是静止画面的优化，失败不应中断已经 READY 的官方会话。
@@ -373,11 +341,7 @@ public final class StreamBridge {
     private void shutdown() {
         running = false;
         try {
-            if (CAPTURE_VIDEO.equals(captureMode)) {
-                device.stopCaptureScreen();
-            } else {
-                device.stopImageScreenCapture();
-            }
+            device.stopCaptureScreen();
         } catch (Throwable throwable) {
             System.err.println("停止采集失败: " + safeMessage(throwable));
         }

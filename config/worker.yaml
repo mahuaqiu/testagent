@@ -105,8 +105,8 @@ platforms:
     screenshot_dir: data/screenshots
 
 # 鸿蒙官方 HOScrcpy Java SDK 配置。
-# Java Bridge 使用官方 H.264 流提供截图、OCR 和 WebSocket JPEG 帧。
-# 按键、文本、应用生命周期和自动故障回退仍保留 HDC 通道。
+# Java Bridge 只用于官方 H.264 WebSocket 推流和鸿蒙官方输入控制。
+# 截图、OCR、失败附件和 JPEG 推流统一使用 HDC/agent 通道。
 harmony_official:
   enabled: true
   mode: auto                       # auto：优先官方后回退 HDC；official：不回退；legacy：禁用官方链路
@@ -114,18 +114,16 @@ harmony_official:
   jar_path: tools/harmony/hosScrcpy-1.0.15-beta.jar
   bridge_class_path: tools/harmony/bridge
   startup_timeout_seconds: 35
-  first_frame_timeout_seconds: 10
   idle_timeout_seconds: 600       # 无截图、推流或鸿蒙动作 10 分钟后释放官方会话
   prewarm_on_device_ready: true   # 设备解锁且发现在线后后台预热官方 Java 会话
   prewarm_failure_cooldown_seconds: 60  # 预热失败后冷却，避免后台反复拉起 Java
   input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
   reconnect_attempts: 3
   reconnect_backoff_seconds: 0.5   # 首次通道抖动时快速重试
-  frame_queue_capacity: 2          # 丢弃旧 H.264 数据，只保留最新画面
+  frame_queue_capacity: 2          # 每个 H.264 订阅的有界队列容量
   image_scale_size: 720
   frame_rate: 10                  # 官方 H.264 采集帧率，直通推流按此帧率输出
   bit_rate: 4000000
-  jpeg_quality: 90
   fallback_to_legacy: true
 
 # Image Matching Settings

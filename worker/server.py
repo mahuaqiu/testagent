@@ -1130,7 +1130,12 @@ async def screen_stream(
         if direct_h264_frame_source:
             # 官方 H.264 不需要 ScreenManager 的 JPEG 捕获线程；锁屏时保留
             # 独立帧源，等待解锁后再启动 Java Bridge，避免直接降级成旧 JPEG。
-            frame_source = _create_frame_source(platform, device_id, monitor)
+            frame_source = _create_frame_source(
+                platform,
+                device_id,
+                monitor,
+                use_official_h264=True,
+            )
         elif platform == "windows":
             from worker.screen.windows_sidecar import get_windows_sidecar_manager
 
@@ -1379,7 +1384,7 @@ async def screen_stream(
                     timeout=send_timeout,
                 )
 
-            if frame_source.h264_stream_running():
+            if not frame_source.h264_stream_running():
                 await _send_harmony_h264_fallback(
                     websocket,
                     "鸿蒙官方 H.264 会话已停止",
@@ -1522,7 +1527,13 @@ def _get_harmony_manager(platform: str):
     return None
 
 
-def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
+def _create_frame_source(
+    platform: str,
+    device_id: str,
+    monitor: int = 1,
+    *,
+    use_official_h264: bool = False,
+):
     """根据平台类型创建对应的 FrameSource。
 
     Args:
@@ -1565,13 +1576,20 @@ def _create_frame_source(platform: str, device_id: str, monitor: int = 1):
         return MinicapFrameSource(device_id, minicap)
 
     elif platform in ("harmony_mobile", "harmony_pc"):
-        # 鸿蒙：官方 H.264 解码会话优先，auto 模式失败时内部回退旧帧源。
+        # 只有 H.264 直通推流使用官方 Java 会话；截图和 JPEG 推流统一走
+        # HDC/agent 帧流，避免依赖本地 H.264 解码旁路。
         harmony_manager = _get_harmony_manager(platform)
-        if harmony_manager:
+        if use_official_h264 and harmony_manager:
             return HarmonyOfficialFrameSource(device_id, harmony_manager)
-        # Fallback: 直接创建 HDC 客户端
-        from worker.platforms.harmony_hdc import HarmonyHdcWrapper
-        hdc_client = HarmonyHdcWrapper(device_id)
+        hdc_client = (
+            harmony_manager._device_clients.get(device_id)
+            if harmony_manager
+            else None
+        )
+        if hdc_client is None:
+            from worker.platforms.harmony_hdc import HarmonyHdcWrapper
+
+            hdc_client = HarmonyHdcWrapper(device_id)
         return HarmonyFrameSource(device_id, hdc_client)
 
     elif platform == "mac":

@@ -233,7 +233,6 @@ $nuitkaArgs = @(
     "--include-package=cv2"
     "--include-package=PIL"
     "--include-package=numpy"
-    "--include-package=av"
     "--include-package=pydantic"
     "--include-package=pystray"
     "--include-module=pystray._win32"

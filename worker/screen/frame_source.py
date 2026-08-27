@@ -416,106 +416,50 @@ class HarmonyFrameSource(FrameSource):
         return self._img_to_jpeg(img)
 
 
-class HarmonyOfficialFrameSource(FrameSource):
-    """鸿蒙官方 HOScrcpy H.264 会话帧源。
+class HarmonyOfficialFrameSource:
+    """鸿蒙官方 HOScrcpy H.264 订阅源。
 
-    官方会话由 ``HarmonyPlatformManager`` 按设备复用。帧源持有一份推流租约；
-    推流停止且没有其他消费者时，立即释放并终止 Java 会话。
-    官方链路不可用时，在 ``auto`` 模式回退到既有 HarmonyFrameSource。
+    该源只负责把官方 Java 会话的 H.264 原始包交给 WebSocket。截图、OCR、
+    失败附件和 JPEG 推流都使用 ``HarmonyFrameSource`` 的 HDC/agent 路径，
+    不在这里做 JPEG 解码或旧帧回退。
     """
 
     def __init__(self, device_id: str, manager: "HarmonyPlatformManager"):
         self.device_id = device_id
         self.manager = manager
         self._session = None
-        self._fallback: HarmonyFrameSource | None = None
-        self._screen_size: Optional[tuple[int, int]] = None
         self._owner = f"stream:{id(self)}"
         self._h264_subscribers: set[str] = set()
-        self._start_lock = threading.Lock()
+        self._start_lock = threading.RLock()
 
     @property
     def supports_h264(self) -> bool:
         """官方会话可直接输出 Annex-B H.264；旧帧源不具备此能力。"""
         return True
 
-    @property
-    def prefers_latest_frame(self) -> bool:
-        """官方源只保留最新解码帧，避免通用 FIFO 再次放大延迟。"""
-        return True
-
     def start(self) -> None:
-        """启动或获取官方会话；无法启动时在 auto 模式创建旧帧源。"""
+        """获取官方会话；官方不可用时交给 WebSocket 层处理降级。"""
         with self._start_lock:
-            if self._session is not None or self._fallback is not None:
+            if self._session is not None:
                 return
-            # JPEG/H.264 流先建立官方原始通道；本地 JPEG 旁路由 get_frame() 按需启动。
             self._session = self.manager.acquire_official_session(
                 self.device_id,
                 self._owner,
-                require_decoded_frame=False,
             )
             if self._session is not None:
                 logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
                 return
-
-            client = self.manager._device_clients.get(self.device_id)
-            if client is None:
-                raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
-            self._fallback = HarmonyFrameSource(self.device_id, client)
-            self._fallback.start()
             if self.manager.is_device_locked(self.device_id):
-                logger.debug("HarmonyOfficialFrameSource 等待解锁，使用旧帧源: %s", self.device_id)
-            else:
-                logger.warning("HarmonyOfficialFrameSource 已回退旧帧源: %s", self.device_id)
-
-    def get_frame(self) -> bytes:
-        if self._session is None and self._fallback is None:
-            self.start()
-        if self._session is not None:
-            try:
-                # SDK READY 到首个可解码帧之间可能还有一小段缓冲时间，
-                # 不要把正常的首帧延迟误判为官方会话故障。
-                return self._session.get_latest_jpeg(timeout=5.0)
-            except Exception as exc:
-                self.manager._handle_official_failure(self.device_id, "推流取帧", exc)
-                self._session = None
-                self._start_fallback_after_failure()
-        if self._fallback is None:
-            raise ConnectionError("鸿蒙推流帧源不可用")
-        return self._fallback.get_frame()
-
-    def get_screen_size(self) -> tuple[int, int]:
-        if self._screen_size:
-            return self._screen_size
-        if self._session is not None:
-            size = self._session.screen_size
-            if size != (0, 0):
-                self._screen_size = size
-                return size
-        if self._fallback is not None:
-            self._screen_size = self._fallback.get_screen_size()
-            return self._screen_size
-
-        client = self.manager._device_clients.get(self.device_id)
-        if client:
-            self._screen_size = client.display_size()
-            return self._screen_size
-        return (0, 0)
+                raise ConnectionError("鸿蒙设备处于锁屏状态，等待解锁后启动 H.264 会话")
+            raise ConnectionError("鸿蒙官方 H.264 会话不可用")
 
     def subscribe_h264(self, subscriber_id: str):
         """订阅官方会话的 H.264 WebSocket 帧。"""
         with self._start_lock:
-            if self._session is None and self._fallback is None:
-                self._session = self.manager.acquire_official_session(
-                    self.device_id,
-                    self._owner,
-                    require_decoded_frame=False,
-                )
+            if self._session is None:
+                self.start()
         if self._session is None:
-            if self.manager.is_device_locked(self.device_id):
-                raise ConnectionError("鸿蒙设备处于锁屏状态，等待解锁后启动 H.264 会话")
-            raise ConnectionError("鸿蒙官方 H.264 会话不可用，不能使用 codec=h264")
+            raise ConnectionError("鸿蒙官方 H.264 会话不可用")
         queue = self._session.subscribe_h264(subscriber_id)
         self._h264_subscribers.add(subscriber_id)
         return queue
@@ -524,7 +468,6 @@ class HarmonyOfficialFrameSource(FrameSource):
         """返回 H.264 是否因锁屏暂时等待官方会话。"""
         return (
             self._session is None
-            and self._fallback is None
             and self.manager.is_device_locked(self.device_id)
         )
 
@@ -544,25 +487,6 @@ class HarmonyOfficialFrameSource(FrameSource):
             for subscriber_id in tuple(self._h264_subscribers):
                 self._session.unsubscribe_h264(subscriber_id)
         self._h264_subscribers.clear()
-        if self._fallback is not None:
-            self._fallback.stop()
-            self._fallback = None
         if self._session is not None:
             self.manager.release_official_session(self.device_id, self._owner)
         self._session = None
-
-    def get_blank_frame(self) -> bytes:
-        width, height = self.get_screen_size()
-        if width <= 0 or height <= 0:
-            width, height = 1280, 720
-        img = numpy.zeros((height, width, 3), dtype=numpy.uint8)
-        return self._img_to_jpeg(img)
-
-    def _start_fallback_after_failure(self) -> None:
-        if self._fallback is not None:
-            return
-        client = self.manager._device_clients.get(self.device_id)
-        if client is None:
-            raise ConnectionError(f"Harmony device client 不存在: {self.device_id}")
-        self._fallback = HarmonyFrameSource(self.device_id, client)
-        self._fallback.start()

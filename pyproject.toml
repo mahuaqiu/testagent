@@ -22,7 +22,6 @@ dependencies = [
     "psutil>=5.9.0",
     "Pillow>=10.0.0",
     "pywin32>=306",  # Windows 窗口查找和截图
-    "av>=18.1.0",  # 鸿蒙官方 H.264 推流解码
 
     # 图像匹配
     "opencv-python-headless>=4.8.0",

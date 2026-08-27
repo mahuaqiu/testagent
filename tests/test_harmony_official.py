@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import io
-import threading
 import time
 from types import SimpleNamespace
 from queue import Empty, Queue
 
 import pytest
 
-from worker.platforms.harmony_official.decoder import LatestFrameCache
 from worker.platforms.harmony_official.protocol import (
     BridgeMessageType,
     BridgeProtocolError,
@@ -86,10 +84,10 @@ def test_h264_first_subscription_starts_from_a_fresh_keyframe() -> None:
 
     queue = session.subscribe_h264("subscriber-1")
 
-    assert queue.get_nowait() == session._latest_h264_config
     with pytest.raises(Empty):
         queue.get_nowait()
     assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
+    assert session._latest_h264_config is None
     assert session._latest_h264_keyframe is None
 
     # 新的参数集/关键帧到达后才允许后续 P 帧进入订阅队列。
@@ -130,11 +128,12 @@ def test_h264_second_subscription_can_replay_active_keyframe() -> None:
 
     assert queue.get_nowait() == session._latest_h264_config
     assert queue.get_nowait() == session._latest_h264_keyframe
-    assert sent_commands == [b"REQUEST_IDR\n"]
+    assert sent_commands == []
     session.stop()
 
 
 def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
+    sent_commands: list[bytes] = []
     session = HarmonyOfficialSession(
         serial="device-1",
         device_type="mobile",
@@ -143,13 +142,19 @@ def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
     )
     session._bridge = SimpleNamespace(  # type: ignore[assignment]
         is_running=True,
-        send=lambda command: None,
+        send=sent_commands.append,
         stop=lambda timeout=5.0: None,
     )
     session._latest_h264_config = b"\x01\x00\x00\x01\x67"
     session._last_idr_request_at = time.monotonic()
+    session._h264_subscribers["subscriber-1"] = SimpleNamespace(  # type: ignore[assignment]
+        subscriber_id="subscriber-1",
+        queue=Queue(),
+        has_config=True,
+        waiting_for_keyframe=False,
+    )
 
-    queue = session.subscribe_h264("subscriber-1")
+    queue = session.subscribe_h264("subscriber-2")
     assert queue.get_nowait() == session._latest_h264_config
 
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
@@ -181,35 +186,34 @@ def test_h264_action_refresh_requests_idr_after_input() -> None:
     session.stop()
 
 
-def test_latest_frame_cache_keeps_newest_frame() -> None:
-    cache = LatestFrameCache()
-    first = cache.update(b"first", 100, 200)
-    second = cache.update(b"second", 100, 200)
+def test_h264_packets_are_dropped_without_subscribers() -> None:
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._broadcast_h264(b"\x00\x00\x01\x67\x01\x00\x00\x01\x65\x02")
 
-    latest = cache.get()
-
-    assert latest is not None
-    assert latest.jpeg == b"second"
-    assert latest.sequence == second.sequence
-    assert first.sequence < second.sequence
+    assert session._latest_h264_config is None
+    assert session._latest_h264_keyframe is None
 
 
-def test_latest_frame_cache_can_wait_for_newer_frame() -> None:
-    cache = LatestFrameCache()
-    first = cache.update(b"first", 100, 200)
+def test_last_h264_unsubscribe_clears_startup_cache() -> None:
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._h264_subscribers["subscriber-1"] = SimpleNamespace(queue=Queue())  # type: ignore[assignment]
+    session._latest_h264_config = b"\x01config"
+    session._latest_h264_keyframe = b"\x02idr"
 
-    def update_later() -> None:
-        time.sleep(0.05)
-        cache.update(b"second", 300, 400)
+    session.unsubscribe_h264("subscriber-1")
 
-    thread = threading.Thread(target=update_later)
-    thread.start()
-    latest = cache.get(timeout=1.0, after_sequence=first.sequence)
-    thread.join()
-
-    assert latest is not None
-    assert latest.jpeg == b"second"
-    assert (latest.width, latest.height) == (300, 400)
+    assert session._latest_h264_config is None
+    assert session._latest_h264_keyframe is None
 
 
 def test_input_commands_and_gesture_step_limits() -> None:

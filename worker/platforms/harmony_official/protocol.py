@@ -19,11 +19,9 @@ class BridgeMessageType(IntEnum):
 
     READY = 1
     H264 = 2
-    SIZE = 3
     ERROR = 4
     STATS = 5
     EOF = 6
-    IMAGE = 7
 
 
 class BridgeProtocolError(ValueError):
