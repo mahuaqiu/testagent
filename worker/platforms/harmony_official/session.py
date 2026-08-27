@@ -291,33 +291,46 @@ class HarmonyOfficialSession:
             queue=Queue(maxsize=max(4, int(self.settings["frame_queue_capacity"]) * 4))
         )
         with self._state_lock:
+            has_existing_subscribers = bool(self._h264_subscribers)
             self._h264_subscribers[subscriber_id] = subscriber
             cached_config = self._latest_h264_config
             cached_keyframe = self._latest_h264_keyframe
+            queued_packets = 0
             if cached_config is not None:
                 subscriber.queue.put_nowait(cached_config)
                 subscriber.has_config = True
-            if cached_config is not None and cached_keyframe is not None:
+                queued_packets += 1
+            if has_existing_subscribers and cached_config is not None and cached_keyframe is not None:
                 subscriber.queue.put_nowait(cached_keyframe)
-                # 缓存的 SPS/PPS + IDR 与当前官方会话属于同一条编码链路，
-                # 可以立即接收后续 P 帧。新连接同时会请求一组当前 IDR，
-                # 用于覆盖设备在断开期间发生变化的画面。
+                queued_packets += 1
                 subscriber.waiting_for_keyframe = False
+            elif not has_existing_subscribers:
+                # 从无订阅的空闲保活恢复时，旧 IDR 可能对应断开期间的页面。
+                # 首个订阅必须等待本次播放起点的新 IDR，不能让旧帧或其后的
+                # P 帧进入新的浏览器解码链。
+                self._latest_h264_keyframe = None
         logger.info(
             "鸿蒙 H.264 订阅建立: serial=%s, subscriber=%s, cached_config_bytes=%d, "
-            "cached_idr_bytes=%d, queued_packets=%d",
+            "cached_idr_bytes=%d, had_existing_subscribers=%s, queued_packets=%d",
             self.serial,
             subscriber_id,
             len(cached_config) - 1 if cached_config else 0,
             len(cached_keyframe) - 1 if cached_keyframe else 0,
-            int(cached_config is not None) + int(cached_keyframe is not None),
+            has_existing_subscribers,
+            queued_packets,
         )
-        # 新连接可能错过了上一次 SPS/PPS，必须从新的 IDR 重新开始。
-        # 强制绕过节流：旧连接刚请求过 IDR 时，静止画面不会自然产生新帧，
-        # 如果这次请求被吞掉，浏览器就只能一直等到设备画面发生变化。
-        self.request_idr(force=True)
-        if cached_config is None or cached_keyframe is None:
+        # 首个订阅从空闲状态恢复时，先按官方 HOScrcpy 的 onReady 顺序唤醒
+        # 静止画面，再强制请求新的 IDR；有活动订阅时仍可快速复用缓存首屏。
+        if not has_existing_subscribers:
             self.wake_stream()
+            self.request_idr(force=True)
+        else:
+            # 新连接可能错过了上一次 SPS/PPS，必须从新的 IDR 重新开始。
+            # 强制绕过节流：旧连接刚请求过 IDR 时，静止画面不会自然产生新帧，
+            # 如果这次请求被吞掉，浏览器就只能一直等到设备画面发生变化。
+            self.request_idr(force=True)
+            if cached_config is None or cached_keyframe is None:
+                self.wake_stream()
         self._schedule_h264_idr_retry(subscriber_id)
         return subscriber.queue
 

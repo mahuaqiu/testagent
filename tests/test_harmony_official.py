@@ -68,7 +68,7 @@ def test_h264_websocket_packets_classify_p_frame() -> None:
     assert _h264_websocket_packets(payload) == [b"\x03" + payload]
 
 
-def test_h264_subscription_replay_allows_static_screen_p_frames() -> None:
+def test_h264_first_subscription_starts_from_a_fresh_keyframe() -> None:
     sent_commands: list[bytes] = []
     session = HarmonyOfficialSession(
         serial="device-1",
@@ -83,17 +83,54 @@ def test_h264_subscription_replay_allows_static_screen_p_frames() -> None:
     )
     session._latest_h264_config = b"\x01\x00\x00\x01\x67"
     session._latest_h264_keyframe = b"\x02\x00\x00\x01\x65"
-    # 避免测试触发真实的 IDR 请求。
-    session._last_idr_request_at = time.monotonic()
 
     queue = session.subscribe_h264("subscriber-1")
 
     assert queue.get_nowait() == session._latest_h264_config
-    assert queue.get_nowait() == session._latest_h264_keyframe
-    # 已有完整缓存时，订阅可以立即显示缓存首屏；唤醒只在没有缓存时需要。
-    assert sent_commands == [b"REQUEST_IDR\n"]
+    with pytest.raises(Empty):
+        queue.get_nowait()
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
+    assert session._latest_h264_keyframe is None
+
+    # 新的参数集/关键帧到达后才允许后续 P 帧进入订阅队列。
+    session._broadcast_h264(
+        b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02"
+        b"\x00\x00\x01\x65\x03"
+    )
+    assert queue.get_nowait()[0] == 0x01
+    assert queue.get_nowait()[0] == 0x02
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
     assert queue.get_nowait() == b"\x03\x00\x00\x01\x41\x09"
+    session.stop()
+
+
+def test_h264_second_subscription_can_replay_active_keyframe() -> None:
+    sent_commands: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+    session._latest_h264_config = b"\x01\x00\x00\x01\x67"
+    session._latest_h264_keyframe = b"\x02\x00\x00\x01\x65"
+    session._h264_subscribers["subscriber-1"] = SimpleNamespace(  # type: ignore[assignment]
+        subscriber_id="subscriber-1",
+        queue=Queue(),
+        has_config=True,
+        waiting_for_keyframe=False,
+    )
+
+    queue = session.subscribe_h264("subscriber-2")
+
+    assert queue.get_nowait() == session._latest_h264_config
+    assert queue.get_nowait() == session._latest_h264_keyframe
+    assert sent_commands == [b"REQUEST_IDR\n"]
     session.stop()
 
 
