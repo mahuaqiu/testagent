@@ -11,7 +11,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -26,21 +25,26 @@ public final class StreamBridge {
 
     private static final String TYPE_MOBILE = "mobile";
     private static final String TYPE_PC = "pc";
-    private static final int FRAME_QUEUE_CAPACITY = 8;
+    private static final long STATS_INTERVAL_MS = 60_000L;
+    private static final long WRITE_BLOCK_THRESHOLD_MS = 100L;
 
     private final String serial;
     private final String deviceType;
     private final HosRemoteDevice device;
     private final ProtocolWriter writer;
-    private final ArrayBlockingQueue<byte[]> frameQueue =
-            new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY);
     private final AtomicLong h264Messages = new AtomicLong();
     private final AtomicLong h264Bytes = new AtomicLong();
-    private final AtomicLong droppedFrames = new AtomicLong();
+    private final AtomicLong h264WrittenMessages = new AtomicLong();
+    private final AtomicLong h264WriteBlockCount = new AtomicLong();
+    private final AtomicLong h264WriteBlockMs = new AtomicLong();
+    private final AtomicLong h264MaxWriteMs = new AtomicLong();
     private final CountDownLatch ready = new CountDownLatch(1);
     private volatile boolean running = true;
     private volatile long startedAt = System.nanoTime();
-    private Thread outputThread;
+    private volatile boolean h264WriteInProgress;
+    private volatile long h264WriteStartedAtNanos;
+    private volatile long h264LastWriteMs;
+    private Thread backpressureMonitorThread;
 
     private StreamBridge(
             String serial,
@@ -87,8 +91,8 @@ public final class StreamBridge {
 
     private void run() throws Exception {
         startedAt = System.nanoTime();
-        startOutputThread();
         startInputThread();
+        startBackpressureMonitor();
 
         System.err.printf(
                 "STREAM_START serial=%s device_type=%s capture_mode=video%n",
@@ -102,13 +106,7 @@ public final class StreamBridge {
                     if (payload.length == 0) {
                         return;
                     }
-                    h264Messages.incrementAndGet();
-                    h264Bytes.addAndGet(payload.length);
-                    if (!frameQueue.offer(payload)) {
-                        frameQueue.poll();
-                        droppedFrames.incrementAndGet();
-                        frameQueue.offer(payload);
-                    }
+                    writeH264(payload);
                 }
 
                 @Override
@@ -137,7 +135,7 @@ public final class StreamBridge {
             long lastStatsAt = System.nanoTime();
             while (running) {
                 Thread.sleep(200);
-                if (elapsedMsSince(lastStatsAt) >= 5000) {
+                if (elapsedMsSince(lastStatsAt) >= STATS_INTERVAL_MS) {
                     lastStatsAt = System.nanoTime();
                     sendStats();
                 }
@@ -149,24 +147,50 @@ public final class StreamBridge {
         }
     }
 
-    private void startOutputThread() {
-        outputThread = new Thread(() -> {
-            try {
-                while (running || !frameQueue.isEmpty()) {
-                    byte[] frame = frameQueue.poll(200, TimeUnit.MILLISECONDS);
-                    if (frame != null) {
-                        writer.write(H264, frame);
-                    }
+    private void startBackpressureMonitor() {
+        backpressureMonitorThread = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(STATS_INTERVAL_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            } catch (IOException ioException) {
-                System.err.println("协议输出失败: " + safeMessage(ioException));
-                running = false;
+                if (running) {
+                    logBackpressure("periodic");
+                }
             }
-        }, "hoscrcpy-poc-output");
-        outputThread.setDaemon(true);
-        outputThread.start();
+        }, "hoscrcpy-poc-backpressure-monitor");
+        backpressureMonitorThread.setDaemon(true);
+        backpressureMonitorThread.start();
+    }
+
+    private synchronized void writeH264(byte[] payload) {
+        // SDK 回调可能来自不同线程；串行写出可保证每个 access unit 的协议帧
+        // 不交错，同时保留完整性优先的阻塞语义，不在 Java 层主动丢帧。
+        h264Messages.incrementAndGet();
+        h264Bytes.addAndGet(payload.length);
+        long writeStartedAt = System.nanoTime();
+        h264WriteInProgress = true;
+        h264WriteStartedAtNanos = writeStartedAt;
+        try {
+            writer.write(H264, payload);
+            h264WrittenMessages.incrementAndGet();
+        } catch (IOException ioException) {
+            // stdout 已断开时无法再发送 ERROR，结束会话并交给上层重建。
+            System.err.println("H264 输出失败: " + safeMessage(ioException));
+            running = false;
+        } finally {
+            long writeMs = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - writeStartedAt);
+            h264LastWriteMs = writeMs;
+            updateMax(h264MaxWriteMs, writeMs);
+            if (writeMs >= WRITE_BLOCK_THRESHOLD_MS) {
+                h264WriteBlockCount.incrementAndGet();
+                h264WriteBlockMs.addAndGet(writeMs);
+            }
+            h264WriteInProgress = false;
+        }
     }
 
     private void startInputThread() {
@@ -296,12 +320,55 @@ public final class StreamBridge {
     private void sendStats() {
         String payload = "serial=" + serial
                 + " capture_mode=video"
+                + " output_mode=direct"
                 + " capture_messages=" + h264Messages.get()
                 + " capture_bytes=" + h264Bytes.get()
-                + " dropped_frames=" + droppedFrames.get()
-                + " queue_size=" + frameQueue.size()
+                + " written_messages=" + h264WrittenMessages.get()
+                + " dropped_frames=0"
+                + " queue_size=0"
+                + " write_block_count=" + h264WriteBlockCount.get()
+                + " write_block_ms=" + h264WriteBlockMs.get()
+                + " last_write_ms=" + h264LastWriteMs
+                + " max_write_ms=" + h264MaxWriteMs.get()
+                + " write_in_progress=" + h264WriteInProgress
+                + " active_write_ms=" + activeWriteMs()
                 + " elapsed_ms=" + elapsedMs();
         sendText(STATS, payload);
+    }
+
+    private void logBackpressure(String reason) {
+        System.err.println(
+                "STREAM_BACKPRESSURE serial=" + serial
+                        + " reason=" + reason
+                        + " output_mode=direct"
+                        + " capture_messages=" + h264Messages.get()
+                        + " written_messages=" + h264WrittenMessages.get()
+                        + " dropped_frames=0"
+                        + " queue_size=0"
+                        + " write_block_count=" + h264WriteBlockCount.get()
+                        + " write_block_ms=" + h264WriteBlockMs.get()
+                        + " last_write_ms=" + h264LastWriteMs
+                        + " max_write_ms=" + h264MaxWriteMs.get()
+                        + " write_in_progress=" + h264WriteInProgress
+                        + " active_write_ms=" + activeWriteMs());
+    }
+
+    private long activeWriteMs() {
+        if (!h264WriteInProgress) {
+            return 0;
+        }
+        return TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - h264WriteStartedAtNanos);
+    }
+
+    private static void updateMax(AtomicLong target, long value) {
+        long current;
+        do {
+            current = target.get();
+            if (value <= current) {
+                return;
+            }
+        } while (!target.compareAndSet(current, value));
     }
 
     private void requestIdr(String source) {
@@ -340,17 +407,18 @@ public final class StreamBridge {
 
     private void shutdown() {
         running = false;
+        if (backpressureMonitorThread != null) {
+            backpressureMonitorThread.interrupt();
+            try {
+                backpressureMonitorThread.join(1000);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
         try {
             device.stopCaptureScreen();
         } catch (Throwable throwable) {
             System.err.println("停止采集失败: " + safeMessage(throwable));
-        }
-        if (outputThread != null) {
-            try {
-                outputThread.join(2000);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            }
         }
         sendText(EOF, "serial=" + serial + " reason=stopped");
         System.err.println("STREAM_STOP serial=" + serial);

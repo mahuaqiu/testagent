@@ -121,6 +121,7 @@ harmony_official:
   reconnect_attempts: 3
   reconnect_backoff_seconds: 0.5   # 首次通道抖动时快速重试
   frame_queue_capacity: 2          # 每个 H.264 订阅的有界队列容量
+  backpressure_log_interval_seconds: 60  # H.264 直写和订阅队列每分钟记录一次积压
   image_scale_size: 720
   frame_rate: 10                  # 官方 H.264 采集帧率，直通推流按此帧率输出
   bit_rate: 4000000

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import io
 import time
-from types import SimpleNamespace
 from queue import Empty, Queue
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,6 +122,12 @@ def test_h264_second_subscription_can_replay_active_keyframe() -> None:
         queue=Queue(),
         has_config=True,
         waiting_for_keyframe=False,
+        enqueued_packets=0,
+        dropped_packets=0,
+        dropped_p_packets=0,
+        skipped_p_packets=0,
+        queue_full_events=0,
+        peak_queue_size=0,
     )
 
     queue = session.subscribe_h264("subscriber-2")
@@ -152,6 +158,12 @@ def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
         queue=Queue(),
         has_config=True,
         waiting_for_keyframe=False,
+        enqueued_packets=0,
+        dropped_packets=0,
+        dropped_p_packets=0,
+        skipped_p_packets=0,
+        queue_full_events=0,
+        peak_queue_size=0,
     )
 
     queue = session.subscribe_h264("subscriber-2")
@@ -164,7 +176,94 @@ def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
     session.stop()
 
 
-def test_h264_action_refresh_requests_idr_after_input() -> None:
+def test_h264_slow_subscriber_drops_only_its_p_frame_and_requests_idr() -> None:
+    sent_commands: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings={**HarmonyOfficialSessionManager.DEFAULTS, "frame_queue_capacity": 1},
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+
+    slow_queue = Queue(maxsize=1)
+    slow_queue.put(b"occupied")
+    session._h264_subscribers["slow"] = SimpleNamespace(  # type: ignore[assignment]
+        subscriber_id="slow",
+        queue=slow_queue,
+        has_config=True,
+        waiting_for_keyframe=False,
+        enqueued_packets=0,
+        dropped_packets=0,
+        dropped_p_packets=0,
+        skipped_p_packets=0,
+        queue_full_events=0,
+        peak_queue_size=0,
+    )
+    fast_queue = Queue(maxsize=4)
+    session._h264_subscribers["fast"] = SimpleNamespace(  # type: ignore[assignment]
+        subscriber_id="fast",
+        queue=fast_queue,
+        has_config=True,
+        waiting_for_keyframe=False,
+        enqueued_packets=0,
+        dropped_packets=0,
+        dropped_p_packets=0,
+        skipped_p_packets=0,
+        queue_full_events=0,
+        peak_queue_size=0,
+    )
+    session._broadcast_h264(b"\x00\x00\x01\x41\x09")
+
+    slow = session._h264_subscribers["slow"]
+    assert slow.dropped_p_packets == 1
+    assert slow.waiting_for_keyframe is True
+    assert fast_queue.get_nowait() == b"\x03\x00\x00\x01\x41\x09"
+    assert sent_commands == [b"REQUEST_IDR\n"]
+    session.stop()
+
+
+def test_h264_slow_subscriber_clears_stale_packets_and_keeps_config() -> None:
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings={**HarmonyOfficialSessionManager.DEFAULTS, "frame_queue_capacity": 1},
+    )
+    session._latest_h264_config = b"\x01config"
+    queue = Queue(maxsize=4)
+    queue.put(b"\x01old-config")
+    queue.put(b"\x03old-p-1")
+    queue.put(b"\x03old-p-2")
+    queue.put(b"\x03old-p-3")
+    session._h264_subscribers["slow"] = SimpleNamespace(  # type: ignore[assignment]
+        subscriber_id="slow",
+        queue=queue,
+        has_config=True,
+        waiting_for_keyframe=False,
+        enqueued_packets=0,
+        dropped_packets=0,
+        dropped_p_packets=0,
+        skipped_p_packets=0,
+        queue_full_events=0,
+        peak_queue_size=0,
+    )
+
+    session._broadcast_h264(b"\x00\x00\x01\x41new-p")
+
+    subscriber = session._h264_subscribers["slow"]
+    assert subscriber.waiting_for_keyframe is True
+    assert subscriber.has_config is True
+    assert subscriber.dropped_p_packets == 4
+    assert list(queue.queue) == [b"\x01config"]
+    session.stop()
+
+
+def test_h264_subscription_does_not_schedule_idr_retry() -> None:
     sent_commands: list[bytes] = []
     session = HarmonyOfficialSession(
         serial="device-1",
@@ -177,12 +276,14 @@ def test_h264_action_refresh_requests_idr_after_input() -> None:
         send=sent_commands.append,
         stop=lambda timeout=5.0: None,
     )
-    session._h264_subscribers["subscriber-1"] = SimpleNamespace(queue=Queue())  # type: ignore[assignment]
+    queue = session.subscribe_h264("subscriber-1")
+    assert queue.empty()
 
-    session._schedule_h264_action_refresh()
-    time.sleep(0.25)
+    session._broadcast_h264(
+        b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02"
+        b"\x00\x00\x01\x65\x03"
+    )
 
-    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
     session.stop()
 
 
