@@ -30,7 +30,7 @@ from worker.platforms.harmony_official.protocol import (
 
 logger = logging.getLogger(__name__)
 
-H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 60.0
+H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 600.0
 
 
 @dataclass

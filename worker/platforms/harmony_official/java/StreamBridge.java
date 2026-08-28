@@ -26,6 +26,7 @@ public final class StreamBridge {
     private static final String TYPE_MOBILE = "mobile";
     private static final String TYPE_PC = "pc";
     private static final long STATS_INTERVAL_MS = 60_000L;
+    private static final long BACKPRESSURE_LOG_INTERVAL_MS = 600_000L;
     private static final long WRITE_BLOCK_THRESHOLD_MS = 100L;
 
     private final String serial;
@@ -151,7 +152,7 @@ public final class StreamBridge {
         backpressureMonitorThread = new Thread(() -> {
             while (running) {
                 try {
-                    Thread.sleep(STATS_INTERVAL_MS);
+                    Thread.sleep(BACKPRESSURE_LOG_INTERVAL_MS);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     return;
