@@ -18,7 +18,6 @@ from worker.platforms.harmony_official.protocol import (
     iter_messages,
 )
 from worker.platforms.harmony_official.session import (
-    HarmonyOfficialError,
     HarmonyOfficialSession,
     HarmonyOfficialSessionManager,
     _h264_websocket_packets,
@@ -325,35 +324,35 @@ def test_input_commands_and_gesture_step_limits() -> None:
     assert HarmonyOfficialSession._gesture_steps(100, 100) == 40
 
 
-def test_auto_mode_returns_none_when_hdc_is_unavailable() -> None:
-    manager = HarmonyOfficialSessionManager("harmony_mobile", {"mode": "auto"})
+def test_default_mode_returns_none_when_hdc_is_unavailable() -> None:
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
 
     assert manager.get_or_start("device-1") is None
 
 
-def test_official_mode_rejects_missing_hdc() -> None:
-    manager = HarmonyOfficialSessionManager("harmony_mobile", {"mode": "official"})
+def test_legacy_mode_settings_cannot_disable_official_fallback() -> None:
+    manager = HarmonyOfficialSessionManager(
+        "harmony_mobile",
+        {
+            "enabled": False,
+            "mode": "legacy",
+            "fallback_to_legacy": False,
+        },
+    )
 
-    with pytest.raises(HarmonyOfficialError, match="HDC"):
-        manager.get_or_start("device-1")
+    assert "enabled" not in manager._settings
+    assert "mode" not in manager._settings
+    assert "fallback_to_legacy" not in manager._settings
+    assert manager.get_or_start("device-1") is None
 
 
 def test_locked_device_does_not_start_official_java() -> None:
-    manager = HarmonyOfficialSessionManager("harmony_mobile", {"mode": "auto"})
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
     manager.set_hdc_path("hdc.exe")
     manager.set_device_lock_checker(lambda serial: True)
 
     assert manager.get_or_start("device-1") is None
     assert manager.get("device-1") is None
-
-
-def test_locked_device_is_rejected_in_official_mode() -> None:
-    manager = HarmonyOfficialSessionManager("harmony_mobile", {"mode": "official"})
-    manager.set_hdc_path("hdc.exe")
-    manager.set_device_lock_checker(lambda serial: True)
-
-    with pytest.raises(HarmonyOfficialError, match="锁屏"):
-        manager.get_or_start("device-1")
 
 
 def test_session_lease_stops_bridge_after_last_consumer() -> None:
@@ -366,7 +365,7 @@ def test_session_lease_stops_bridge_after_last_consumer() -> None:
         def stop(self) -> None:
             self.stop_count += 1
 
-    manager = HarmonyOfficialSessionManager("harmony_mobile", {"mode": "auto"})
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
     manager.set_hdc_path("hdc.exe")
     fake = FakeSession()
     manager._sessions["device-1"] = fake  # type: ignore[assignment]
@@ -392,7 +391,7 @@ def test_repeated_prewarm_does_not_extend_idle_timer() -> None:
 
     manager = HarmonyOfficialSessionManager(
         "harmony_mobile",
-        {"mode": "auto", "idle_timeout_seconds": 600},
+        {"idle_timeout_seconds": 600},
     )
     manager.set_hdc_path("hdc.exe")
     manager._sessions["device-1"] = FakeSession()  # type: ignore[assignment]

@@ -382,9 +382,8 @@ class SettingsWindow(QDialog):
         discover_ios = worker.get("discover_ios_devices", False)
         self.discover_ios_checkbox.setChecked(discover_ios)
 
-        legacy_harmony = worker.get("discover_harmony_devices", False)
-        discover_harmony_mobile = worker.get("discover_harmony_mobile_devices", legacy_harmony)
-        discover_harmony_pc = worker.get("discover_harmony_pc_devices", legacy_harmony)
+        discover_harmony_mobile = worker.get("discover_harmony_mobile_devices", False)
+        discover_harmony_pc = worker.get("discover_harmony_pc_devices", False)
         self.discover_harmony_mobile_checkbox.setChecked(discover_harmony_mobile)
         self.discover_harmony_pc_checkbox.setChecked(discover_harmony_pc)
 
@@ -486,7 +485,6 @@ class SettingsWindow(QDialog):
             original_content = self._update_yaml_value(original_content, "discover_ios_devices", "true" if self.discover_ios_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_harmony_mobile_devices", "true" if self.discover_harmony_mobile_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_harmony_pc_devices", "true" if self.discover_harmony_pc_checkbox.isChecked() else "false")
-            original_content = self._update_yaml_value(original_content, "discover_harmony_devices", "true" if (self.discover_harmony_mobile_checkbox.isChecked() or self.discover_harmony_pc_checkbox.isChecked()) else "false")
 
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
@@ -507,10 +505,6 @@ class SettingsWindow(QDialog):
             self._config["worker"]["discover_ios_devices"] = self.discover_ios_checkbox.isChecked()
             self._config["worker"]["discover_harmony_mobile_devices"] = self.discover_harmony_mobile_checkbox.isChecked()
             self._config["worker"]["discover_harmony_pc_devices"] = self.discover_harmony_pc_checkbox.isChecked()
-            self._config["worker"]["discover_harmony_devices"] = (
-                self.discover_harmony_mobile_checkbox.isChecked()
-                or self.discover_harmony_pc_checkbox.isChecked()
-            )
 
             self._config.setdefault("external_services", {})
             self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()

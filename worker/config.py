@@ -58,7 +58,6 @@ class WorkerConfig:
     discover_ios_devices: bool = False      # 是否发现 iOS 设备
     discover_harmony_mobile_devices: bool = False  # 是否发现鸿蒙移动设备
     discover_harmony_pc_devices: bool = False  # 是否发现鸿蒙 PC 设备
-    discover_harmony_devices: bool = False  # 兼容旧版统一鸿蒙发现配置
 
     # 外部服务地址
     platform_api: str = "http://192.168.0.102:8000"
@@ -129,13 +128,6 @@ class WorkerConfig:
         return ""
 
     def __post_init__(self) -> None:
-        """兼容旧代码直接传入统一鸿蒙开关的场景。"""
-        if self.discover_harmony_devices and not (
-            self.discover_harmony_mobile_devices or self.discover_harmony_pc_devices
-        ):
-            self.discover_harmony_mobile_devices = True
-            self.discover_harmony_pc_devices = True
-
         self.namespace_overrides = {
             str(key).strip(): str(value).strip()
             for key, value in (self.namespace_overrides or {}).items()
@@ -189,15 +181,6 @@ class WorkerConfig:
         recording_cfg = data.get("recording", {})
         websocket_cfg = data.get("websocket_streaming", {})
 
-        # 旧版只有一个鸿蒙开关。新字段存在时优先使用新字段，旧配置则兼容为同时开启两类设备。
-        legacy_harmony = worker_data.get("discover_harmony_devices")
-        harmony_mobile = worker_data.get("discover_harmony_mobile_devices")
-        harmony_pc = worker_data.get("discover_harmony_pc_devices")
-        if harmony_mobile is None:
-            harmony_mobile = bool(legacy_harmony) if legacy_harmony is not None else False
-        if harmony_pc is None:
-            harmony_pc = bool(legacy_harmony) if legacy_harmony is not None else False
-
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
             ip=worker_data.get("ip"),
@@ -210,9 +193,8 @@ class WorkerConfig:
             action_step_delay=worker_data.get("action_step_delay", 0.5),
             discover_android_devices=worker_data.get("discover_android_devices", False),
             discover_ios_devices=worker_data.get("discover_ios_devices", False),
-            discover_harmony_mobile_devices=bool(harmony_mobile),
-            discover_harmony_pc_devices=bool(harmony_pc),
-            discover_harmony_devices=False,
+            discover_harmony_mobile_devices=bool(worker_data.get("discover_harmony_mobile_devices", False)),
+            discover_harmony_pc_devices=bool(worker_data.get("discover_harmony_pc_devices", False)),
             platform_api=external.get("platform_api", "http://192.168.0.102:8000"),
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
@@ -571,7 +553,6 @@ def merge_config_with_local_protection(
         "discover_ios_devices",
         "discover_harmony_mobile_devices",
         "discover_harmony_pc_devices",
-        "discover_harmony_devices",
     ]
 
     # 合并：保留本地特定字段
@@ -579,13 +560,6 @@ def merge_config_with_local_protection(
         for field in preserved_fields:
             if field in existing_worker and existing_worker[field] is not None:
                 new_data["worker"][field] = existing_worker[field]
-
-        # 旧版本配置只有统一鸿蒙开关时，将其迁移为两个本地开关，避免升级后意外关闭发现。
-        legacy_harmony = existing_worker.get("discover_harmony_devices")
-        if legacy_harmony is not None:
-            for field in ("discover_harmony_mobile_devices", "discover_harmony_pc_devices"):
-                if field not in existing_worker:
-                    new_data["worker"][field] = bool(legacy_harmony)
 
     return new_data
 

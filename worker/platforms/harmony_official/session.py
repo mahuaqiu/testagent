@@ -656,11 +656,9 @@ class HarmonyOfficialSession:
 
 
 class HarmonyOfficialSessionManager:
-    """按设备复用官方会话，并在 auto 模式下让调用者回退旧链路。"""
+    """按设备复用官方会话，官方链路失败时回退 HDC。"""
 
     DEFAULTS: dict[str, Any] = {
-        "enabled": True,
-        "mode": "auto",
         "java_path": "java",
         "jar_path": "tools/harmony/hosScrcpy-1.0.15-beta.jar",
         "bridge_class_path": "tools/harmony/bridge",
@@ -676,7 +674,6 @@ class HarmonyOfficialSessionManager:
         "image_scale_size": 720,
         "frame_rate": 10,
         "bit_rate": 4_000_000,
-        "fallback_to_legacy": True,
     }
 
     def __init__(self, device_type: str, config: dict[str, Any] | None = None) -> None:
@@ -693,18 +690,6 @@ class HarmonyOfficialSessionManager:
         self._prewarm_generation = 0
         self._device_lock_checker: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
-
-    @property
-    def mode(self) -> str:
-        return str(self._settings["mode"])
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self._settings["enabled"]) and self.mode != "legacy"
-
-    @property
-    def fallback_to_legacy(self) -> bool:
-        return self.mode == "auto" and bool(self._settings["fallback_to_legacy"])
 
     @property
     def prewarm_on_device_ready(self) -> bool:
@@ -739,15 +724,10 @@ class HarmonyOfficialSessionManager:
         *,
         retry_attempts: int | None = None,
     ) -> HarmonyOfficialSession | None:
-        """返回可用官方会话；auto 失败返回 ``None``，official 模式抛异常。"""
-        if not self.enabled:
-            return None
+        """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。"""
         if not self._hdc_path:
             return self._handle_start_failure("HDC 路径不可用")
         if self._is_device_locked(serial):
-            detail = "设备处于锁屏状态，等待解锁后启动官方会话"
-            if self.mode == "official" or not self.fallback_to_legacy:
-                raise HarmonyOfficialError(f"鸿蒙官方 HOScrcpy 不可用: {detail}")
             logger.debug("鸿蒙设备处于锁屏状态，等待解锁后启动官方会话: serial=%s", serial)
             return None
 
@@ -802,7 +782,7 @@ class HarmonyOfficialSessionManager:
 
     def prewarm(self, serial: str, owner: str | None = None) -> None:
         """后台预热官方会话，不阻塞当前鸿蒙动作。"""
-        if not self.enabled or not self._hdc_path:
+        if not self._hdc_path:
             return
         if self._is_device_locked(serial):
             logger.debug("鸿蒙设备处于锁屏状态，跳过官方会话预热: serial=%s", serial)
@@ -983,18 +963,17 @@ class HarmonyOfficialSessionManager:
 
     def _handle_start_failure(self, detail: str) -> None:
         message = f"鸿蒙官方 HOScrcpy 不可用: {detail}"
-        if self.mode == "official" or not self.fallback_to_legacy:
-            raise HarmonyOfficialError(message)
         logger.warning("%s；将回退 HDC 路径", message)
         return None
 
     def _build_settings(self, config: dict[str, Any]) -> dict[str, Any]:
         settings = dict(self.DEFAULTS)
-        settings.update({key: value for key, value in config.items() if value is not None})
-        mode = str(settings["mode"]).lower()
-        if mode not in {"auto", "official", "legacy"}:
-            raise ValueError(f"harmony_official.mode 必须是 auto、official 或 legacy: {mode}")
-        settings["mode"] = mode
+        # 仅读取已支持的运行参数，历史配置中的模式和回退开关不再生效。
+        settings.update({
+            key: value
+            for key, value in config.items()
+            if key in self.DEFAULTS and value is not None
+        })
         base_dir = Path(get_base_dir())
         for key in ("java_path", "jar_path", "bridge_class_path"):
             value = Path(str(settings[key]))

@@ -198,7 +198,7 @@ STOPPED -> STARTING -> READY -> STREAMING
 
 | 现有模块 | 接入方式 |
 |---|---|
-| `worker/screen/frame_source.py` | 新增 `HarmonyOfficialFrameSource`，优先返回 session 的最新 JPEG，保留旧 `HarmonyFrameSource` 作为配置开关或 fallback |
+| `worker/screen/frame_source.py` | 新增 `HarmonyOfficialFrameSource`，优先返回 session 的最新 JPEG，官方链路不可用时回退旧 `HarmonyFrameSource` |
 | `worker/screen/manager.py` | 继续复用 ScreenManager；重点确认取帧语义改为“最新帧”，避免通用队列造成延迟 |
 | `worker/server.py` | 第一阶段仍把鸿蒙 codec 归一为 JPEG；只切换 `_create_frame_source` 和会话生命周期 |
 | `worker/platforms/harmony.py` | `take_screenshot/get_screenshot` 优先从官方 session 取最新帧，HDC 截图作为显式降级 |
@@ -212,9 +212,9 @@ STOPPED -> STARTING -> READY -> STREAMING
 第一阶段兼容策略：
 
 - 默认仍使用 JPEG WebSocket，避免前端同步改造。
-- `harmony_capture_mode` 建议支持 `legacy`、`official`、`auto`；初次发布可默认 `auto`，失败时回退旧实现。
-- 生产日志必须标记实际使用的采集模式，不能只记录“鸿蒙推流已启动”。
-- fallback 不能静默吞掉官方 session 的失败，应记录失败原因、回退次数和当前模式。
+- Worker 固定优先使用官方链路，官方链路失败时回退旧 HDC/agent 实现，不提供采集模式配置开关。
+- 生产日志必须标记实际使用的采集链路，不能只记录“鸿蒙推流已启动”。
+- fallback 不能静默吞掉官方 session 的失败，应记录失败原因和回退次数。
 
 ### 阶段 3：截图、OCR、失败附件和输入完善
 
@@ -260,18 +260,17 @@ STOPPED -> STARTING -> READY -> STREAMING
 
 ```yaml
 harmony_official:
-  enabled: true
-  mode: auto                 # legacy | official | auto
   jar_path: ""
   java_path: ""
-  bridge_path: ""
+  bridge_class_path: ""
   startup_timeout_seconds: 30
   reconnect_attempts: 3
   reconnect_backoff_seconds: 0.5
   prewarm_on_device_ready: true
   frame_queue_capacity: 2
-  max_decode_width: 1600
-  fallback_to_legacy: true
+  image_scale_size: 720
+  frame_rate: 10
+  bit_rate: 4000000
 ```
 
 发布前必须完成：
@@ -279,7 +278,7 @@ harmony_official:
 1. Windows 打包时确认 JRE、JAR、native server 和 bridge 是否随包发布。
 2. 明确 x86/x64/ARM64 主机与设备组合，不能只按主机架构选择 native 文件。
 3. 记录 HOScrcpy SDK 的 LICENSE、依赖许可证和第三方二进制再分发要求。
-4. 保留 legacy 模式和快速关闭开关，出现设备兼容性问题时可按配置回退。
+4. 固定官方链路优先、失败回退 HDC 的策略；出现设备兼容性问题时通过日志和版本回退处理，不增加运行时模式开关。
 5. 不把开发机绝对路径写入发布配置；路径解析应支持显式配置、项目内置目录和系统 PATH。
 
 ## 5. 测试计划
@@ -296,7 +295,7 @@ harmony_official:
 - 触摸/鼠标命令序列化、节流、坐标边界和平台路由测试。
 - `HarmonyOfficialFrameSource` 与现有 ScreenManager 的 mock 集成测试。
 - 截图优先级、HDC fallback、ArtifactService 调用和错误截图测试。
-- legacy 模式回归测试，确保官方模式失败不会破坏原有路径。
+- 官方链路失败回退 HDC 的回归测试，确保失败不会破坏原有路径。
 
 ### 5.2 移动真机测试
 
@@ -391,7 +390,7 @@ harmony_official:
 - [ ] 确认 JAR、native server、gRPC、Guava、FFmpeg 等依赖的许可证和再分发要求。
 - [ ] 确认 Worker 安装包如何定位 JAR、JRE、HDC 和临时目录。
 - [ ] 确认杀进程、设备拔出和 Worker 重启时不会误杀用户已有的 HDC 服务。
-- [ ] 准备 legacy/official/auto 三种开关和失败回退策略。
+- [ ] 验证官方链路优先、失败回退 HDC 的固定策略。
 
 ## 7. 真机测试记录模板
 
@@ -423,7 +422,7 @@ READY 耗时：
 
 异常现象：
 日志位置：
-是否可回退 legacy：
+是否成功回退 HDC：
 ```
 
 ## 8. 开始编码前的决策门
@@ -432,10 +431,10 @@ READY 耗时：
 
 1. 已有真实 JAR 的 API 签名和 native 资产清单。
 2. 移动端至少能完成一轮视频、触摸和截图验证。
-3. PC 端至少能确认视频和鼠标 API 的可用性；如果暂时没有 PC 真机，可以先实现移动端受配置保护的会话层，但 PC 必须保持 legacy/未启用，不能默认切换。
+3. PC 端至少能确认视频和鼠标 API 的可用性；如果暂时没有 PC 真机，可以先实现移动端会话层，但不能引入运行时模式开关。
 4. 已决定 Python 侧 H.264 解码路径，并能在无真机环境用 fixture 回归；鸿蒙 H.264 WebSocket 直通帧协议也已完成 fixture 回归。
 5. 已确定 Java Bridge 的 framing、停止、错误和重连协议。
-6. 已确定官方模式失败时的 legacy fallback 和配置开关。
+6. 已确定官方链路失败时固定回退 HDC，不提供运行时模式开关。
 7. 已确认不会破坏现有 `GET /worker_devices`、任务截图、失败附件和 JPEG WebSocket 行为；鸿蒙 H.264 由官方会话直接转发。
 
 当前状态：移动端的第 1、2、4、5、6、7 项已完成实现，Java Bridge、H.264 WebSocket 帧拆分与 Worker 单元测试通过，移动端 Java 会话、H.264 解码、最新帧截图、点击、滑动、HTTP/WebSocket 端到端回归及设备上线预热/600 秒空闲保活已验证；启动失败时会在 Bridge 退出后立即结束首帧等待并快速重试。鸿蒙 PC 的官方视频和鼠标真机验收仍待设备到位；两端长稳和断线恢复仍需继续执行。

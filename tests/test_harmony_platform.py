@@ -658,7 +658,7 @@ def test_harmony_device_monitor_preserves_metadata_when_marked_online() -> None:
     from worker.device_monitor import DeviceMonitor
     from worker.config import WorkerConfig
 
-    monitor = DeviceMonitor(WorkerConfig(discover_harmony_devices=True))
+    monitor = DeviceMonitor(WorkerConfig(discover_harmony_pc_devices=True))
     monitor._faulty_harmony_pc_devices.append(
         {
             "udid": "pc-001",
@@ -684,7 +684,7 @@ def test_harmony_device_monitor_refreshes_metadata_and_moves_category() -> None:
     from worker.device_monitor import DeviceMonitor
     from worker.config import WorkerConfig
 
-    monitor = DeviceMonitor(WorkerConfig(discover_harmony_devices=True))
+    monitor = DeviceMonitor(WorkerConfig(discover_harmony_mobile_devices=True, discover_harmony_pc_devices=True))
     monitor._harmony_mobile_devices.append({
         "udid": "target-001",
         "device_category": "mobile",
@@ -710,35 +710,6 @@ def test_harmony_device_monitor_refreshes_metadata_and_moves_category() -> None:
 
 def test_harmony_discovery_defaults_are_disabled() -> None:
     config = WorkerConfig()
-
-    assert config.discover_harmony_mobile_devices is False
-    assert config.discover_harmony_pc_devices is False
-
-
-def test_harmony_legacy_discovery_config_enables_both_types(tmp_path) -> None:
-    config_path = tmp_path / "worker.yaml"
-    config_path.write_text(
-        "worker:\n  discover_harmony_devices: true\n",
-        encoding="utf-8",
-    )
-
-    config = WorkerConfig.from_yaml(str(config_path))
-
-    assert config.discover_harmony_mobile_devices is True
-    assert config.discover_harmony_pc_devices is True
-
-
-def test_harmony_split_discovery_config_takes_priority_over_legacy(tmp_path) -> None:
-    config_path = tmp_path / "worker.yaml"
-    config_path.write_text(
-        "worker:\n"
-        "  discover_harmony_devices: true\n"
-        "  discover_harmony_mobile_devices: false\n"
-        "  discover_harmony_pc_devices: false\n",
-        encoding="utf-8",
-    )
-
-    config = WorkerConfig.from_yaml(str(config_path))
 
     assert config.discover_harmony_mobile_devices is False
     assert config.discover_harmony_pc_devices is False

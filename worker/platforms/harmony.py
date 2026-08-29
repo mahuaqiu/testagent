@@ -379,11 +379,7 @@ class HarmonyPlatformManager(PlatformManager):
         return self.get_screenshot(client)
 
     def get_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
-        """获取或启动设备级官方会话（兼容旧调用方）。
-
-        ``auto`` 模式失败时返回 ``None``，调用方继续走 HDC；``official``
-        模式失败时抛出异常，避免静默退回高延迟路径。
-        """
+        """获取或启动设备级官方会话，失败时由调用方继续走 HDC。"""
         return self._official_sessions.get_or_start(udid)
 
     def acquire_official_session(
@@ -436,12 +432,10 @@ class HarmonyPlatformManager(PlatformManager):
         operation: str,
         exc: Exception,
     ) -> None:
-        """记录官方链路运行期故障，并按配置决定是否允许 HDC 回退。"""
+        """记录官方链路运行期故障，并回退到 HDC。"""
         if not isinstance(exc, HarmonyOfficialError):
             exc = HarmonyOfficialError(str(exc))
         self._official_sessions.stop_session(udid)
-        if not self._official_sessions.fallback_to_legacy:
-            raise exc
         logger.warning(
             "鸿蒙官方%s失败，回退 HDC: device=%s, error=%s",
             operation,
