@@ -94,6 +94,7 @@ class WorkerConfig:
     # WebSocket 推流配置
     websocket_max_connections_per_device: int = 3
     websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
+    websocket_idle_timeout_seconds: int = 900  # 无用户操作后自动断开（秒）
     websocket_streaming_fps: int = 10  # 推流帧率
     websocket_streaming_codec: str = "jpeg"  # 默认编码格式
     websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
@@ -213,6 +214,7 @@ class WorkerConfig:
             recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
             websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
             websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
+            websocket_idle_timeout_seconds=websocket_cfg.get("idle_timeout_seconds", 900),
             websocket_streaming_fps=websocket_cfg.get("streaming_fps", 10),
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
             websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),

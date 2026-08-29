@@ -287,6 +287,9 @@ paths:
       summary: "实时屏幕 WebSocket 推流"
       description: |
         通过 WebSocket 推送设备屏幕帧。该路由实际使用 WebSocket 握手，OpenAPI 仅用于描述连接参数。
+        Worker 默认在 900 秒（15 分钟）内未收到前端用户活动信号时主动关闭连接；前端用户操作通过
+        `{"type":"activity"}` 信号续期，推流帧本身不会续期空闲时间。关闭连接后会释放推流帧源，
+        鸿蒙官方 Java 会话再按其自身的空闲保活配置退出。
         codec 支持 jpeg、h264、mjpeg；Windows 的 h264 优先使用 RSM1 二进制媒体通道，
         iOS 的 mjpeg 使用设备 MJPEG 透传，Windows 不支持 mjpeg，iOS/Android 不支持 h264 时回退为 jpeg。
         鸿蒙设备仅支持 jpeg，h264/mjpeg 会回退为 jpeg。

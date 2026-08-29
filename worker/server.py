@@ -61,6 +61,7 @@ _ws_connections: dict[str, int] = {}
 # 默认 WebSocket 配置（会被 worker.config 覆盖）
 DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
+DEFAULT_WS_IDLE_TIMEOUT = 900
 DEFAULT_WS_STREAMING_FPS = 10
 DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
 DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
@@ -1075,6 +1076,7 @@ async def screen_stream(
     streaming_fps = DEFAULT_WS_STREAMING_FPS
     streaming_bitrate = DEFAULT_WS_STREAMING_BITRATE
     streaming_profile = DEFAULT_WS_STREAMING_PROFILE
+    idle_timeout = DEFAULT_WS_IDLE_TIMEOUT
     harmony_fps = DEFAULT_HARMONY_STREAMING_FPS
     harmony_jpeg_quality = DEFAULT_HARMONY_STREAMING_JPEG_QUALITY
     harmony_max_long_edge = DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE
@@ -1084,6 +1086,7 @@ async def screen_stream(
         streaming_fps = worker.config.websocket_streaming_fps
         streaming_bitrate = worker.config.websocket_streaming_bitrate
         streaming_profile = worker.config.websocket_streaming_profile
+        idle_timeout = worker.config.websocket_idle_timeout_seconds
         harmony_fps = worker.config.harmony_streaming_fps
         harmony_jpeg_quality = worker.config.harmony_streaming_jpeg_quality
         harmony_max_long_edge = worker.config.harmony_streaming_max_long_edge
@@ -1114,6 +1117,58 @@ async def screen_stream(
     # 日志显示 monitor 参数
     log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
     logger.info(f"WebSocket connected: platform={platform}, device={log_device}, count={current_count + 1}")
+
+    # 推流帧持续发送不能代表用户仍在操作。前端在用户操作时发送
+    # {"type": "activity"}，Worker 同时保留服务端空闲超时作为兜底，
+    # 防止浏览器定时器被节流或前端页面未正确卸载时推流资源长期占用。
+    last_activity_at = time.monotonic()
+    stream_stop_event = asyncio.Event()
+
+    async def receive_activity() -> None:
+        """接收前端活动信号；推流帧本身不刷新空闲时间。"""
+        nonlocal last_activity_at
+        while not stream_stop_event.is_set():
+            try:
+                message = await websocket.receive()
+            except (WebSocketDisconnect, RuntimeError):
+                stream_stop_event.set()
+                return
+            if message.get("type") == "websocket.disconnect":
+                stream_stop_event.set()
+                return
+            text = message.get("text")
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get("type") == "activity":
+                last_activity_at = time.monotonic()
+
+    async def close_when_idle() -> None:
+        """服务端空闲超时关闭 WebSocket，确保主循环进入 finally 清理资源。"""
+        timeout = max(1.0, float(idle_timeout))
+        while not stream_stop_event.is_set():
+            await asyncio.sleep(min(1.0, timeout))
+            if time.monotonic() - last_activity_at < timeout:
+                continue
+            logger.info(
+                "WebSocket 因无用户操作自动断开: platform=%s, device=%s, idle_seconds=%.0f",
+                platform,
+                log_device,
+                timeout,
+            )
+            stream_stop_event.set()
+            try:
+                # 使用正常关闭码，避免前端把服务端空闲回收误判为异常并自动重连。
+                await websocket.close(code=1000, reason="idle_timeout")
+            except Exception as exc:
+                logger.debug("服务端空闲关闭 WebSocket 失败: %s", exc)
+            return
+
+    activity_task = asyncio.create_task(receive_activity())
+    idle_watchdog_task = asyncio.create_task(close_when_idle())
 
     frame_source = None
     screen_manager = None
@@ -1266,7 +1321,7 @@ async def screen_stream(
             _diag_max_send_ms = 0.0
             _diag_last_sequence = None
             try:
-                while streamer.is_running():
+                while streamer.is_running() and not stream_stop_event.is_set():
                     packet = await streamer.get_media_packet_async()
                     if not packet:
                         continue
@@ -1316,7 +1371,7 @@ async def screen_stream(
             _sps_pps_start = _time.monotonic()
 
             # 等待 SPS 和 PPS 都收到（带总超时，单次 0.5s 超时不立即放弃）
-            while sps_data is None or pps_data is None:
+            while (sps_data is None or pps_data is None) and not stream_stop_event.is_set():
                 wait_count += 1
                 frame_type, frame_data = await reader.get_frame()
                 logger.info("screen_stream: get_frame() 返回: type=%s, data=%s, wait_count=%d", frame_type, "None" if frame_data is None else f"{len(frame_data)} bytes", wait_count)
@@ -1349,7 +1404,7 @@ async def screen_stream(
                 frame_interval = 1.0 / streaming_fps if streaming_fps > 0 else 0.0
                 import time as _t
                 last_send = _t.monotonic()
-                while reader.is_running():
+                while reader.is_running() and not stream_stop_event.is_set():
                     frame_type, frame_data = await reader.get_frame()
                     if not frame_data:
                         continue
@@ -1379,7 +1434,7 @@ async def screen_stream(
                 reader.stop_push()
         elif is_harmony and codec == "h264":
             # 鸿蒙官方 H.264：订阅队列中的协议帧并直接转发。
-            while frame_source.h264_stream_running():
+            while frame_source.h264_stream_running() and not stream_stop_event.is_set():
                 try:
                     frame = await asyncio.to_thread(h264_queue.get, timeout=1.0)
                 except Empty:
@@ -1422,7 +1477,7 @@ async def screen_stream(
                     timeout=send_timeout,
                 )
 
-            if not frame_source.h264_stream_running():
+            if not frame_source.h264_stream_running() and not stream_stop_event.is_set():
                 await _send_harmony_h264_fallback(
                     websocket,
                     "鸿蒙官方 H.264 会话已停止",
@@ -1456,7 +1511,7 @@ async def screen_stream(
                 else:
                     logger.error("鸿蒙未取得真机分辨率，禁用降采样(坐标安全优先)，仅降质")
             _logged_reencode = False
-            while streamer.is_running():
+            while streamer.is_running() and not stream_stop_event.is_set():
                 # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
                 await asyncio.sleep(1.0 / streaming_fps)
 
@@ -1503,6 +1558,11 @@ async def screen_stream(
         else:
             logger.error(f"WebSocket error: {e}")
     finally:
+        stream_stop_event.set()
+        for background_task in (activity_task, idle_watchdog_task):
+            if not background_task.done():
+                background_task.cancel()
+        await asyncio.gather(activity_task, idle_watchdog_task, return_exceptions=True)
         if h264_queue is not None:
             logger.info(
                 "鸿蒙 H.264 WebSocket 发送统计: conn_key=%s, packets=%d, bytes=%d, "

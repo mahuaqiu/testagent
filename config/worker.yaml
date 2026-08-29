@@ -329,6 +329,7 @@ recording:
 websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
+  idle_timeout_seconds: 900      # 无用户操作后自动断开推流（秒，15分钟）
   streaming_fps: 10              # Streaming frame rate
   harmony_streaming_fps: 10      # Harmony 推流帧率（官方 H.264/JPEG 统一不超过 10fps）
   streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). Keep jpeg by default.
