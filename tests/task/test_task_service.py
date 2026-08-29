@@ -34,6 +34,12 @@ def make_action_task(action_types, platform="web", task_id="task-1"):
     return task
 
 
+def make_device_action_task(device_id, platform="harmony_pc", task_id="task-1"):
+    task = make_action_task(["cmd_exec"], platform=platform, task_id=task_id)
+    task.device_id = device_id
+    return task
+
+
 def test_task_service_runs_sync_and_keeps_queryable_result(tmp_path):
     def callback(task, cancel_event):
         return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
@@ -147,6 +153,81 @@ def test_cmd_exec_does_not_block_platform_resource(tmp_path):
     assert result.status == TaskStatus.SUCCESS
 
     command_release.set()
+    service.shutdown()
+
+
+def test_cmd_exec_isolated_by_mobile_device_sn(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def callback(task, cancel_event):
+        started.set()
+        release.wait(2)
+        return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
+
+    service, _ = make_service(tmp_path, callback)
+    service.submit_async(make_device_action_task("sn-1", task_id="command-1"))
+    assert started.wait(1)
+
+    # 同一个 Worker、同一个 IP 下，不同 SN 的鸿蒙设备可以同时执行命令。
+    second_id, status = service.submit_async(
+        make_device_action_task("sn-2", task_id="command-2")
+    )
+    assert second_id == "command-2"
+    assert status == TaskStatus.RUNNING.value
+
+    release.set()
+    service.shutdown()
+
+
+def test_cmd_exec_same_mobile_device_remains_exclusive(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def callback(task, cancel_event):
+        started.set()
+        release.wait(2)
+        return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
+
+    service, _ = make_service(tmp_path, callback)
+    service.submit_async(make_device_action_task("sn-1", task_id="command-1"))
+    assert started.wait(1)
+
+    try:
+        service.submit_async(make_device_action_task("sn-1", task_id="command-2"))
+    except Exception as exc:
+        assert getattr(exc, "code", None) == "DEVICE_BUSY"
+    else:
+        raise AssertionError("同一 SN 的 cmd_exec 必须互斥")
+
+    release.set()
+    service.shutdown()
+
+
+def test_remote_domain_does_not_block_regular_task_on_same_device(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def callback(task, cancel_event):
+        if task.execution_domain == "remote":
+            started.set()
+            release.wait(2)
+        return TaskResult(status=TaskStatus.SUCCESS, platform=task.platform)
+
+    service, _ = make_service(tmp_path, callback)
+    remote_task = make_task(platform="harmony_pc", task_id="remote-1")
+    remote_task.device_id = "sn-1"
+    remote_task.execution_domain = "remote"
+    service.submit_async(remote_task)
+    assert started.wait(1)
+
+    regular_task = make_task(platform="harmony_pc", task_id="test-1")
+    regular_task.device_id = "sn-1"
+    task_id, status = service.submit_async(regular_task)
+    assert task_id == "test-1"
+    assert status == TaskStatus.RUNNING.value
+
+    release.set()
     service.shutdown()
 
 

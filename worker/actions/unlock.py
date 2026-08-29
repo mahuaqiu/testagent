@@ -327,7 +327,12 @@ class UnlockScreenAction(ActionExecutor):
         platform_type = platform.platform
 
         if platform_type == "ios":
-            client = context or platform._device_clients.get(platform._current_device)
+            device_id = (
+                platform._device_id_for_context(context)
+                if hasattr(platform, "_device_id_for_context")
+                else getattr(platform, "_current_device", None)
+            )
+            client = context or platform._device_clients.get(device_id)
             if client:
                 try:
                     session_id = client._get_session()

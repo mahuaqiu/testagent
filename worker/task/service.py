@@ -23,6 +23,7 @@ from worker.task.task import Task
 logger = logging.getLogger(__name__)
 
 HOST_COMMAND_RESOURCE_KEY = "host:command"
+REMOTE_EXECUTION_DOMAIN = "remote"
 
 TERMINAL_STATUSES = {
     TaskStatus.SUCCESS.value,
@@ -225,11 +226,17 @@ class TaskService:
 
     @staticmethod
     def _resource_key_for_task(task: Task) -> str:
-        """为任务选择资源域，宿主机命令不占用平台或设备资源。"""
+        """为任务选择资源域。
+
+        普通用例、远程操作和宿主机命令属于不同执行域。带设备 SN 的
+        ``cmd_exec`` 使用设备级命令锁，避免同一 Worker 上不同设备互相影响。
+        """
         from worker.scheduling.models import resource_key
 
         action_types = {action.action_type for action in task.actions}
         if action_types == {"cmd_exec"}:
+            if task.platform in ("android", "ios", "harmony_mobile", "harmony_pc") and task.device_id:
+                return f"command:{task.platform}:{task.device_id}"
             return HOST_COMMAND_RESOURCE_KEY
         if "cmd_exec" in action_types:
             raise WorkerError(
@@ -237,4 +244,8 @@ class TaskService:
                 message="cmd_exec cannot be mixed with platform actions",
                 http_status=400,
             )
+        if task.execution_domain == REMOTE_EXECUTION_DOMAIN:
+            if task.device_id:
+                return f"remote:{task.platform}:{task.device_id}"
+            return f"remote:{task.platform}"
         return resource_key(task.platform, task.device_id)

@@ -51,6 +51,7 @@ class Task:
     created_at: datetime = field(default_factory=datetime.now)
     priority: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
+    execution_domain: str = "task"  # 普通用例或远程操作执行域
 
     @classmethod
     def create(
@@ -64,6 +65,7 @@ class Task:
         priority: int = 0,
         metadata: Optional[Dict[str, Any]] = None,
         generate_id: bool = True,
+        execution_domain: str = "task",
     ) -> "Task":
         """
         创建任务。
@@ -78,6 +80,7 @@ class Task:
             priority: 优先级
             metadata: 元数据
             generate_id: 是否生成 task_id（同步执行时不生成）
+            execution_domain: 执行域，task 为普通用例，remote 为远程操作
 
         Returns:
             Task: 任务对象
@@ -101,6 +104,7 @@ class Task:
             callback_url=callback_url,
             priority=priority,
             metadata=metadata or {},
+            execution_domain=execution_domain,
         )
 
     @classmethod
@@ -117,6 +121,7 @@ class Task:
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             priority=data.get("priority", 0),
             metadata=data.get("metadata", {}),
+            execution_domain=data.get("execution_domain", "task"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -138,4 +143,5 @@ class Task:
             "created_at": self.created_at.isoformat(),
             "priority": self.priority,
             "metadata": self.metadata,
+            "execution_domain": self.execution_domain,
         }

@@ -397,6 +397,44 @@ async def execute_task(request: TaskRequest):
         reset_request_id(request_id_token)
 
 
+@app.post("/remote/execute")
+async def execute_remote_task(request: TaskRequest):
+    """同步执行远程桌面操作，和普通用例使用独立资源域。"""
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    request_id = generate_request_id()
+    request_id_token = set_request_id(request_id)
+    try:
+        logger.info(f"Remote task raw request: {_format_request_for_log(request)}")
+        window_dict = request.window.model_dump(by_alias=True) if request.window else None
+        result = await asyncio.to_thread(
+            worker.execute_remote_sync,
+            request.platform,
+            request.actions,
+            request.device_id,
+            window_dict,
+        )
+        result["request_id"] = request_id
+        logger.info(f"Remote task response: {_format_result_for_log(result)}")
+        return result
+    except WorkerError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
+    except Exception as exc:
+        logger.error(f"execute_remote_sync failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "REMOTE_TASK_EXECUTION_FAILED",
+                "message": str(exc),
+                "retryable": True,
+                "details": {},
+            },
+        ) from exc
+    finally:
+        reset_request_id(request_id_token)
+
+
 @app.post("/task/execute_async")
 async def execute_task_async(request: TaskRequest, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     """异步提交任务，支持幂等键重试。"""

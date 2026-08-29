@@ -193,6 +193,14 @@ class AndroidPlatformManager(PlatformManager):
             return self._device_clients.get(self._current_device)
         return None
 
+    def _device_id_for_context(self, context: Any = None) -> str | None:
+        """根据任务上下文解析设备 SN，避免并发任务依赖共享当前设备字段。"""
+        if context is not None:
+            for udid, client in self._device_clients.items():
+                if client is context:
+                    return udid
+        return self._current_device
+
     def close_session(self, device_id: str | None = None) -> None:
         """关闭会话。"""
         if device_id:
@@ -319,10 +327,10 @@ class AndroidPlatformManager(PlatformManager):
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（使用 ScreenManager）。"""
-        device_id = self._current_device
+        device_id = self._device_id_for_context(context)
         if not device_id:
             # 尝试从 context 获取
-            device = context or self._device_clients.get(self._current_device)
+            device = context
             if device:
                 for udid, d in self._device_clients.items():
                     if d == device:
@@ -351,7 +359,7 @@ class AndroidPlatformManager(PlatformManager):
 
     def _take_screenshot_fallback(self, context: Any = None) -> bytes:
         """获取截图（回退逻辑）。"""
-        device_id = self._current_device
+        device_id = self._device_id_for_context(context)
 
         # 优先使用 minicap（绑过 FLAG_SECURE）
         minicap = self._minicap_instances.get(device_id)
@@ -362,7 +370,7 @@ class AndroidPlatformManager(PlatformManager):
                 logger.warning(f"Minicap screenshot failed: {e}, falling back to uiautomator2")
 
         # 回退到 uiautomator2
-        device = context or self._device_clients.get(self._current_device)
+        device = context or self._device_clients.get(device_id)
         if device:
             from io import BytesIO
             img = device.screenshot()
@@ -451,7 +459,7 @@ class AndroidPlatformManager(PlatformManager):
                 error="package_name is required",
             )
 
-        if not device or not self._current_device:
+        if not device:
             return ActionResult(
                 number=0,
                 action_type="start_app",
@@ -512,7 +520,7 @@ class AndroidPlatformManager(PlatformManager):
 
     def _action_stop_app(self, device, action: Action) -> ActionResult:
         """关闭应用。"""
-        if device and self._current_device:
+        if device:
             package = action.package_name or action.value
             if package:
                 device.app_stop(package)

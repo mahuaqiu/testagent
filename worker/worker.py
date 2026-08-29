@@ -38,6 +38,7 @@ from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
 from worker.tools import get_all_script_versions
 from worker.runtime import WorkerRuntime
 from worker.actions.spec import ActionCancelled, ActionTimedOut, ExecutionControl
+from worker.task.service import REMOTE_EXECUTION_DOMAIN
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,9 @@ class Worker:
 
     @property
     def status(self) -> str:
-        return self._status
+        if self._status == "offline":
+            return self._status
+        return "busy" if self.runtime.active_count > 0 else "online"
 
     def start(self) -> None:
         """启动 Worker。"""
@@ -501,7 +504,7 @@ class Worker:
             os_type=self.host_info.os_type if self.host_info else "unknown",
             os_version=self.host_info.os_version if self.host_info else "unknown",
             supported_platforms=self.supported_platforms,
-            status=self._status,
+            status=self.status,
             port=self.port,
             devices=devices,
             capabilities=capabilities,
@@ -690,7 +693,7 @@ class Worker:
     def get_status(self) -> WorkerStatus:
         """获取 Worker 状态。"""
         return WorkerStatus(
-            status=self._status,
+            status=self.status,
             started_at=self._started_at or datetime.now(),
             supported_platforms=self.supported_platforms,
         )
@@ -729,7 +732,7 @@ class Worker:
             }
 
         return {
-            "status": self._status,
+            "status": self.status,
             "started_at": self._started_at,
             "supported_platforms": self.supported_platforms,
             "ip": ip,
@@ -956,7 +959,7 @@ class Worker:
 
         # 检查是否仅在空闲时清理
         clear_on_idle = web_config.get("cache_clear_clear_on_idle", True)
-        if clear_on_idle and self._status != "online":
+        if clear_on_idle and self.status != "online":
             logger.debug("Not idle, skip cache clear check")
             return
 
@@ -1089,8 +1092,6 @@ class Worker:
 
         context = None
         try:
-            self._status = "busy"
-
             # 检查是否只需要关闭会话（stop_app 动作不需要 context）
             needs_context = self._needs_context(task)
 
@@ -1145,8 +1146,6 @@ class Worker:
             )
 
         finally:
-            self._status = "online"
-
             # 检查是否需要清理 Web 数据
             self._check_and_clear_web_data()
 
@@ -1431,12 +1430,14 @@ class Worker:
         actions: list[dict[str, Any]],
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
+        execution_domain: str = "task",
     ) -> dict[str, Any]:
         task = Task.create(
             platform=platform,
             actions=actions,
             device_id=device_id,
             metadata={"window": window} if window else None,
+            execution_domain=execution_domain,
             generate_id=False,
         )
         result = self.runtime.task_service.execute_sync(
@@ -1444,6 +1445,22 @@ class Worker:
             request_id=get_request_id(),
         )
         return result.to_dict(include_task_id=False)
+
+    def execute_remote_sync(
+        self,
+        platform: str,
+        actions: list[dict[str, Any]],
+        device_id: str | None = None,
+        window: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """执行远程桌面操作，使用独立于普通用例的资源域。"""
+        return self.execute_sync(
+            platform,
+            actions,
+            device_id=device_id,
+            window=window,
+            execution_domain=REMOTE_EXECUTION_DOMAIN,
+        )
 
     def execute_async(
         self,

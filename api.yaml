@@ -105,6 +105,49 @@ paths:
         "503":
           description: "Worker 未初始化"
 
+  /remote/execute:
+    post:
+      summary: "同步执行远程操作"
+      description: |
+        同步执行远程桌面或设备调试操作。该接口使用独立于普通用例
+        `/task/execute` 的远程资源域，因此远程操作不会因为普通用例占用同一设备
+        而在 Worker 调度层返回 busy；推流连接也不占用该任务资源域。
+        移动设备和鸿蒙设备必须传入真实设备 SN/UDID 作为 device_id。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskRequest"
+            example:
+              platform: "harmony_pc"
+              device_id: "HDC-UDID-001"
+              actions:
+                - action_type: "click"
+                  x: 500
+                  y: 300
+      responses:
+        "200":
+          description: "远程操作执行完成（不包含 task_id）"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskResult"
+        "400":
+          description: "任务参数、平台、设备或动作不合法"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
+        "409":
+          description: "同一设备已有远程操作执行中"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerError"
+        "503":
+          description: "Worker 未初始化"
+
   /task/execute_async:
     post:
       summary: "异步执行任务"

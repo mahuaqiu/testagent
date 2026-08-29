@@ -1058,6 +1058,14 @@ class iOSPlatformManager(PlatformManager):
             return self._device_clients.get(self._current_device)
         return None
 
+    def _device_id_for_context(self, context: Any = None) -> str | None:
+        """根据任务上下文解析设备 UDID，避免并发任务依赖共享当前设备字段。"""
+        if context is not None:
+            for udid, client in self._device_clients.items():
+                if client is context:
+                    return udid
+        return self._current_device
+
     def close_session(self, device_id: str | None = None) -> None:
         """关闭会话（不关闭 WDA 进程，保持复用）。"""
         if device_id:
@@ -1074,6 +1082,18 @@ class iOSPlatformManager(PlatformManager):
     # ========== 基础能力实现 ==========
 
     def _convert_coords(self, x: int, y: int) -> tuple[int, int]:
+        """按当前兼容设备转换坐标，保留旧调用签名。"""
+        device_id = self._device_id_for_context()
+        product_type = self._device_product_types.get(device_id, "")
+        return self._convert_coords_for_product(x, y, product_type)
+
+    def _convert_coords_for_context(self, x: int, y: int, context: Any) -> tuple[int, int]:
+        """按任务上下文对应的设备转换坐标，避免并发任务串用当前设备。"""
+        device_id = self._device_id_for_context(context)
+        product_type = self._device_product_types.get(device_id, "")
+        return self._convert_coords_for_product(x, y, product_type)
+
+    def _convert_coords_for_product(self, x: int, y: int, product_type: str) -> tuple[int, int]:
         """转换物理像素坐标到 WDA 逻辑坐标。
 
         判断逻辑：
@@ -1083,8 +1103,7 @@ class iOSPlatformManager(PlatformManager):
         注意：这种方法对于恰好落在逻辑范围内的物理坐标可能出错。
         建议用户使用物理坐标时确保超过逻辑分辨率阈值。
         """
-        # 获取当前设备的逻辑分辨率
-        product_type = self._device_product_types.get(self._current_device, "")
+        # 获取设备的逻辑分辨率
         resolution = self._get_logic_resolution(product_type)
 
         if resolution:
@@ -1215,7 +1234,7 @@ class iOSPlatformManager(PlatformManager):
         if not client:
             raise RuntimeError("No device context")
         # 转换坐标
-        wx, wy = self._convert_coords(x, y)
+        wx, wy = self._convert_coords_for_context(x, y, client)
         if duration > 0:
             # 长按：使用 touch_and_hold，单位转换 毫秒 → 秒
             duration_sec = duration / 1000.0
@@ -1232,7 +1251,7 @@ class iOSPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise RuntimeError("No device context")
-        wx, wy = self._convert_coords(x, y)
+        wx, wy = self._convert_coords_for_context(x, y, client)
         success = client.tap(wx, wy)
         if not success:
             raise RuntimeError(f"First tap failed at ({wx}, {wy})")
@@ -1274,8 +1293,8 @@ class iOSPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise RuntimeError("No device context")
-        wx1, wy1 = self._convert_coords(start_x, start_y)
-        wx2, wy2 = self._convert_coords(end_x, end_y)
+        wx1, wy1 = self._convert_coords_for_context(start_x, start_y, client)
+        wx2, wy2 = self._convert_coords_for_context(end_x, end_y, client)
         # duration 单位转换：毫秒 → 秒
         duration_sec = duration / 1000.0
         logger.debug(f"Swipe from ({wx1}, {wy1}) to ({wx2}, {wy2}) with duration={duration}ms")
@@ -1341,10 +1360,10 @@ class iOSPlatformManager(PlatformManager):
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（使用 ScreenManager）。"""
-        device_id = self._current_device
+        device_id = self._device_id_for_context(context)
         if not device_id:
             # 尝试从 context 获取
-            client = context or self._device_clients.get(self._current_device)
+            client = context
             if client:
                 for udid, c in self._device_clients.items():
                     if c == client:
@@ -1373,7 +1392,8 @@ class iOSPlatformManager(PlatformManager):
 
     def _take_screenshot_fallback(self, context: Any = None) -> bytes:
         """获取截图（回退逻辑）。"""
-        client = context or self._device_clients.get(self._current_device)
+        device_id = self._device_id_for_context(context)
+        client = context or self._device_clients.get(device_id)
         if client:
             data = client.screenshot()
             if not data:
@@ -1400,12 +1420,6 @@ class iOSPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 error="WDA context is invalid",
             )
-
-        if client:
-            for udid, c in self._device_clients.items():
-                if c == client:
-                    self._current_device = udid
-                    break
 
         try:
             if action.action_type == "start_app":
@@ -1462,7 +1476,8 @@ class iOSPlatformManager(PlatformManager):
                 error="bundle_id is required",
             )
 
-        if not client or not self._current_device:
+        device_id = self._device_id_for_context(client)
+        if not client or not device_id:
             return ActionResult(
                 number=0,
                 action_type="start_app",
@@ -1491,7 +1506,7 @@ class iOSPlatformManager(PlatformManager):
         try:
             # 使用 go-ios launch 命令
             success = self._go_ios.launch_app(
-                udid=self._current_device,
+                udid=device_id,
                 bundle_id=bundle_id,
             )
 
@@ -1545,7 +1560,8 @@ class iOSPlatformManager(PlatformManager):
         """关闭应用。"""
         bundle_id = action.bundle_id or action.value
 
-        if not client or not self._current_device:
+        device_id = self._device_id_for_context(client)
+        if not client or not device_id:
             return ActionResult(
                 number=0,
                 action_type="stop_app",
@@ -1557,7 +1573,7 @@ class iOSPlatformManager(PlatformManager):
             if bundle_id:
                 # 使用 go-ios kill 命令
                 success = self._go_ios.kill_app(
-                    udid=self._current_device,
+                    udid=device_id,
                     bundle_id=bundle_id,
                 )
 
