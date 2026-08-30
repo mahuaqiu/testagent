@@ -16,10 +16,10 @@ from queue import Empty
 from typing import Any
 
 import yaml
-from PIL import Image
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from common.request_context import generate_request_id, reset_request_id, set_request_id
@@ -28,6 +28,7 @@ from worker.config import (
     merge_config_with_local_protection,
     save_config_with_version,
 )
+from worker.errors import WorkerError
 from worker.log_query import (
     LogQueryError,
     query_by_lines,
@@ -41,6 +42,7 @@ from worker.performance_monitor import (
     get_collector,
 )
 from worker.platforms.harmony_hdc import _find_hdc_path
+from worker.screen.windows_sidecar import media_packet_to_websocket_frames
 from worker.tools import (
     get_script_version,
     save_script,
@@ -49,9 +51,7 @@ from worker.tools import (
     validate_script_name,
 )
 from worker.upgrade import UpgradeError, UpgradeRequest, get_upgrade_status, start_async_upgrade
-from worker.errors import WorkerError
 from worker.worker import Worker
-from worker.screen.windows_sidecar import media_packet_to_websocket_frames
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ DEFAULT_HARMONY_STREAMING_FPS = 10
 DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
 # 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
 DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
+DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT = 10.0
 # 降采样长边上限：流开头已通过 meta 文本帧把真机分辨率下发给前端做坐标
 # 基准（与推流尺寸解耦），故此处缩小不会影响坐标；<=0 表示不缩放。
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
@@ -1250,8 +1251,9 @@ async def screen_stream(
         # iOS MJPEG 透传模式特殊处理
         if platform == "ios" and codec == "mjpeg":
             # 使用 MJPEG 透传
-            mjpeg_proxy = frame_source.start_mjpeg_proxy()
-            await mjpeg_proxy.proxy_to_websocket(websocket)
+            # 建立 HTTP 长连接可能等待网络超时，不能阻塞 FastAPI 事件循环。
+            mjpeg_proxy = await asyncio.to_thread(frame_source.start_mjpeg_proxy)
+            await mjpeg_proxy.proxy_to_websocket(websocket, stream_stop_event)
             mjpeg_proxy.stop()
             return
 
@@ -1282,7 +1284,7 @@ async def screen_stream(
             h264_subscriber_id = f"{conn_key}/h264/{id(websocket)}"
             h264_wait_deadline = time.monotonic() + DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT
             h264_wait_logged = False
-            while True:
+            while not stream_stop_event.is_set():
                 try:
                     h264_queue = await asyncio.to_thread(
                         frame_source.subscribe_h264,
@@ -1307,6 +1309,8 @@ async def screen_stream(
                 except Exception as exc:
                     await _send_harmony_h264_fallback(websocket, str(exc))
                     return
+            if stream_stop_event.is_set():
+                return
             h264_diag_started_at = time.monotonic()
             logger.info("screen_stream: 使用鸿蒙官方 H.264 直通通道, conn_key=%s", conn_key)
 
@@ -1434,12 +1438,38 @@ async def screen_stream(
                 reader.stop_push()
         elif is_harmony and codec == "h264":
             # 鸿蒙官方 H.264：订阅队列中的协议帧并直接转发。
+            first_video_deadline = time.monotonic() + DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT
+            first_video_received = False
             while frame_source.h264_stream_running() and not stream_stop_event.is_set():
+                if (
+                    not first_video_received
+                    and time.monotonic() >= first_video_deadline
+                ):
+                    await _send_harmony_h264_fallback(
+                        websocket,
+                        "鸿蒙官方 H.264 首个视频帧超时",
+                    )
+                    return
                 try:
-                    frame = await asyncio.to_thread(h264_queue.get, timeout=1.0)
+                    wait_timeout = 1.0
+                    if not first_video_received:
+                        wait_timeout = min(
+                            wait_timeout,
+                            max(0.1, first_video_deadline - time.monotonic()),
+                        )
+                    frame = await asyncio.to_thread(h264_queue.get, timeout=wait_timeout)
                 except Empty:
                     # 官方 HOScrcpy 在静止画面下可能只回调 READY，不持续产生 onData。
                     # 空队列不代表会话失败，只有 Bridge/帧源明确停止时才结束连接。
+                    if (
+                        not first_video_received
+                        and time.monotonic() >= first_video_deadline
+                    ):
+                        await _send_harmony_h264_fallback(
+                            websocket,
+                            "鸿蒙官方 H.264 首个视频帧超时",
+                        )
+                        return
                     continue
                 h264_diag_sent_packets += 1
                 h264_diag_sent_bytes += len(frame)
@@ -1462,6 +1492,7 @@ async def screen_stream(
                         else -1,
                     )
                 if frame and frame[0] in (0x02, 0x03) and h264_diag_first_video_at is None:
+                    first_video_received = True
                     h264_diag_first_video_at = time.monotonic()
                     logger.info(
                         "鸿蒙 H.264 WebSocket 首个视频包: conn_key=%s, frame_type=%s, bytes=%d, elapsed_ms=%.1f",

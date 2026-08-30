@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import time
 from queue import Empty, Queue
@@ -22,6 +23,7 @@ from worker.platforms.harmony_official.session import (
     HarmonyOfficialSessionManager,
     _h264_websocket_packets,
 )
+from worker.screen.mjpeg_proxy import MJPEGProxy
 
 
 def test_hos1_round_trip() -> None:
@@ -262,8 +264,12 @@ def test_h264_slow_subscriber_clears_stale_packets_and_keeps_config() -> None:
     session.stop()
 
 
-def test_h264_subscription_does_not_schedule_idr_retry() -> None:
+def test_h264_subscription_stops_idr_retry_after_success(monkeypatch) -> None:
     sent_commands: list[bytes] = []
+    monkeypatch.setattr(
+        "worker.platforms.harmony_official.session.H264_IDR_RETRY_DELAYS_SECONDS",
+        (0.01, 0.01, 0.01),
+    )
     session = HarmonyOfficialSession(
         serial="device-1",
         device_type="mobile",
@@ -277,12 +283,46 @@ def test_h264_subscription_does_not_schedule_idr_retry() -> None:
     )
     queue = session.subscribe_h264("subscriber-1")
     assert queue.empty()
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
 
     session._broadcast_h264(
         b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02"
         b"\x00\x00\x01\x65\x03"
     )
 
+    time.sleep(0.05)
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
+    session.stop()
+
+
+def test_h264_subscription_retries_idr_for_static_screen(monkeypatch) -> None:
+    sent_commands: list[bytes] = []
+    monkeypatch.setattr(
+        "worker.platforms.harmony_official.session.H264_IDR_RETRY_DELAYS_SECONDS",
+        (0.01, 0.01, 0.01),
+    )
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+
+    session.subscribe_h264("subscriber-1")
+
+    time.sleep(0.08)
+    assert sent_commands == [
+        b"WAKE_STREAM\n",
+        b"REQUEST_IDR\n",
+        b"REQUEST_IDR\n",
+        b"REQUEST_IDR\n",
+        b"REQUEST_IDR\n",
+    ]
     session.stop()
 
 
@@ -297,6 +337,46 @@ def test_h264_packets_are_dropped_without_subscribers() -> None:
 
     assert session._latest_h264_config is None
     assert session._latest_h264_keyframe is None
+
+
+def test_mjpeg_proxy_stops_when_websocket_stop_event_is_set() -> None:
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeWebSocket:
+        def __init__(self, stop_event: asyncio.Event) -> None:
+            self.stop_event = stop_event
+            self.frames: list[bytes] = []
+
+        async def send_bytes(self, frame: bytes) -> None:
+            self.frames.append(frame)
+            self.stop_event.set()
+
+    async def run_proxy() -> tuple[FakeResponse, FakeWebSocket]:
+        stop_event = asyncio.Event()
+        response = FakeResponse()
+        websocket = FakeWebSocket(stop_event)
+        proxy = MJPEGProxy("127.0.0.1")
+        proxy._response = response
+        proxy._iterator = iter(
+            [
+                b"--BoundaryString\r\nContent-Length: 10\r\n\r\njpeg-",
+                b"frame\r\n",
+            ]
+        )
+        proxy._running = True
+
+        await proxy.proxy_to_websocket(websocket, stop_event)
+        return response, websocket
+
+    response, websocket = asyncio.run(run_proxy())
+
+    assert response.closed is True
+    assert websocket.frames == [b"jpeg-frame"]
 
 
 def test_last_h264_unsubscribe_clears_startup_cache() -> None:

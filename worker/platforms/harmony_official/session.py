@@ -30,6 +30,8 @@ from worker.platforms.harmony_official.protocol import (
 
 logger = logging.getLogger(__name__)
 
+H264_IDR_RETRY_DELAYS_SECONDS = (0.8, 2.0, 4.0)
+
 H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 600.0
 
 
@@ -125,6 +127,8 @@ class HarmonyOfficialSession:
         self.hdc_path = hdc_path
         self.settings = settings
         self._h264_subscribers: dict[str, _H264Subscriber] = {}
+        self._h264_idr_retry_timers: dict[str, threading.Timer] = {}
+        self._h264_idr_retry_counts: dict[str, int] = {}
         self._latest_h264_config: bytes | None = None
         self._latest_h264_keyframe: bytes | None = None
         self._bridge: JavaBridgeProcess | None = None
@@ -196,8 +200,13 @@ class HarmonyOfficialSession:
             bridge = self._bridge
             self._bridge = None
             self._h264_subscribers.clear()
+            retry_timers = list(self._h264_idr_retry_timers.values())
+            self._h264_idr_retry_timers.clear()
+            self._h264_idr_retry_counts.clear()
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
+        for timer in retry_timers:
+            timer.cancel()
         monitor_thread = self._h264_monitor_thread
         if monitor_thread and monitor_thread is not threading.current_thread():
             monitor_thread.join(timeout=1.0)
@@ -216,6 +225,7 @@ class HarmonyOfficialSession:
         with self._state_lock:
             has_existing_subscribers = bool(self._h264_subscribers)
             self._h264_subscribers[subscriber_id] = subscriber
+            self._h264_idr_retry_counts[subscriber_id] = 0
             cached_config = self._latest_h264_config
             cached_keyframe = self._latest_h264_keyframe
             queued_packets = 0
@@ -254,16 +264,21 @@ class HarmonyOfficialSession:
             # 避免新增查看页面打断现有订阅者。
             self.wake_stream()
             self.request_idr(force=True)
+        self._schedule_h264_idr_retry(subscriber_id)
         return subscriber.queue
 
     def unsubscribe_h264(self, subscriber_id: str) -> None:
         """取消一个原始 H.264 订阅。"""
         with self._state_lock:
             self._h264_subscribers.pop(subscriber_id, None)
+            retry_timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
+            self._h264_idr_retry_counts.pop(subscriber_id, None)
             if not self._h264_subscribers:
                 # 没有消费者时丢弃所有 H.264 数据，下一次订阅重新请求 IDR。
                 self._latest_h264_config = None
                 self._latest_h264_keyframe = None
+        if retry_timer:
+            retry_timer.cancel()
 
     def request_idr(self, force: bool = False) -> None:
         """请求设备端发送关键帧，节流避免连续请求。"""
@@ -373,8 +388,64 @@ class HarmonyOfficialSession:
         self._h264_monitor_stop.clear()
         with self._state_lock:
             self._h264_subscribers.clear()
+            retry_timers = list(self._h264_idr_retry_timers.values())
+            self._h264_idr_retry_timers.clear()
+            self._h264_idr_retry_counts.clear()
             self._latest_h264_config = None
             self._latest_h264_keyframe = None
+        for timer in retry_timers:
+            timer.cancel()
+
+    def _schedule_h264_idr_retry(self, subscriber_id: str) -> None:
+        """为未完成起播的订阅者安排有限次数的 IDR 补请求。"""
+        with self._state_lock:
+            subscriber = self._h264_subscribers.get(subscriber_id)
+            if (
+                subscriber is None
+                or (subscriber.has_config and not subscriber.waiting_for_keyframe)
+                or self._stop_event.is_set()
+            ):
+                return
+            retry_index = self._h264_idr_retry_counts.get(subscriber_id, 0)
+            if retry_index >= len(H264_IDR_RETRY_DELAYS_SECONDS):
+                return
+            delay = H264_IDR_RETRY_DELAYS_SECONDS[retry_index]
+            old_timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
+
+            def _retry() -> None:
+                with self._state_lock:
+                    current_timer = self._h264_idr_retry_timers.get(subscriber_id)
+                    subscriber = self._h264_subscribers.get(subscriber_id)
+                    if current_timer is not threading.current_thread():
+                        return
+                    self._h264_idr_retry_timers.pop(subscriber_id, None)
+                    if (
+                        subscriber is None
+                        or (subscriber.has_config and not subscriber.waiting_for_keyframe)
+                        or self._stop_event.is_set()
+                    ):
+                        self._h264_idr_retry_counts.pop(subscriber_id, None)
+                        return
+                    self._h264_idr_retry_counts[subscriber_id] = retry_index + 1
+
+                if self.is_running:
+                    logger.debug(
+                        "鸿蒙 H.264 起播补请求 IDR: serial=%s, subscriber=%s, attempt=%d/%d",
+                        self.serial,
+                        subscriber_id,
+                        retry_index + 1,
+                        len(H264_IDR_RETRY_DELAYS_SECONDS),
+                    )
+                    self.request_idr(force=True)
+                    self._schedule_h264_idr_retry(subscriber_id)
+
+            timer = threading.Timer(delay, _retry)
+            timer.daemon = True
+            self._h264_idr_retry_timers[subscriber_id] = timer
+        if old_timer:
+            old_timer.cancel()
+        timer.start()
+
     def _on_bridge_message(self, message: BridgeMessage) -> None:
         if message.message_type == BridgeMessageType.H264:
             self._broadcast_h264(message.payload)
@@ -424,6 +495,7 @@ class HarmonyOfficialSession:
             return
 
         request_idr = False
+        cancel_retry_timers: list[threading.Timer] = []
         with self._state_lock:
             # 解析期间订阅可能已经断开，重新取当前订阅者。
             subscribers = list(self._h264_subscribers.values())
@@ -472,13 +544,27 @@ class HarmonyOfficialSession:
                             request_idr = request_idr or not was_waiting_for_keyframe
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
+                            retry_timer = self._h264_idr_retry_timers.pop(
+                                subscriber.subscriber_id, None
+                            )
+                            self._h264_idr_retry_counts.pop(subscriber.subscriber_id, None)
+                            if retry_timer:
+                                cancel_retry_timers.append(retry_timer)
                     else:
                         if frame_type == 0x01:
                             subscriber.has_config = True
                             subscriber.waiting_for_keyframe = True
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
+                            retry_timer = self._h264_idr_retry_timers.pop(
+                                subscriber.subscriber_id, None
+                            )
+                            self._h264_idr_retry_counts.pop(subscriber.subscriber_id, None)
+                            if retry_timer:
+                                cancel_retry_timers.append(retry_timer)
 
+        for timer in cancel_retry_timers:
+            timer.cancel()
         if request_idr:
             self.request_idr()
 
