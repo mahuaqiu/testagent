@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import subprocess
 import time
 from queue import Empty, Queue
 from types import SimpleNamespace
 
 import pytest
 
+import common.utils as common_utils
+from worker.platforms.harmony_official.bridge import JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
     BridgeMessageType,
     BridgeProtocolError,
@@ -24,6 +28,55 @@ from worker.platforms.harmony_official.session import (
     _h264_websocket_packets,
 )
 from worker.screen.mjpeg_proxy import MJPEGProxy
+
+
+def test_java_bridge_uses_hidden_window_process_launcher(tmp_path, monkeypatch) -> None:
+    """Java Bridge 在 Windows 打包程序中启动时不能创建可见控制台。"""
+    jar_path = tmp_path / "hoscrcpy.jar"
+    jar_path.touch()
+    class_path = tmp_path / "bridge"
+    class_path.mkdir()
+    hdc_path = tmp_path / "hdc.exe"
+    hdc_path.touch()
+    java_path = tmp_path / "java.exe"
+    java_path.touch()
+    calls = []
+
+    def fake_popen(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout=io.BytesIO(), stderr=io.BytesIO())
+
+    # 只替换底层 Popen，让测试仍然实际经过 common.utils.popen_cmd。
+    monkeypatch.setattr(common_utils.subprocess, "Popen", fake_popen)
+    closed = []
+    bridge = JavaBridgeProcess(
+        serial="device-1",
+        device_type="mobile",
+        java_path=str(java_path),
+        jar_path=jar_path,
+        class_path=class_path,
+        hdc_path=str(hdc_path),
+        temp_dir=tmp_path / "tmp",
+        image_scale_size=720,
+        frame_rate=10,
+        bit_rate=2_000_000,
+        on_message=lambda message: None,
+        on_closed=closed.append,
+    )
+
+    bridge.start()
+    for thread in bridge._reader_threads:
+        thread.join(timeout=1)
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command[0] == str(java_path)
+    assert kwargs["stdin"] is subprocess.PIPE
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is subprocess.PIPE
+    if os.name == "nt":
+        assert kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+    assert closed
 
 
 def test_hos1_round_trip() -> None:

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import threading
-from typing import Callable
+from collections.abc import Callable
+from pathlib import Path
 
+from common.utils import SUBPROCESS_HIDE_WINDOW, popen_cmd
 from worker.platforms.harmony_official.protocol import BridgeMessage, iter_messages
-
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ class JavaBridgeProcess:
             self.frame_rate,
             self.bit_rate,
         )
-        self._process = subprocess.Popen(
+        self._process = popen_cmd(
             command,
             cwd=str(self.class_path),
             stdin=subprocess.PIPE,
@@ -192,6 +192,7 @@ class JavaBridgeProcess:
                     ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                     capture_output=True,
                     timeout=5,
+                    creationflags=SUBPROCESS_HIDE_WINDOW,
                 )
                 if process.poll() is not None:
                     return
