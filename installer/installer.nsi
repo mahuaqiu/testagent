@@ -25,8 +25,6 @@ InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
 RequestExecutionLevel admin
-; 64 位应用目录 + 64 位 Worker：注册表统一走 64 位视图，避免 32 位 NSIS 写到 WOW6432Node
-SetRegView 64
 SetCompressor /SOLID lzma
 
 ; Command line parameter parsing helpers
@@ -70,6 +68,9 @@ Page custom OptionsPageCreate OptionsPageLeave
 ; Install Section
 ; ============================================
 Section "MainSection" SEC01
+  ; 64 位应用目录 + 64 位 Worker：注册表统一走 64 位视图，避免写到 WOW6432Node
+  SetRegView 64
+
   ; Check upgrade install before any operations (needed for silent install)
   Call IsUpgradeInstall
 
@@ -130,6 +131,9 @@ SectionEnd
 ; Uninstall Section
 ; ============================================
 Section Uninstall
+  ; 卸载时也使用 64 位注册表视图，与安装阶段保持一致
+  SetRegView 64
+
   ; Kill processes (use nsExec to hide console window)
   StrCpy $1 '"taskkill" /f /im test-worker.exe'
   nsExec::Exec $1
@@ -288,6 +292,9 @@ FunctionEnd
 
 ; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)
 Function GetLocalIP
+  ; 网卡配置存放在 64 位注册表视图中
+  SetRegView 64
+
   ; Output: $R0 = best IP address, or "0.0.0.0" if not found
   ; Strategy: registry enumeration (milliseconds, no PowerShell)
   ; Priority by IP segment: 10.x > 192.168.x > 172.16-31.x > others
@@ -629,6 +636,9 @@ FunctionEnd
 
 ; Initialize function (handle command line parameters)
 Function .onInit
+  ; SetRegView 只能在 Section 或 Function 中使用；初始化阶段也切换到 64 位视图。
+  SetRegView 64
+
   ; 默认值用于静默安装，也作为可视化安装页面的初始值。
   StrCpy $IpInput ""
   StrCpy $PortInput "8088"
