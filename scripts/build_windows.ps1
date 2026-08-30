@@ -1,4 +1,4 @@
-# Nuitka Build Script for Windows
+﻿# Nuitka Build Script for Windows
 param(
     [string]$Version = "2.0.0",
     [string]$OutputDir = "dist\windows",
@@ -429,4 +429,4 @@ Write-Host "=========================================="
 Write-Host "All builds complete!"
 Write-Host "EXE package: $PackageDir"
 Write-Host "Installer: $OutputDir\test-worker-installer.exe (if built)"
-Write-Host "=========================================="\r\r
+Write-Host "=========================================="
