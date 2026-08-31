@@ -89,10 +89,10 @@ Section "MainSection" SEC01
   SetOutPath "$INSTDIR\_internal"
   File /r "..\dist\windows\test-worker\_internal\*"
 
-  ; Copy all other files (exclude root config and _internal to avoid duplication)
+  ; Copy program files，排除运行时 data，避免把构建机数据库和附件装进用户目录
   DetailPrint "Copying program files..."
   SetOutPath "$INSTDIR"
-  File /r /x "config" /x "_internal" /x "worker.log" "..\dist\windows\test-worker\*"
+  File /r /x "config" /x "_internal" /x "data" /x "worker.log" "..\dist\windows\test-worker\*"
 
   ; Replace config file with user input
   Call ReplaceConfigFile

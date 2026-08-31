@@ -44,11 +44,11 @@ def _create_task(database: Database, expires_at: datetime) -> Task:
     return task
 
 
-def test_cleanup_expired_removes_files_of_expired_task(tmp_path):
-    """任务过期但附件本身未过期时，附件文件也必须被删除。"""
+def test_cleanup_expired_keeps_files_until_artifact_retention_expires(tmp_path):
+    """任务过期不影响附件，附件按三天保留期清理。"""
     database = Database(tmp_path / "worker.db")
     task = _create_task(database, datetime.now() - timedelta(hours=1))
-    service = ArtifactService(database, tmp_path / "artifacts")
+    service = ArtifactService(database, tmp_path / "artifacts", retention_hours=72)
     reference = service.save_bytes(
         task.task_id,
         b"image-data",
@@ -59,9 +59,38 @@ def test_cleanup_expired_removes_files_of_expired_task(tmp_path):
     file_path = tmp_path / "artifacts" / reference.relative_path
     assert file_path.is_file()
 
-    assert service.cleanup_expired() == 1
+    assert service.cleanup_expired() == 0
+    assert file_path.is_file()
+    assert service.get_path(reference.artifact_id) is not None
+
+    assert service.cleanup_expired(now=datetime.now() + timedelta(days=4)) == 1
     assert not file_path.exists()
     assert service.get_path(reference.artifact_id) is None
+
+
+def test_task_cleanup_does_not_delete_fresh_artifact(tmp_path):
+    """任务记录清理不能提前删除三天保留期内的附件。"""
+    database = Database(tmp_path / "worker.db")
+    task = _create_task(database, datetime.now() + timedelta(hours=1))
+    service = ArtifactService(database, tmp_path / "artifacts", retention_hours=72)
+    reference = service.save_bytes(
+        task.task_id,
+        b"image-data",
+        artifact_type="screenshot",
+        mime_type="image/jpeg",
+        extension="jpg",
+    )
+    file_path = tmp_path / "artifacts" / reference.relative_path
+
+    repository = SQLiteTaskRepository(database)
+    database.connection().execute(
+        "UPDATE worker_tasks SET status = 'success', expires_at = ? WHERE task_id = ?",
+        ((datetime.now() - timedelta(seconds=1)).isoformat(), task.task_id),
+    )
+    assert repository.cleanup_expired() == 1
+
+    assert file_path.is_file()
+    assert service.get_path(reference.artifact_id) is not None
 
 
 def test_cleanup_orphans_removes_stale_files_only(tmp_path):

@@ -301,6 +301,11 @@ if (Test-Path $BuildDir) {
     exit 1
 }
 
+# 发布包不携带运行时 data，避免把开发机的 worker.db 或附件带到用户机器。
+if (Test-Path "$PackageDir\data") {
+    Remove-Item -Recurse -Force "$PackageDir\data"
+}
+
 # Nuitka --include-data-dir may miss binary files in subdirs, copy tools manually
 Write-Host "Copying tools directory (full)..."
 if (Test-Path "$PackageDir\tools") { Remove-Item -Recurse -Force "$PackageDir\tools" }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -36,20 +37,24 @@ class WorkerRuntime:
         *,
         base_dir: str | Path | None = None,
         repository: TaskRepository | None = None,
-        result_retention_hours: int = 24,
+        result_retention_hours: int = 1,
+        artifact_retention_hours: int = 72,
         max_workers: int = 16,
-        cleanup_interval_hours: int = 24,
+        cleanup_interval_hours: int = 6,
     ) -> None:
         root = Path(base_dir or get_base_dir()).resolve()
         self.root_dir = root
         self.database = Database(root / "data" / "worker.db")
-        self.repository = repository or SQLiteTaskRepository(self.database)
+        self.repository = repository or SQLiteTaskRepository(
+            self.database,
+            result_retention_hours=result_retention_hours,
+        )
         self.scheduler = ResourceScheduler()
         self.device_registry = DeviceRegistry()
         self.artifact_service = ArtifactService(
             self.database,
             root / "data" / "artifacts",
-            retention_hours=result_retention_hours,
+            retention_hours=artifact_retention_hours,
         )
         self.task_service = IdempotentTaskService(
             self.repository,
@@ -68,39 +73,77 @@ class WorkerRuntime:
         if self._started:
             return 0
         recovered = recover_interrupted_tasks(self.repository)
-        self._run_cleanup()
         self._stop_event = threading.Event()
         self._cleanup_thread = threading.Thread(
             target=self._cleanup_loop, name="worker-cleanup", daemon=True
         )
-        self._cleanup_thread.start()
         self._started = True
+        try:
+            self._cleanup_thread.start()
+        except Exception:
+            self._started = False
+            raise
         return recovered
 
     def _run_cleanup(self) -> None:
-        """清理过期数据：先删附件文件再删任务行，避免外键级联
-        先清掉元数据导致附件文件成为孤儿。"""
+        """在后台清理过期任务、附件文件和孤儿文件。"""
+        started = time.monotonic()
+        artifact_count = 0
+        task_count = 0
+        orphan_count = 0
+        vacuumed = False
         try:
-            self.artifact_service.cleanup_expired()
-            self.task_service.cleanup_expired()
-            self.artifact_service.cleanup_orphans()
+            artifact_count = self.artifact_service.cleanup_expired()
         except Exception:
-            logger.exception("Expired data cleanup failed")
+            logger.exception("过期附件清理失败")
+        try:
+            task_count = self.task_service.cleanup_expired()
+        except Exception:
+            logger.exception("过期任务清理失败")
+        try:
+            orphan_count = self.artifact_service.cleanup_orphans()
+        except Exception:
+            logger.exception("孤儿附件清理失败")
+        if self.task_service.active_count() == 0:
+            try:
+                vacuumed = self.database.compact_if_needed()
+            except Exception:
+                logger.exception("SQLite 空间回收失败")
+        else:
+            logger.debug("存在活动任务，跳过本轮 SQLite 空间回收")
+        logger.info(
+            "后台数据清理完成: artifacts=%d, tasks=%d, orphans=%d, vacuumed=%s, elapsed_ms=%d",
+            artifact_count,
+            task_count,
+            orphan_count,
+            vacuumed,
+            int((time.monotonic() - started) * 1000),
+        )
 
     def _cleanup_loop(self) -> None:
-        """天级后台清理，避免长期不重启时过期数据堆积。"""
-        while not self._stop_event.wait(self._cleanup_interval):
+        """后台立即执行一次清理，之后按固定间隔重复执行。"""
+        try:
+            # 给 Worker 主流程留出启动窗口，清理完全在后台进行。
+            if self._stop_event.wait(0.5):
+                return
             self._run_cleanup()
+            while not self._stop_event.wait(self._cleanup_interval):
+                self._run_cleanup()
+        finally:
+            # 释放清理线程自己的线程局部 SQLite 连接。
+            self.database.close()
 
     def stop(self) -> None:
         """停止任务服务，等待活动任务完成后关闭当前数据库连接。"""
         if not self._started:
             return
         self._stop_event.set()
+        self.task_service.shutdown()
         if self._cleanup_thread is not None:
             self._cleanup_thread.join(timeout=5)
+            if self._cleanup_thread.is_alive():
+                logger.warning("后台数据清理仍在执行，停止流程不再等待")
             self._cleanup_thread = None
-        self.task_service.shutdown()
         self._started = False
         self.database.close()
 
@@ -108,4 +151,3 @@ class WorkerRuntime:
     def active_count(self) -> int:
         """当前活动任务数量。"""
         return self.task_service.active_count()
-

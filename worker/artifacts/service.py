@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from worker.artifacts.models import ArtifactRef
 from worker.storage.database import Database
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactService:
@@ -121,30 +124,50 @@ class ArtifactService:
             action_number=action_number,
         )
 
-    def cleanup_expired(self, now: datetime | None = None) -> int:
-        """删除过期附件（含所属任务已过期的附件），返回删除数量。
-
-        必须先于任务清理执行：任务行删除时外键会级联清除 artifacts
-        元数据但不会触碰磁盘文件，因此这里把所属任务已过期的附件也
-        一并按元数据删文件，避免留下孤儿文件。
-        """
+    def cleanup_expired(self, now: datetime | None = None, batch_size: int = 10) -> int:
+        """分批删除超过附件保留期的附件文件和元数据，返回删除数量。"""
         current = now or datetime.now()
-        rows = self.database.connection().execute(
-            """
-            SELECT artifact_id, relative_path FROM artifacts
-            WHERE expires_at <= ?
-               OR task_id IN (SELECT task_id FROM worker_tasks WHERE expires_at <= ?)
-            """,
-            (current.isoformat(), current.isoformat()),
-        ).fetchall()
+        cutoff = current - self.retention
+        batch_size = max(1, int(batch_size))
         removed = 0
-        with self.database.transaction() as conn:
+        while True:
+            rows = self.database.connection(timeout=0.1).execute(
+                """
+                SELECT artifact_id, relative_path FROM artifacts
+                WHERE created_at <= ?
+                LIMIT ?
+                """,
+                (cutoff.isoformat(), batch_size),
+            ).fetchall()
+            if not rows:
+                break
+
+            # 先删物理文件，再删元数据；文件删除失败时保留记录，下一轮继续重试。
+            artifact_ids = []
             for row in rows:
-                path = (self.root_dir / row["relative_path"]).resolve()
-                if self.root_dir in path.parents and path.is_file():
-                    path.unlink()
-                conn.execute("DELETE FROM artifacts WHERE artifact_id = ?", (row["artifact_id"],))
-                removed += 1
+                candidate = self.root_dir / Path(row["relative_path"])
+                path = candidate.resolve()
+                if self.root_dir not in candidate.absolute().parents or self.root_dir not in path.parents:
+                    logger.warning("跳过目录外的附件路径: %s", row["relative_path"])
+                    continue
+                try:
+                    if candidate.is_file() or candidate.is_symlink():
+                        candidate.unlink()
+                    # 文件已经不存在也视为清理成功，只删除无效的元数据。
+                    artifact_ids.append((row["artifact_id"],))
+                except OSError:
+                    logger.warning("删除过期附件文件失败: %s", candidate, exc_info=True)
+
+            if not artifact_ids:
+                break
+            with self.database.transaction(timeout=0.1) as conn:
+                conn.executemany(
+                    "DELETE FROM artifacts WHERE artifact_id = ?",
+                    artifact_ids,
+                )
+            removed += len(artifact_ids)
+            if len(rows) < batch_size:
+                break
         return removed
 
     def cleanup_orphans(self, now: datetime | None = None) -> int:
@@ -157,26 +180,39 @@ class ArtifactService:
         current = now or datetime.now()
         known = {
             row["relative_path"]
-            for row in self.database.connection()
+            for row in self.database.connection(timeout=0.1)
             .execute("SELECT relative_path FROM artifacts")
             .fetchall()
         }
         removed = 0
-        for path in self.root_dir.rglob("*"):
-            if not path.is_file():
-                continue
-            relative = str(path.relative_to(self.root_dir)).replace("\\", "/")
-            if relative in known:
-                continue
-            modified = datetime.fromtimestamp(path.stat().st_mtime)
-            if modified + self.retention > current:
-                continue
-            path.unlink()
-            removed += 1
-        # 顺带移除清空后的任务目录
-        for directory in self.root_dir.glob("*"):
-            if directory.is_dir() and not any(directory.iterdir()):
-                directory.rmdir()
+        # 自底向上扫描，既清理孤儿文件，也清理对应的空目录。
+        for directory_path, directory_names, file_names in os.walk(
+            self.root_dir, topdown=False
+        ):
+            directory = Path(directory_path)
+            for file_name in file_names:
+                path = directory / file_name
+                relative = str(path.relative_to(self.root_dir)).replace("\\", "/")
+                if relative in known:
+                    continue
+                try:
+                    modified = datetime.fromtimestamp(path.stat().st_mtime)
+                    if modified + self.retention > current:
+                        continue
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    logger.warning("删除孤儿附件文件失败: %s", path, exc_info=True)
+            for directory_name in directory_names:
+                child = directory / directory_name
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+        try:
+            self.root_dir.rmdir()
+        except OSError:
+            pass
         return removed
 
     @staticmethod

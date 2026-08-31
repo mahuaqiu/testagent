@@ -325,6 +325,12 @@ recording:
   max_timeout_ms: 7200000        # Max timeout (ms), 2 hours
   audio_enabled: false           # Enable audio recording (windows-screen-sidecar only, default false)
 
+# 本地任务和附件清理设置
+storage:
+  task_retention_hours: 1        # worker_tasks 终态数据保留时间
+  artifact_retention_days: 3     # data/artifacts 截图、录屏保留时间
+  cleanup_interval_hours: 6      # 后台清理执行间隔
+
 # WebSocket Streaming Settings
 websocket_streaming:
   max_connections_per_device: 3  # Max connections per device

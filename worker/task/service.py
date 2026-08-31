@@ -54,7 +54,7 @@ class TaskService:
         scheduler: ResourceScheduler,
         execute_callback: Callable[[Task, threading.Event], TaskResult],
         *,
-        result_retention_hours: int = 24,
+        result_retention_hours: int = 1,
         max_workers: int = 16,
     ):
         self.repository = repository

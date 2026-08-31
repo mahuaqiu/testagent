@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from worker.errors import IdempotencyConflictError
@@ -16,8 +16,9 @@ from worker.task.task import Task
 class SQLiteTaskRepository(TaskRepository):
     """持久化 Worker 最近任务和动作结果。"""
 
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, result_retention_hours: int = 1):
         self.database = database
+        self.result_retention = timedelta(hours=max(1, result_retention_hours))
 
     def create(
         self,
@@ -28,7 +29,8 @@ class SQLiteTaskRepository(TaskRepository):
         idempotency_key: str | None,
         expires_at: datetime,
     ) -> None:
-        now = datetime.now().isoformat()
+        now_dt = datetime.now()
+        now = now_dt.isoformat()
         request_json = json.dumps(task.to_dict(), ensure_ascii=False)
         try:
             with self.database.transaction() as conn:
@@ -82,7 +84,8 @@ class SQLiteTaskRepository(TaskRepository):
         cancel_requested: bool | None = None,
     ) -> None:
         result_json = json.dumps(result.to_dict(include_task_id=True), ensure_ascii=False) if result else None
-        now = datetime.now().isoformat()
+        now_dt = datetime.now()
+        now = now_dt.isoformat()
         started_at = now if status == TaskStatus.RUNNING else None
         terminal = {
             TaskStatus.SUCCESS,
@@ -95,6 +98,7 @@ class SQLiteTaskRepository(TaskRepository):
         if terminal_value is not None:
             terminal.add(terminal_value)
         finished_at = now if status in terminal else None
+        expires_at = (now_dt + self.result_retention).isoformat() if finished_at is not None else None
         with self.database.transaction() as conn:
             conn.execute(
                 """
@@ -103,7 +107,8 @@ class SQLiteTaskRepository(TaskRepository):
                     error_code = ?, error_message = ?, retryable = ?,
                     cancel_requested = COALESCE(?, cancel_requested),
                     started_at = COALESCE(started_at, ?),
-                    finished_at = COALESCE(?, finished_at)
+                    finished_at = COALESCE(?, finished_at),
+                    expires_at = COALESCE(?, expires_at)
                 WHERE task_id = ?
                 """,
                 (
@@ -115,6 +120,7 @@ class SQLiteTaskRepository(TaskRepository):
                     int(cancel_requested) if cancel_requested is not None else None,
                     started_at,
                     finished_at,
+                    expires_at,
                     task_id,
                 ),
             )
@@ -123,31 +129,52 @@ class SQLiteTaskRepository(TaskRepository):
         """将 Worker 重启前遗留任务标记为 interrupted。"""
         active = (TaskStatus.PENDING.value, TaskStatus.RUNNING.value)
         placeholders = ",".join("?" for _ in active)
+        now = datetime.now()
         with self.database.transaction() as conn:
             cursor = conn.execute(
                 f"""
                 UPDATE worker_tasks
-                SET status = ?, error_code = ?, error_message = ?, finished_at = ?
+                SET status = ?, error_code = ?, error_message = ?, finished_at = ?, expires_at = ?
                 WHERE status IN ({placeholders})
                 """,
                 (
                     "interrupted",
                     "TASK_INTERRUPTED",
                     "Worker restarted before task completed",
-                    datetime.now().isoformat(),
+                    now.isoformat(),
+                    (now + self.result_retention).isoformat(),
                     *active,
                 ),
             )
-            conn.execute("DELETE FROM resource_leases")
             return cursor.rowcount
 
-    def cleanup_expired(self, now: datetime | None = None) -> int:
+    def cleanup_expired(self, now: datetime | None = None, batch_size: int = 10) -> int:
+        """分批删除过期终态任务，避免一次大事务长时间占用数据库。"""
         current = (now or datetime.now()).isoformat()
-        with self.database.transaction() as conn:
-            cursor = conn.execute(
-                "DELETE FROM worker_tasks WHERE expires_at <= ?", (current,)
-            )
-            return cursor.rowcount
+        batch_size = max(1, int(batch_size))
+        removed = 0
+        while True:
+            connection = self.database.connection(timeout=0.1)
+            with self.database.transaction(timeout=0.1) as conn:
+                rows = connection.execute(
+                    """
+                    SELECT task_id FROM worker_tasks
+                    WHERE expires_at <= ?
+                      AND status NOT IN ('pending', 'running')
+                    LIMIT ?
+                    """,
+                    (current, batch_size),
+                ).fetchall()
+                if not rows:
+                    break
+                conn.executemany(
+                    "DELETE FROM worker_tasks WHERE task_id = ?",
+                    [(row["task_id"],) for row in rows],
+                )
+                removed += len(rows)
+                if len(rows) < batch_size:
+                    break
+        return removed
 
     @staticmethod
     def _row_to_dict(row) -> dict[str, Any]:

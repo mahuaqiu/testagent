@@ -91,6 +91,11 @@ class WorkerConfig:
     recording_default_fps: int = 10
     recording_max_timeout_ms: int = 7200000  # 2小时
 
+    # 本地任务和附件清理配置
+    task_retention_hours: int = 1
+    artifact_retention_days: int = 3
+    cleanup_interval_hours: int = 6
+
     # WebSocket 推流配置
     websocket_max_connections_per_device: int = 3
     websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
@@ -181,6 +186,7 @@ class WorkerConfig:
         unlock_cfg = data.get("unlock", {})
         recording_cfg = data.get("recording", {})
         websocket_cfg = data.get("websocket_streaming", {})
+        storage_cfg = data.get("storage", {})
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -212,6 +218,9 @@ class WorkerConfig:
             recording_output_dir=recording_cfg.get("output_dir", "data/recordings"),
             recording_default_fps=recording_cfg.get("default_fps", 10),
             recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
+            task_retention_hours=max(1, int(storage_cfg.get("task_retention_hours", 1))),
+            artifact_retention_days=max(1, int(storage_cfg.get("artifact_retention_days", 3))),
+            cleanup_interval_hours=max(1, int(storage_cfg.get("cleanup_interval_hours", 6))),
             websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
             websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
             websocket_idle_timeout_seconds=websocket_cfg.get("idle_timeout_seconds", 900),

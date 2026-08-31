@@ -93,7 +93,12 @@ class Worker:
         self.harmony_pc_manager: HarmonyPlatformManager | None = None
 
         # 任务调度器
-        self.runtime = WorkerRuntime(self._execute_task_callback)
+        self.runtime = WorkerRuntime(
+            self._execute_task_callback,
+            result_retention_hours=self.config.task_retention_hours,
+            artifact_retention_hours=self.config.artifact_retention_days * 24,
+            cleanup_interval_hours=self.config.cleanup_interval_hours,
+        )
         self.scheduler = self.runtime.scheduler
         self.device_registry = self.runtime.device_registry
         self.artifact_service = self.runtime.artifact_service

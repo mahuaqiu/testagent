@@ -61,9 +61,59 @@ def test_repository_cleanup_expired(tmp_path):
     repository.create(
         task,
         request_id=None,
-        status=TaskStatus.RUNNING,
+        status=TaskStatus.SUCCESS,
         idempotency_key=None,
         expires_at=datetime.now() - timedelta(seconds=1),
     )
     assert repository.cleanup_expired() == 1
     assert repository.get(task.task_id) is None
+
+
+def test_repository_keeps_running_task_even_if_expired(tmp_path):
+    repository = SQLiteTaskRepository(Database(tmp_path / "worker.db"))
+    task = make_task()
+    repository.create(
+        task,
+        request_id=None,
+        status=TaskStatus.RUNNING,
+        idempotency_key=None,
+        expires_at=datetime.now() - timedelta(seconds=1),
+    )
+
+    assert repository.cleanup_expired() == 0
+    assert repository.get(task.task_id) is not None
+
+
+def test_terminal_task_retention_starts_when_task_finishes(tmp_path):
+    repository = SQLiteTaskRepository(Database(tmp_path / "worker.db"), result_retention_hours=1)
+    task = make_task()
+    repository.create(
+        task,
+        request_id=None,
+        status=TaskStatus.RUNNING,
+        idempotency_key=None,
+        expires_at=datetime.now() - timedelta(hours=2),
+    )
+
+    repository.update_status(
+        task.task_id,
+        TaskStatus.SUCCESS,
+        result=TaskResult(status=TaskStatus.SUCCESS, platform="web"),
+    )
+    row = repository.get(task.task_id)
+    assert row is not None
+    assert datetime.fromisoformat(row["expires_at"]) > datetime.now()
+
+
+def test_new_database_only_creates_used_tables(tmp_path):
+    database = Database(tmp_path / "worker.db")
+    connection = database.connection()
+    tables = {
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+
+    assert tables == {"schema_meta", "worker_tasks", "artifacts"}
+    assert connection.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
