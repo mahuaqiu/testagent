@@ -10,9 +10,11 @@ import time
 from queue import Empty, Queue
 from types import SimpleNamespace
 
+from PIL import Image
 import pytest
 
 import common.utils as common_utils
+from common.ocr_client import _prepare_ocr_reference, _prepare_ocr_source
 from worker.platforms.harmony_official.bridge import JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
     BridgeMessageType,
@@ -28,6 +30,59 @@ from worker.platforms.harmony_official.session import (
     _h264_websocket_packets,
 )
 from worker.screen.mjpeg_proxy import MJPEGProxy
+
+
+def test_prepare_ocr_source_preserves_existing_jpeg() -> None:
+    image = b"\xff\xd8\xff\xe0existing-jpeg"
+
+    assert _prepare_ocr_source(image) is image
+
+
+def test_prepare_ocr_source_keeps_non_jpeg_conversion(monkeypatch) -> None:
+    calls = []
+
+    def fake_compress(image_bytes: bytes, quality: int) -> bytes:
+        calls.append((image_bytes, quality))
+        return b"converted-jpeg"
+
+    monkeypatch.setattr("common.ocr_client.compress_image_to_jpeg", fake_compress)
+
+    assert _prepare_ocr_source(b"png-data") == b"converted-jpeg"
+    assert calls == [(b"png-data", 80)]
+
+
+def test_prepare_ocr_reference_converts_small_jpeg_to_quality_80(monkeypatch) -> None:
+    calls = []
+
+    def fake_compress(image_bytes: bytes, quality: int) -> bytes:
+        calls.append((image_bytes, quality))
+        return b"converted-reference"
+
+    monkeypatch.setattr("common.ocr_client.compress_image_to_jpeg", fake_compress)
+
+    assert _prepare_ocr_reference(b"\xff\xd8\xff\xe0small-jpeg") == b"converted-reference"
+    assert calls == [(b"\xff\xd8\xff\xe0small-jpeg", 80)]
+
+
+def test_prepare_ocr_reference_accepts_small_png() -> None:
+    image = Image.new("RGBA", (3, 2), (20, 40, 60, 128))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+
+    converted = _prepare_ocr_reference(output.getvalue())
+
+    assert converted.startswith(b"\xff\xd8\xff")
+
+
+def test_prepare_ocr_reference_returns_original_when_conversion_fails(monkeypatch) -> None:
+    image = b"invalid-image"
+
+    monkeypatch.setattr(
+        "common.ocr_client.compress_image_to_jpeg",
+        lambda *_args, **_kwargs: image,
+    )
+
+    assert _prepare_ocr_reference(image) == image
 
 
 def test_java_bridge_uses_hidden_window_process_launcher(tmp_path, monkeypatch) -> None:

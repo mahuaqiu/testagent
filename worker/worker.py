@@ -166,6 +166,9 @@ class Worker:
                 except Exception as e:
                     logger.error(f"Failed to start {platform} platform: {e}")
 
+        # Worker 每次启动时重启一次 HDC server，避免沿用异常的服务状态。
+        self._restart_harmony_hdc_server()
+
         # 5. 发现移动设备（现在 GoIOSClient 已初始化）
         if self.host_info.os_type == "windows":
             self._discover_mobile_devices()
@@ -266,6 +269,24 @@ class Worker:
 
         logger.info(f"Host: {self.host_info.hostname} ({self.host_info.os_type})")
         logger.info(f"Supported platforms: {self.supported_platforms}")
+
+    def _restart_harmony_hdc_server(self) -> None:
+        """Worker 启动时重启一次 HDC server。"""
+        from worker.platforms.harmony_hdc import restart_hdc_server
+
+        for harmony_manager in (self.harmony_mobile_manager, self.harmony_pc_manager):
+            hdc_path = harmony_manager.hdc_path if harmony_manager else None
+            if not hdc_path:
+                continue
+            result = restart_hdc_server(hdc_path)
+            if result.exit_code != 0:
+                logger.error(
+                    "Worker 启动时 HDC server 重启失败: path=%s, stdout=%r, stderr=%r",
+                    hdc_path,
+                    result.output,
+                    result.error,
+                )
+            return
 
     def _sync_device_registry(self, monitor_devices: dict[str, Any] | None = None) -> None:
         """将发现器和监控器快照同步为统一设备事实。"""

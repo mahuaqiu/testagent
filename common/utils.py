@@ -299,13 +299,13 @@ def compress_image_to_jpeg(image_bytes: bytes, quality: int = 80) -> bytes:
     """
     将图片压缩为 JPEG 格式。
 
-    用于返回给调用方的截图压缩，减少传输体积。
-    OCR/图像匹配场景应使用原始 PNG 数据。
+    用于返回给调用方以及 OCR/图像匹配请求的截图压缩，减少传输体积。
+    PNG、调色板图片和带透明通道的图片会先转换为 RGB 再编码为 JPEG。
 
     Args:
         image_bytes: 原始图片字节数据（PNG/JPEG等）
         quality: JPEG 压缩质量（1-100），默认 80
-                 - 80: 压缩率高，肉眼几乎无损，适合查看
+                 - 80: 压缩率高，肉眼几乎无损，适合查看和 OCR
                  - 90: 高质量，细节更清晰
 
     Returns:

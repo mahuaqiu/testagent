@@ -94,6 +94,87 @@ def test_list_target_info_rejects_error_text_even_when_exit_code_is_zero(
         harmony_hdc.list_target_info("configured-hdc.exe")
 
 
+def test_list_target_info_restarts_hdc_once_after_connect_server_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(harmony_hdc, "_find_hdc_path", lambda _: "hdc.exe")
+    command_calls: list[tuple[list[str], dict]] = []
+    results = iter([
+        CommandResult("Connect server failed", "", 1),
+        CommandResult("device-001 USB Ready", "", 0),
+    ])
+
+    def execute(*args, **kwargs):
+        command_calls.append((args[1], kwargs))
+        return next(results)
+
+    restart_paths: list[str] = []
+    monkeypatch.setattr(harmony_hdc, "_execute_hdc_command", execute)
+    monkeypatch.setattr(
+        harmony_hdc,
+        "restart_hdc_server",
+        lambda path: restart_paths.append(path) or CommandResult("", "", 0),
+    )
+
+    targets = harmony_hdc.list_target_info("configured-hdc.exe")
+
+    assert [target.udid for target in targets] == ["device-001"]
+    assert restart_paths == ["hdc.exe"]
+    assert command_calls == [
+        (["list", "targets", "-v"], {"retries": 2}),
+        (["list", "targets", "-v"], {"retries": 0}),
+    ]
+
+
+def test_list_target_info_does_not_restart_for_empty_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(harmony_hdc, "_find_hdc_path", lambda _: "hdc.exe")
+    monkeypatch.setattr(
+        harmony_hdc,
+        "_execute_hdc_command",
+        lambda *args, **kwargs: CommandResult("[Empty]", "", 0),
+    )
+    monkeypatch.setattr(
+        harmony_hdc,
+        "restart_hdc_server",
+        lambda path: (_ for _ in ()).throw(AssertionError("空设备列表不应重启 HDC")),
+    )
+
+    assert harmony_hdc.list_target_info("configured-hdc.exe") == []
+
+
+def test_hdc_restart_uses_start_replace_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(
+        harmony_hdc,
+        "_execute_hdc_command",
+        lambda *args, **kwargs: calls.append((args[1], kwargs))
+        or CommandResult("server restarted", "", 0),
+    )
+
+    result = harmony_hdc.restart_hdc_server("hdc.exe")
+
+    assert result.output == "server restarted"
+    assert calls == [(["start", "-r"], {"timeout": 30, "retries": 0})]
+
+
+def test_worker_start_restarts_hdc_once_for_both_harmony_platforms(monkeypatch) -> None:
+    worker = Worker.__new__(Worker)
+    worker.harmony_mobile_manager = SimpleNamespace(hdc_path="mobile-hdc.exe")
+    worker.harmony_pc_manager = SimpleNamespace(hdc_path="pc-hdc.exe")
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "worker.platforms.harmony_hdc.restart_hdc_server",
+        lambda path: calls.append(path) or CommandResult("", "", 0),
+    )
+
+    worker._restart_harmony_hdc_server()
+
+    assert calls == ["mobile-hdc.exe"]
+
+
 def test_find_hdc_path_accepts_command_line_tools_directory(tmp_path) -> None:
     hdc_path = tmp_path / "sdk" / "default" / "openharmony" / "toolchains" / "hdc.exe"
     hdc_path.parent.mkdir(parents=True)
@@ -485,6 +566,35 @@ def test_harmony_screenshot_rejects_invalid_image(tmp_path) -> None:
 
     with pytest.raises(harmony_hdc.HarmonyError, match="截图格式无效"):
         manager.get_screenshot(client)
+
+
+def test_hdc_screenshot_merges_capture_cleanup_and_uses_binary_pull(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_calls: list[str] = []
+    pull_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: shell_calls.append(command) or CommandResult("", "", 0),
+    )
+    monkeypatch.setattr(
+        wrapper,
+        "pull_file",
+        lambda remote_path, local_path: pull_calls.append((remote_path, local_path)) or True,
+    )
+
+    local_path = str(tmp_path / "screenshot.jpeg")
+    assert wrapper.screenshot(local_path) is True
+    assert len(shell_calls) == 1
+    assert shell_calls[0].startswith("rm -f /data/local/tmp/zq_worker_screenshot_")
+    assert " && snapshot_display -f " in shell_calls[0]
+    assert "base64" not in shell_calls[0]
+    assert len(pull_calls) == 1
+    assert pull_calls[0][1] == local_path
 
 
 @pytest.mark.parametrize("platform", ["harmony_mobile", "harmony_pc"])

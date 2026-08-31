@@ -13,6 +13,7 @@ import re
 import json
 import shutil
 import shlex
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
@@ -28,6 +29,26 @@ from worker.platforms.harmony_hdc_process import (
 )
 
 logger = logging.getLogger(__name__)
+
+_HDC_RESTART_LOCK = threading.Lock()
+_SCREENSHOT_LOCKS: dict[str, threading.Lock] = {}
+_SCREENSHOT_LOCKS_LOCK = threading.Lock()
+
+
+def _get_screenshot_lock(serial: str) -> threading.Lock:
+    """获取设备级截图锁，避免并发截图读写同一个远端文件。"""
+    with _SCREENSHOT_LOCKS_LOCK:
+        lock = _SCREENSHOT_LOCKS.get(serial)
+        if lock is None:
+            lock = threading.Lock()
+            _SCREENSHOT_LOCKS[serial] = lock
+        return lock
+
+
+def _get_screenshot_remote_path(serial: str) -> str:
+    """生成每台设备固定的远端截图路径，避免反复创建临时文件。"""
+    serial_key = uuid.uuid5(uuid.NAMESPACE_URL, serial or "unknown-device").hex
+    return f"/data/local/tmp/zq_worker_screenshot_{serial_key}.jpeg"
 
 
 def classify_harmony_device(properties: Dict[str, str]) -> str:
@@ -243,6 +264,25 @@ def _execute_hdc_command(
     return last_result
 
 
+def restart_hdc_server(hdc_path: str) -> CommandResult:
+    """重启 HDC server，并把命令输出写入 Worker 日志。"""
+    with _HDC_RESTART_LOCK:
+        logger.warning("执行 HDC server 重启: %s start -r", hdc_path)
+        result = _execute_hdc_command(
+            hdc_path,
+            ["start", "-r"],
+            timeout=30,
+            retries=0,
+        )
+        logger.info(
+            "HDC start -r 结果: exit_code=%s, stdout=%r, stderr=%r",
+            result.exit_code,
+            result.output,
+            result.error,
+        )
+        return result
+
+
 def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
     """
     查找 HDC 工具路径。
@@ -333,6 +373,12 @@ def _has_error_text(result: CommandResult, include_device_states: bool = True) -
     return any(marker in combined for marker in markers)
 
 
+def _has_connect_server_failure(result: CommandResult) -> bool:
+    """识别 HDC list targets 的 server 连接失败。"""
+    combined = f"{result.output}\n{result.error}".lower()
+    return "connect server failed" in combined
+
+
 def _quote_remote_shell_argument(value: str) -> str:
     """使用 POSIX shell 单引号安全引用远端参数。"""
     return "'" + value.replace("'", "'\"'\"'") + "'"
@@ -369,6 +415,25 @@ def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
         ["list", "targets", "-v"],
         retries=2,
     )
+    if _has_connect_server_failure(result):
+        logger.warning(
+            "HDC list targets 检测到 Connect server failed: stdout=%r, stderr=%r；"
+            "尝试重启 HDC 后重试一次",
+            result.output,
+            result.error,
+        )
+        restart_hdc_server(hdc_path)
+        result = _execute_hdc_command(
+            hdc_path,
+            ["list", "targets", "-v"],
+            retries=0,
+        )
+        logger.info(
+            "HDC list targets 重试结果: exit_code=%s, stdout=%r, stderr=%r",
+            result.exit_code,
+            result.output,
+            result.error,
+        )
     if result.exit_code != 0 or _has_error_text(result, include_device_states=False):
         raise HdcCommandError(f"HDC 列出设备失败: {result.error or result.output}")
     return [
@@ -533,22 +598,15 @@ class HarmonyHdcWrapper:
             bool: True 表示成功，False 表示失败
         """
         try:
-            # 生成设备临时路径
-            remote_path = f"/data/local/tmp/screenshot_{uuid.uuid4().hex}.jpeg"
-
-            result = self.shell(f"snapshot_display -f {remote_path}")
-            if not self._check_result(result, "snapshot_display 截图"):
-                return False
-
-            # 拉取到本地
-            pull_result = self.pull_file(remote_path, local_path)
-
-            # 清理远程文件
-            rm_result = self.shell(f"rm -rf {remote_path}")
-            if rm_result.exit_code != 0:
-                logger.warning(f"清理远程截图文件失败: {rm_result.output}")
-
-            return pull_result
+            # 复用远端文件，并合并清理和截图命令；随后用 file recv 传输二进制，
+            # 避免 Base64 放大图片体积，也不依赖设备端额外命令。
+            remote_path = _get_screenshot_remote_path(self.serial)
+            capture_command = f"rm -f {remote_path} && snapshot_display -f {remote_path}"
+            with _get_screenshot_lock(self.serial):
+                result = self.shell(capture_command)
+                if not self._check_result(result, "snapshot_display 截图"):
+                    return False
+                return self.pull_file(remote_path, local_path)
 
         except Exception as e:
             logger.error(f"截图失败: {e}")

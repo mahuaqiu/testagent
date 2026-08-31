@@ -99,6 +99,11 @@ class HarmonyPlatformManager(PlatformManager):
         """平台名称。"""
         return self._device_type
 
+    @property
+    def hdc_path(self) -> Optional[str]:
+        """当前平台使用的 HDC 工具路径。"""
+        return self._hdc_path
+
     def get_supported_actions(self) -> set[str]:
         """返回当前鸿蒙设备形态真实支持的动作。"""
         if self._device_type == "harmony_mobile":

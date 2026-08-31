@@ -39,6 +39,25 @@ from common.utils import compress_image_to_jpeg
 logger = logging.getLogger(__name__)
 
 
+def _prepare_ocr_source(
+    image_bytes: bytes,
+    quality: int = 80,
+    preserve_jpeg: bool = True,
+) -> bytes:
+    """准备 OCR 截图源，并按调用方指定策略处理已有 JPEG。"""
+    # Windows sidecar 和鸿蒙 PC 截图均为质量 80 的 JPEG，直接透传可避免重复转码。
+    # PNG、调色板 PNG 和带透明通道的截图仍交给统一转换函数处理。
+    if preserve_jpeg and image_bytes.startswith(b"\xff\xd8\xff"):
+        return image_bytes
+    return compress_image_to_jpeg(image_bytes, quality=quality)
+
+
+def _prepare_ocr_reference(image_bytes: bytes, quality: int = 80) -> bytes:
+    """准备 OCR/图像匹配参考图，兼容接口传入的 PNG 等小图片。"""
+    # 参考图不直接透传，确保 PNG、P 模式和 RGBA 图片统一转换为 OCR 服务可用的 JPEG。
+    return compress_image_to_jpeg(image_bytes, quality=quality)
+
+
 @dataclass
 class TextBlock:
     """识别到的文字块。"""
@@ -113,6 +132,8 @@ class OCRClient:
         lang: Optional[str] = None,
         filter_text: Optional[str] = None,
         confidence_threshold: float = 0.0,
+        image_quality: int = 80,
+        preserve_jpeg: bool = True,
     ) -> list[TextBlock]:
         """
         识别图片中的所有文字。
@@ -126,8 +147,7 @@ class OCRClient:
         Returns:
             list[TextBlock]: 识别到的文字块列表。
         """
-        # 压缩为 JPEG q=90，减少传输体积（OCR 服务端支持 JPEG）
-        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
         image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_ocr_infos", {
@@ -169,6 +189,8 @@ class OCRClient:
         image_bytes: bytes,
         target_text: str,
         confidence_threshold: float = 0.0,
+        image_quality: int = 80,
+        preserve_jpeg: bool = True,
     ) -> Optional[TextBlock]:
         """
         在图片中查找指定文字。
@@ -184,8 +206,7 @@ class OCRClient:
         Returns:
             TextBlock | None: 找到的文字块，未找到返回 None。
         """
-        # 压缩为 JPEG q=90，减少传输体积
-        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
         image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_coord_by_text", {
@@ -218,6 +239,8 @@ class OCRClient:
         image_bytes: bytes,
         target_text: str,
         confidence_threshold: float = 0.0,
+        image_quality: int = 80,
+        preserve_jpeg: bool = True,
     ) -> list[TextBlock]:
         """
         在图片中查找所有匹配的文字。
@@ -234,6 +257,8 @@ class OCRClient:
             image_bytes,
             filter_text=target_text,
             confidence_threshold=confidence_threshold,
+            image_quality=image_quality,
+            preserve_jpeg=preserve_jpeg,
         )
 
     def get_texts(
@@ -242,6 +267,8 @@ class OCRClient:
         lang: Optional[str] = None,
         separator: str = "\n",
         confidence_threshold: float = 0.0,
+        image_quality: int = 80,
+        preserve_jpeg: bool = True,
     ) -> str:
         """
         获取图片中的所有文本（拼接后的纯文本）。
@@ -255,8 +282,7 @@ class OCRClient:
         Returns:
             str: 拼接后的文本字符串。
         """
-        # 压缩为 JPEG q=90，减少传输体积
-        compressed = compress_image_to_jpeg(image_bytes, quality=90)
+        compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
         image_base64 = base64.b64encode(compressed).decode("utf-8")
 
         response = self._post("/ocr/get_ocr_texts", {
@@ -281,6 +307,9 @@ class OCRClient:
         threshold: float = 0.9,
         method: str = "template",
         multi_target: bool = False,
+        source_image_quality: int = 80,
+        preserve_source_jpeg: bool = True,
+        reference_image_quality: int = 80,
     ) -> list[MatchResult]:
         """
         图像匹配。
@@ -297,9 +326,12 @@ class OCRClient:
         Returns:
             list[MatchResult]: 匹配结果列表。
         """
-        # 压缩为 JPEG q=90，减少传输体积
-        source_compressed = compress_image_to_jpeg(source_bytes, quality=90)
-        template_compressed = compress_image_to_jpeg(template_bytes, quality=90)
+        source_compressed = _prepare_ocr_source(
+            source_bytes,
+            source_image_quality,
+            preserve_source_jpeg,
+        )
+        template_compressed = _prepare_ocr_reference(template_bytes, reference_image_quality)
         source_base64 = base64.b64encode(source_compressed).decode("utf-8")
         template_base64 = base64.b64encode(template_compressed).decode("utf-8")
 
@@ -343,6 +375,9 @@ class OCRClient:
         template_bytes: bytes,
         threshold: float = 0.9,
         method: str = "template",
+        source_image_quality: int = 80,
+        preserve_source_jpeg: bool = True,
+        reference_image_quality: int = 80,
     ) -> Optional[MatchResult]:
         """
         在源图像中查找模板图像（返回第一个匹配）。
@@ -356,7 +391,15 @@ class OCRClient:
         Returns:
             MatchResult | None: 匹配结果，未找到返回 None。
         """
-        matches = self.match_image(source_bytes, template_bytes, threshold, method)
+        matches = self.match_image(
+            source_bytes,
+            template_bytes,
+            threshold,
+            method,
+            source_image_quality=source_image_quality,
+            preserve_source_jpeg=preserve_source_jpeg,
+            reference_image_quality=reference_image_quality,
+        )
         return matches[0] if matches else None
 
     def match_near_text(
@@ -367,6 +410,9 @@ class OCRClient:
         max_distance: int = 500,
         threshold: float = 0.9,
         method: str = "template",
+        source_image_quality: int = 80,
+        preserve_source_jpeg: bool = True,
+        reference_image_quality: int = 80,
     ) -> Optional[MatchResult]:
         """
         查找文本附近最近的图片。
@@ -384,9 +430,15 @@ class OCRClient:
         Returns:
             MatchResult | None: 匹配结果，未找到返回 None。
         """
-        # 压缩为 JPEG q=90，减少传输体积
-        image_compressed = compress_image_to_jpeg(image_bytes, quality=90)
-        target_compressed = compress_image_to_jpeg(target_image_bytes, quality=90)
+        image_compressed = _prepare_ocr_source(
+            image_bytes,
+            source_image_quality,
+            preserve_source_jpeg,
+        )
+        target_compressed = _prepare_ocr_reference(
+            target_image_bytes,
+            reference_image_quality,
+        )
         image_base64 = base64.b64encode(image_compressed).decode("utf-8")
         target_image_base64 = base64.b64encode(target_compressed).decode("utf-8")
 
