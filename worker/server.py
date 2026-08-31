@@ -77,17 +77,98 @@ DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT = 10.0
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
 
 
-async def _send_harmony_h264_fallback(websocket: WebSocket, reason: str) -> None:
+class _WebSocketClosed(RuntimeError):
+    """WebSocket 已关闭，当前推流应按正常断开处理。"""
+
+
+def _is_expected_websocket_close(exc: BaseException) -> bool:
+    """判断异常是否表示客户端或 ASGI 层已关闭 WebSocket。"""
+    if isinstance(
+        exc,
+        (
+            WebSocketDisconnect,
+            ConnectionAbortedError,
+            ConnectionResetError,
+            BrokenPipeError,
+        ),
+    ):
+        return True
+
+    # Starlette 在连接已发送 close 后再次 send 时抛出 RuntimeError，
+    # 这属于关闭竞态，不应作为推流业务错误记录。
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return (
+            "Unexpected ASGI message" in message
+            and "websocket.send" in message
+            and (
+                "websocket.close" in message
+                or "response already completed" in message
+            )
+        )
+    return False
+
+
+async def _send_websocket_message(
+    websocket: WebSocket,
+    data: str | bytes,
+    *,
+    stop_event: asyncio.Event | None = None,
+    timeout: float | None = None,
+) -> None:
+    """安全发送 WebSocket 消息，将关闭竞态转换为正常断开。"""
+    if stop_event is not None and stop_event.is_set():
+        raise _WebSocketClosed("WebSocket stop event is set")
+
+    try:
+        send = websocket.send_text(data) if isinstance(data, str) else websocket.send_bytes(data)
+        if timeout is None:
+            await send
+        else:
+            await asyncio.wait_for(send, timeout=timeout)
+    except Exception as exc:
+        if _is_expected_websocket_close(exc):
+            raise _WebSocketClosed(str(exc)) from exc
+        raise
+
+
+async def _close_websocket_safely(
+    websocket: WebSocket,
+    *,
+    code: int,
+    reason: str,
+) -> None:
+    """关闭 WebSocket，忽略已经关闭或客户端已断开的竞态。"""
+    try:
+        await websocket.close(code=code, reason=reason)
+    except Exception as exc:
+        if _is_expected_websocket_close(exc):
+            logger.debug("WebSocket 已关闭，跳过重复 close: %s", exc)
+        else:
+            logger.debug("WebSocket close 失败: %s", exc)
+
+
+async def _send_harmony_h264_fallback(
+    websocket: WebSocket,
+    reason: str,
+    stop_event: asyncio.Event | None = None,
+) -> None:
     """通知前端鸿蒙 H.264 不可用，并请求切换到 JPEG。"""
     logger.warning("鸿蒙 H.264 推流降级 JPEG: %s", reason)
     try:
-        await websocket.send_text(
+        await _send_websocket_message(
+            websocket,
             json.dumps(
                 {"type": "codec_fallback", "codec": "jpeg", "reason": reason},
                 ensure_ascii=False,
-            )
+            ),
+            stop_event=stop_event,
         )
-        await websocket.close(code=4001, reason="codec_fallback:jpeg")
+        await _close_websocket_safely(
+            websocket,
+            code=4001,
+            reason="codec_fallback:jpeg",
+        )
     except Exception as exc:
         logger.debug("发送鸿蒙 H.264 降级通知失败: %s", exc)
 
@@ -1161,11 +1242,12 @@ async def screen_stream(
                 timeout,
             )
             stream_stop_event.set()
-            try:
-                # 使用正常关闭码，避免前端把服务端空闲回收误判为异常并自动重连。
-                await websocket.close(code=1000, reason="idle_timeout")
-            except Exception as exc:
-                logger.debug("服务端空闲关闭 WebSocket 失败: %s", exc)
+            # 使用正常关闭码，避免前端把服务端空闲回收误判为异常并自动重连。
+            await _close_websocket_safely(
+                websocket,
+                code=1000,
+                reason="idle_timeout",
+            )
             return
 
     activity_task = asyncio.create_task(receive_activity())
@@ -1279,6 +1361,7 @@ async def screen_stream(
                 await _send_harmony_h264_fallback(
                     websocket,
                     f"{platform} 当前帧源不支持 H.264",
+                    stream_stop_event,
                 )
                 return
             h264_subscriber_id = f"{conn_key}/h264/{id(websocket)}"
@@ -1304,10 +1387,10 @@ async def screen_stream(
                             h264_wait_logged = True
                         await asyncio.sleep(1.0)
                         continue
-                    await _send_harmony_h264_fallback(websocket, str(exc))
+                    await _send_harmony_h264_fallback(websocket, str(exc), stream_stop_event)
                     return
                 except Exception as exc:
-                    await _send_harmony_h264_fallback(websocket, str(exc))
+                    await _send_harmony_h264_fallback(websocket, str(exc), stream_stop_event)
                     return
             if stream_stop_event.is_set():
                 return
@@ -1332,7 +1415,12 @@ async def screen_stream(
                     _send_started = _stream_diag_time.monotonic()
                     _frames = media_packet_to_websocket_frames(packet)
                     for _frame in _frames:
-                        await asyncio.wait_for(websocket.send_bytes(_frame), timeout=send_timeout)
+                        await _send_websocket_message(
+                            websocket,
+                            _frame,
+                            stop_event=stream_stop_event,
+                            timeout=send_timeout,
+                        )
                     _sent_at = _stream_diag_time.monotonic()
                     _send_ms = (_sent_at - _send_started) * 1000
                     _diag_packets += 1
@@ -1397,7 +1485,11 @@ async def screen_stream(
             # 不在中间再加 0x01 之类分隔符（会被 jmuxer 当成 SPS NAL 的尾部数据破坏解析）。
             if sps_data and pps_data:
                 combined = bytes([0x01]) + sps_data + pps_data
-                await websocket.send_bytes(combined)
+                await _send_websocket_message(
+                    websocket,
+                    combined,
+                    stop_event=stream_stop_event,
+                )
 
             # 主循环：从推模式读取器获取帧并发送
             try:
@@ -1418,9 +1510,11 @@ async def screen_stream(
                         # 不加前缀会被前端 detectFrameType 判为 Unknown 走 JPEG 分支，永远不出画面。
                         prefix = b'\x02' if frame_type == 'idr' else b'\x03'
                         _t0 = _t.monotonic()
-                        await asyncio.wait_for(
-                            websocket.send_bytes(prefix + frame_data),
-                            timeout=send_timeout
+                        await _send_websocket_message(
+                            websocket,
+                            prefix + frame_data,
+                            stop_event=stream_stop_event,
+                            timeout=send_timeout,
                         )
                         _dt = (_t.monotonic() - _t0) * 1000
                         # 仅在 send 明显变慢时记录（>100ms 视为潜在客户端反压）
@@ -1448,6 +1542,7 @@ async def screen_stream(
                     await _send_harmony_h264_fallback(
                         websocket,
                         "鸿蒙官方 H.264 首个视频帧超时",
+                        stream_stop_event,
                     )
                     return
                 try:
@@ -1468,6 +1563,7 @@ async def screen_stream(
                         await _send_harmony_h264_fallback(
                             websocket,
                             "鸿蒙官方 H.264 首个视频帧超时",
+                            stream_stop_event,
                         )
                         return
                     continue
@@ -1503,8 +1599,10 @@ async def screen_stream(
                         if h264_diag_started_at is not None
                         else -1,
                     )
-                await asyncio.wait_for(
-                    websocket.send_bytes(frame),
+                await _send_websocket_message(
+                    websocket,
+                    frame,
+                    stop_event=stream_stop_event,
                     timeout=send_timeout,
                 )
 
@@ -1512,6 +1610,7 @@ async def screen_stream(
                 await _send_harmony_h264_fallback(
                     websocket,
                     "鸿蒙官方 H.264 会话已停止",
+                    stream_stop_event,
                 )
         else:
             # 非 Windows/鸿蒙 H.264 之外的路径使用 JPEG/MJPEG 拉模式。
@@ -1531,8 +1630,10 @@ async def screen_stream(
                     real_w, real_h = 0, 0
                     logger.error(f"鸿蒙获取真机分辨率失败，禁用降采样: {e}", exc_info=True)
                 if real_w > 0 and real_h > 0:
-                    await websocket.send_text(
-                        json.dumps({"type": "meta", "width": real_w, "height": real_h})
+                    await _send_websocket_message(
+                        websocket,
+                        json.dumps({"type": "meta", "width": real_w, "height": real_h}),
+                        stop_event=stream_stop_event,
                     )
                     harmony_downscale = harmony_max_long_edge
                     logger.info(
@@ -1565,25 +1666,32 @@ async def screen_stream(
                         _logged_reencode = True
 
                 try:
-                    await asyncio.wait_for(
-                        websocket.send_bytes(frame),
-                        timeout=send_timeout
+                    await _send_websocket_message(
+                        websocket,
+                        frame,
+                        stop_event=stream_stop_event,
+                        timeout=send_timeout,
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"WebSocket send timeout ({send_timeout}s), disconnecting: platform={platform}, device={device_id}")
-                    await websocket.close(code=1001, reason="Send timeout")
+                    stream_stop_event.set()
+                    await _close_websocket_safely(
+                        websocket,
+                        code=1001,
+                        reason="Send timeout",
+                    )
                     break
 
+    except _WebSocketClosed as exc:
+        log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
+        logger.debug("WebSocket 已关闭，停止推流: platform=%s, device=%s, reason=%s", platform, log_device, exc)
     except WebSocketDisconnect:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.info(f"WebSocket disconnected: platform={platform}, device={log_device}")
     except Exception as e:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         winerror = getattr(e, "winerror", None)
-        expected_disconnect = isinstance(
-            e,
-            (ConnectionAbortedError, ConnectionResetError, BrokenPipeError),
-        ) or winerror in (10053, 10054)
+        expected_disconnect = _is_expected_websocket_close(e) or winerror in (10053, 10054)
         if expected_disconnect:
             logger.debug(f"WebSocket client disconnected: platform={platform}, device={log_device}, error={e}")
         else:

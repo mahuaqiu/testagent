@@ -10,6 +10,30 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def _is_expected_websocket_close(exc: BaseException) -> bool:
+    """判断异常是否表示 MJPEG WebSocket 已由客户端或 ASGI 层关闭。"""
+    if isinstance(
+        exc,
+        (
+            ConnectionAbortedError,
+            ConnectionResetError,
+            BrokenPipeError,
+        ),
+    ):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return (
+            "Unexpected ASGI message" in message
+            and "websocket.send" in message
+            and (
+                "websocket.close" in message
+                or "response already completed" in message
+            )
+        )
+    return False
+
+
 class MJPEGProxy:
     """MJPEG HTTP→WebSocket 代理。"""
 
@@ -146,7 +170,10 @@ class MJPEGProxy:
                     except Exception:
                         await asyncio.sleep(0.5)
                 except Exception as e:
-                    logger.error(f"MJPEG proxy error: {e}")
+                    if _is_expected_websocket_close(e):
+                        logger.debug("MJPEG WebSocket 已关闭，停止透传: %s", e)
+                    else:
+                        logger.error(f"MJPEG proxy error: {e}")
                     break
         finally:
             self.stop()
