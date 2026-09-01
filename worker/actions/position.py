@@ -70,6 +70,7 @@ class OcrGetPositionExecutor(BaseActionExecutor):
             action_type=self.name,
             status=ActionStatus.SUCCESS,
             output={"positions": positions_list},
+            ocr_info=self._get_last_ocr_info(platform),
         )
 
 

@@ -47,18 +47,18 @@ class HarmonyPlatformManager(PlatformManager):
         "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
         "start_app", "stop_app", "unlock_screen",
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
-        "ocr_double_click", "ocr_exist", "ocr_get_position",
+        "ocr_move", "ocr_double_click", "ocr_exist", "ocr_get_position",
         "image_click", "image_wait", "image_assert", "image_double_click",
-        "image_exist", "image_get_position", "image_click_near_text",
+        "image_move", "image_exist", "image_get_position", "image_click_near_text",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
     }
     PC_ACTIONS: set[str] = {
         "click", "double_click", "right_click", "move", "swipe", "drag", "input", "press", "screenshot", "wait",
         "start_app", "stop_app", "unlock_screen", "activate_window",
-        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_double_click",
+        "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_move", "ocr_double_click",
         "ocr_exist", "ocr_get_position", "image_click", "image_wait", "image_assert",
-        "image_double_click", "image_exist", "image_get_position", "image_click_near_text",
+        "image_move", "image_double_click", "image_exist", "image_get_position", "image_click_near_text",
         "ocr_click_same_row_text", "ocr_click_same_row_image",
         "ocr_check_same_row_text", "ocr_check_same_row_image",
     }
@@ -441,10 +441,12 @@ class HarmonyPlatformManager(PlatformManager):
         if not isinstance(exc, HarmonyOfficialError):
             exc = HarmonyOfficialError(str(exc))
         self._official_sessions.stop_session(udid)
-        logger.warning(
-            "鸿蒙官方%s失败，回退 HDC: device=%s, error=%s",
+        logger.error(
+            "鸿蒙官方%s失败，即将执行 HDC 回退（可能造成动作再次执行）: "
+            "device=%s, error_type=%s, error=%s",
             operation,
             udid,
+            type(exc).__name__,
             exc,
         )
 
@@ -466,7 +468,7 @@ class HarmonyPlatformManager(PlatformManager):
             try:
                 official_session.tap(x, y, duration)
                 return
-            except HarmonyOfficialError as exc:
+            except Exception as exc:
                 self._handle_official_failure(serial, "点击", exc)
         success = client.long_tap(x, y, duration) if duration > 0 else client.tap(x, y)
         if not success:
@@ -482,7 +484,7 @@ class HarmonyPlatformManager(PlatformManager):
             try:
                 official_session.double_click(x, y)
                 return
-            except HarmonyOfficialError as exc:
+            except Exception as exc:
                 self._handle_official_failure(serial, "双击", exc)
         if not client.double_tap(x, y):
             raise HarmonyError(f"HDC 双击失败: ({x}, {y})")
@@ -498,7 +500,7 @@ class HarmonyPlatformManager(PlatformManager):
             try:
                 official_session.right_click(x, y)
                 return
-            except HarmonyOfficialError as exc:
+            except Exception as exc:
                 self._handle_official_failure(serial, "右键", exc)
         if not client.long_tap(x, y):
             raise HarmonyError(f"HDC 右键（长按）失败: ({x}, {y})")
@@ -531,7 +533,7 @@ class HarmonyPlatformManager(PlatformManager):
                     steps,
                 )
                 return
-            except HarmonyOfficialError as exc:
+            except Exception as exc:
                 self._handle_official_failure(serial, "滑动", exc)
         distance = abs(end_x - start_x) + abs(end_y - start_y)
         speed = int(distance * 1000 / duration) if duration > 0 else 1000
@@ -551,15 +553,15 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        if self._device_type != "harmony_pc":
-            raise NotImplementedError("move action is only supported on Harmony PC")
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
-            try:
-                official_session.move_mouse(x, y)
-                return
-            except HarmonyOfficialError as exc:
-                self._handle_official_failure(serial, "鼠标移动", exc)
+        # 官方会话只提供鸿蒙 PC 鼠标事件；移动端统一复用 HDC uinput 移动指针。
+        if self._device_type == "harmony_pc":
+            serial, official_session = self._get_official_session_for_client(client)
+            if official_session:
+                try:
+                    official_session.move_mouse(x, y)
+                    return
+                except Exception as exc:
+                    self._handle_official_failure(serial, "鼠标移动", exc)
         if not client.move_mouse(x, y):
             raise HarmonyError(f"HDC 鼠标移动失败: ({x}, {y})")
 

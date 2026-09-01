@@ -175,7 +175,7 @@ class HarmonyOfficialSession:
             )
             try:
                 self._bridge.start()
-            except JavaBridgeError as exc:
+            except Exception as exc:
                 self._stop_event.set()
                 raise HarmonyOfficialError(str(exc)) from exc
             self._start_h264_monitor()
@@ -811,55 +811,76 @@ class HarmonyOfficialSessionManager:
         retry_attempts: int | None = None,
     ) -> HarmonyOfficialSession | None:
         """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。"""
-        if not self._hdc_path:
-            return self._handle_start_failure("HDC 路径不可用")
-        if self._is_device_locked(serial):
-            logger.debug("鸿蒙设备处于锁屏状态，等待解锁后启动官方会话: serial=%s", serial)
-            return None
+        try:
+            if not self._hdc_path:
+                return self._handle_start_failure("HDC 路径不可用")
+            if self._is_device_locked(serial):
+                logger.debug("鸿蒙设备处于锁屏状态，等待解锁后启动官方会话: serial=%s", serial)
+                return None
 
-        with self._lock:
-            current = self._sessions.get(serial)
-            if current and current.is_running:
-                # 预热会话只需 Bridge 仍在运行即可复用；视频数据由真实的
-                # WebSocket 订阅消费，不能在这里阻塞等待消费者。
-                return current
-            if current:
-                current.stop(timeout=1.0)
-                self._sessions.pop(serial, None)
+            with self._lock:
+                current = self._sessions.get(serial)
+                if current and current.is_running:
+                    # 预热会话只需 Bridge 仍在运行即可复用；视频数据由真实的
+                    # WebSocket 订阅消费，不能在这里阻塞等待消费者。
+                    return current
+                if current:
+                    self._sessions.pop(serial, None)
+                    try:
+                        current.stop(timeout=1.0)
+                    except Exception as exc:
+                        logger.warning(
+                            "清理失效的鸿蒙官方会话失败，继续尝试 HDC 回退: serial=%s, error=%s",
+                            serial,
+                            exc,
+                        )
 
-            attempts = max(
-                1,
-                int(
-                    retry_attempts
-                    if retry_attempts is not None
-                    else self._settings["reconnect_attempts"]
-                ),
-            )
-            last_error = ""
-            for attempt in range(1, attempts + 1):
-                session = HarmonyOfficialSession(
-                    serial=serial,
-                    device_type=self.device_type,
-                    hdc_path=self._hdc_path,
-                    settings=self._settings_for_serial(serial),
+                attempts = max(
+                    1,
+                    int(
+                        retry_attempts
+                        if retry_attempts is not None
+                        else self._settings["reconnect_attempts"]
+                    ),
                 )
-                try:
-                    session.start()
-                    self._sessions[serial] = session
-                    return session
-                except HarmonyOfficialError as exc:
-                    last_error = str(exc)
-                    session.stop(timeout=1.0)
-                    logger.warning(
-                        "启动鸿蒙官方会话失败: serial=%s, attempt=%d/%d, error=%s",
-                        serial,
-                        attempt,
-                        attempts,
-                        exc,
+                last_error = ""
+                for attempt in range(1, attempts + 1):
+                    session = HarmonyOfficialSession(
+                        serial=serial,
+                        device_type=self.device_type,
+                        hdc_path=self._hdc_path,
+                        settings=self._settings_for_serial(serial),
                     )
-                    if attempt < attempts:
-                        time.sleep(float(self._settings["reconnect_backoff_seconds"]))
-            return self._handle_start_failure(last_error)
+                    try:
+                        session.start()
+                        self._sessions[serial] = session
+                        return session
+                    except Exception as exc:
+                        last_error = str(exc)
+                        if not last_error:
+                            last_error = type(exc).__name__
+                        try:
+                            session.stop(timeout=1.0)
+                        except Exception as stop_exc:
+                            logger.warning(
+                                "清理启动失败的鸿蒙官方会话失败: serial=%s, error=%s",
+                                serial,
+                                stop_exc,
+                            )
+                        logger.warning(
+                            "启动鸿蒙官方会话失败: serial=%s, attempt=%d/%d, error=%s",
+                            serial,
+                            attempt,
+                            attempts,
+                            exc,
+                        )
+                        if attempt < attempts:
+                            time.sleep(float(self._settings["reconnect_backoff_seconds"]))
+                return self._handle_start_failure(last_error)
+        except Exception as exc:
+            # 官方链路是可选加速路径，任何启动阶段异常都必须交给调用方回退 HDC。
+            detail = str(exc) or type(exc).__name__
+            return self._handle_start_failure(detail)
 
     def get(self, serial: str) -> HarmonyOfficialSession | None:
         with self._lock:

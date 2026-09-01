@@ -6,6 +6,7 @@ import asyncio
 import io
 import os
 import subprocess
+import threading
 import time
 from queue import Empty, Queue
 from types import SimpleNamespace
@@ -29,6 +30,10 @@ from worker.platforms.harmony_official.session import (
     HarmonyOfficialSessionManager,
     _h264_websocket_packets,
 )
+from worker.platforms.harmony import HarmonyPlatformManager
+from worker.platforms.harmony_capture import HarmonyScreenCapture
+from worker.config import PlatformConfig
+from worker.screen.frame_source import HarmonyOfficialFrameSource
 from worker.screen.mjpeg_proxy import MJPEGProxy
 
 
@@ -518,6 +523,22 @@ def test_default_mode_returns_none_when_hdc_is_unavailable() -> None:
     assert manager.get_or_start("device-1") is None
 
 
+def test_start_runtime_error_returns_none_for_hdc_fallback(monkeypatch) -> None:
+    manager = HarmonyOfficialSessionManager(
+        "harmony_mobile",
+        {"reconnect_attempts": 1},
+    )
+    manager.set_hdc_path("hdc.exe")
+
+    def fail_start(self) -> None:
+        raise OSError("java executable failed")
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", fail_start)
+
+    assert manager.get_or_start("device-1") is None
+    assert "device-1" not in manager._sessions
+
+
 def test_legacy_mode_settings_cannot_disable_official_fallback() -> None:
     manager = HarmonyOfficialSessionManager(
         "harmony_mobile",
@@ -541,6 +562,103 @@ def test_locked_device_does_not_start_official_java() -> None:
 
     assert manager.get_or_start("device-1") is None
     assert manager.get("device-1") is None
+
+
+def test_harmony_action_runtime_error_falls_back_to_hdc(
+    monkeypatch,
+    caplog,
+) -> None:
+    import logging
+
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    hdc_calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        serial="device-1",
+        tap=lambda x, y: hdc_calls.append((x, y)) or True,
+    )
+
+    class FailingOfficialSession:
+        def tap(self, x: int, y: int, duration: int) -> None:
+            raise RuntimeError("official command failed")
+
+    monkeypatch.setattr(
+        manager,
+        "acquire_official_session",
+        lambda serial, owner: FailingOfficialSession(),
+    )
+    monkeypatch.setattr(
+        manager._official_sessions,
+        "stop_session",
+        lambda serial: None,
+    )
+
+    manager.click(10, 20, context=client)
+
+    assert hdc_calls == [(10, 20)]
+    assert any(
+        record.levelno == logging.ERROR
+        and "即将执行 HDC 回退" in record.message
+        and "点击" in record.message
+        and "device-1" in record.message
+        for record in caplog.records
+    )
+
+
+def test_official_frame_source_stop_releases_lease_when_unsubscribe_fails() -> None:
+    released: list[tuple[str, str]] = []
+
+    class FailingSession:
+        is_running = True
+
+        def unsubscribe_h264(self, subscriber_id: str) -> None:
+            raise RuntimeError(f"unsubscribe failed: {subscriber_id}")
+
+    manager = SimpleNamespace(
+        release_official_session=lambda device_id, owner: released.append((device_id, owner)),
+    )
+    source = HarmonyOfficialFrameSource("device-1", manager)
+    source._session = FailingSession()
+    source._h264_subscribers.add("subscriber-1")
+
+    source.stop()
+
+    assert released == [("device-1", source._owner)]
+    assert source._session is None
+    assert source._h264_subscribers == set()
+
+
+def test_harmony_screen_capture_stop_closes_socket_before_waiting_for_receiver() -> None:
+    events: list[str] = []
+
+    class FakeSocket:
+        def sendall(self, payload: bytes) -> None:
+            events.append("send")
+
+        def shutdown(self, how: int) -> None:
+            events.append("shutdown")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class FakeHdc:
+        serial = "device-1"
+
+        def fport_rm(self, local_port: int, remote_port: int) -> bool:
+            events.append("fport_rm")
+            return True
+
+    capture = HarmonyScreenCapture(FakeHdc())
+    capture.sock = FakeSocket()
+    capture.local_port = 49001
+    capture._recv_thread = threading.current_thread()
+
+    capture.stop()
+
+    assert events[:2] == ["send", "shutdown"]
+    assert events.index("close") < events.index("fport_rm")
+    assert capture.sock is None
+    assert capture.local_port is None
+    assert capture._recv_thread is None
 
 
 def test_session_lease_stops_bridge_after_last_consumer() -> None:

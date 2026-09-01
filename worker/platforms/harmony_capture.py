@@ -162,15 +162,31 @@ class HarmonyScreenCapture:
     def stop(self) -> None:
         """停止帧流并清理 socket/fport 资源。"""
         self._stop_event.set()
-        if self.sock is not None:
+        sock = self.sock
+        if sock is not None:
             try:
                 self._send_captures_msg("stopCaptureScreen")
             except Exception:
                 pass
-        if self._recv_thread is not None:
-            self._recv_thread.join(timeout=3)
-            self._recv_thread = None
+            try:
+                # 先关闭 socket，打断接收线程可能长达 20 秒的 recv 超时。
+                sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, socket.error):
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
         self._cleanup()
+        recv_thread = self._recv_thread
+        if recv_thread is not None and recv_thread is not threading.current_thread():
+            recv_thread.join(timeout=3)
+            if recv_thread.is_alive():
+                logger.warning("鸿蒙帧流接收线程未能及时退出: %s", self.hdc.serial)
+        self._recv_thread = None
+        with self._frame_cond:
+            self._latest_frame = None
+            self._frame_cond.notify_all()
         logger.info(f"鸿蒙 uitest 帧流已停止: {self.hdc.serial}")
 
     def get_frame(self, timeout: float = 2.0) -> Optional[bytes]:

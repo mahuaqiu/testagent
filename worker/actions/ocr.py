@@ -421,6 +421,7 @@ class OcrMoveAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error=str(e),
+                ocr_info=self._get_last_ocr_info(platform),
             )
 
 

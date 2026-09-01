@@ -458,35 +458,62 @@ class HarmonyOfficialFrameSource:
         with self._start_lock:
             if self._session is None:
                 self.start()
-        if self._session is None:
-            raise ConnectionError("鸿蒙官方 H.264 会话不可用")
-        queue = self._session.subscribe_h264(subscriber_id)
-        self._h264_subscribers.add(subscriber_id)
-        return queue
+            session = self._session
+            if session is None:
+                raise ConnectionError("鸿蒙官方 H.264 会话不可用")
+            queue = session.subscribe_h264(subscriber_id)
+            self._h264_subscribers.add(subscriber_id)
+            return queue
 
     def h264_waiting_for_unlock(self) -> bool:
         """返回 H.264 是否因锁屏暂时等待官方会话。"""
-        return (
-            self._session is None
-            and self.manager.is_device_locked(self.device_id)
-        )
+        with self._start_lock:
+            session_missing = self._session is None
+        return session_missing and self.manager.is_device_locked(self.device_id)
 
     def unsubscribe_h264(self, subscriber_id: str) -> None:
         """取消官方 H.264 WebSocket 订阅。"""
-        if self._session is not None:
-            self._session.unsubscribe_h264(subscriber_id)
-        self._h264_subscribers.discard(subscriber_id)
+        with self._start_lock:
+            session = self._session
+            try:
+                if session is not None:
+                    session.unsubscribe_h264(subscriber_id)
+            finally:
+                # 即使底层取消订阅失败，也不能让 stop() 因残留记录跳过租约释放。
+                self._h264_subscribers.discard(subscriber_id)
 
     def h264_stream_running(self) -> bool:
         """返回官方 H.264 会话是否仍在运行。"""
-        return bool(self._session and self._session.is_running)
+        with self._start_lock:
+            return bool(self._session and self._session.is_running)
 
     def stop(self) -> None:
         """停止帧源并释放官方会话租约。"""
-        if self._session is not None:
-            for subscriber_id in tuple(self._h264_subscribers):
-                self._session.unsubscribe_h264(subscriber_id)
-        self._h264_subscribers.clear()
-        if self._session is not None:
-            self.manager.release_official_session(self.device_id, self._owner)
-        self._session = None
+        with self._start_lock:
+            session = self._session
+            subscriber_ids = tuple(self._h264_subscribers)
+            self._h264_subscribers.clear()
+            self._session = None
+
+            if session is None:
+                return
+
+            # 逐个隔离异常，确保一个坏订阅不会阻断其余订阅和租约释放。
+            for subscriber_id in subscriber_ids:
+                try:
+                    session.unsubscribe_h264(subscriber_id)
+                except Exception as exc:
+                    logger.warning(
+                        "取消鸿蒙官方 H.264 订阅失败: device=%s, subscriber=%s, error=%s",
+                        self.device_id,
+                        subscriber_id,
+                        exc,
+                    )
+            try:
+                self.manager.release_official_session(self.device_id, self._owner)
+            except Exception as exc:
+                logger.warning(
+                    "释放鸿蒙官方 H.264 会话租约失败: device=%s, error=%s",
+                    self.device_id,
+                    exc,
+                )

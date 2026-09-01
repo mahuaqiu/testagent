@@ -18,6 +18,7 @@ class ActionType(Enum):
     OCR_WAIT = "ocr_wait"             # 等待文字出现
     OCR_INPUT = "ocr_input"           # 在文字附近输入
     OCR_GET_TEXT = "ocr_get_text"     # 获取文字区域内容
+    OCR_MOVE = "ocr_move"             # 移动到识别到的文字位置
     OCR_EXIST = "ocr_exist"           # 检查文字是否存在
 
     # 图像匹配操作
@@ -25,6 +26,7 @@ class ActionType(Enum):
     IMAGE_ASSERT = "image_assert"     # 断言图像存在
     IMAGE_WAIT = "image_wait"         # 等待图像出现
     IMAGE_CLICK_NEAR_TEXT = "image_click_near_text"  # 点击文本附近最近的图像
+    IMAGE_MOVE = "image_move"         # 移动到匹配的图像位置
     IMAGE_EXIST = "image_exist"       # 检查图像是否存在
 
     # 基础操作（坐标/按键）

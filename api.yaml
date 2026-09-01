@@ -1150,7 +1150,7 @@ components:
             - ocr_wait: 等待指定文字出现
             - ocr_assert: 断言指定文字存在或不存在（negate: true 时断言不存在），支持 list 传参批量验证多个文字
             - ocr_get_text: 获取屏幕上所有文字
-            - ocr_move: 移动鼠标到识别到的文字位置（仅桌面端）
+            - ocr_move: 移动到识别到的文字位置（桌面端、鸿蒙 PC 和鸿蒙移动端）
             - ocr_double_click: 双击屏幕上识别到的文字
             - ocr_exist: 检查文字是否存在，返回 {"exists": true/false}，始终返回 SUCCESS 状态，支持 list 传参批量检查多个文字
             - ocr_click_same_row_text: 点击锚点文本同一行的目标文本
@@ -1164,7 +1164,7 @@ components:
             - image_wait: 等待指定图像出现
             - image_assert: 断言指定图像存在或不存在（negate: true 时断言不存在）
             - image_click_near_text: 点击文本附近最近的图像
-            - image_move: 移动鼠标到匹配的图像位置（仅桌面端）
+            - image_move: 移动到匹配的图像位置（桌面端、鸿蒙 PC 和鸿蒙移动端）
             - image_double_click: 双击匹配到的图像位置
             - image_exist: 检查图像是否存在，返回 {"exists": true/false}，始终返回 SUCCESS 状态
             - image_get_position: 获取图片坐标列表，返回 {"positions": [[x1,y1], [x2,y2], ...]}
@@ -1373,6 +1373,7 @@ components:
           description: |
             图像模板 base64 编码，仅 image_* 动作必填：
             - image_click/image_wait/image_assert: 要匹配的图像模板
+            - image_move: 要匹配的图像模板
             - image_click_near_text: 要查找的图像模板
             - image_get_position: 要查找的图像模板
         index:
@@ -1380,10 +1381,12 @@ components:
           default: 0
           description: |
             选择第几个匹配结果（从 0 开始），用于多个相同文字/图像的场景：
-            - ocr_click/ocr_input/ocr_move/ocr_double_click: 点击第 N 个匹配的文字
+            - ocr_click/ocr_input/ocr_double_click: 点击第 N 个匹配的文字
+            - ocr_move: 移动到第 N 个匹配的文字
             - ocr_assert/ocr_exist: 不支持 index 参数，list 模式下每个文字只检查是否存在
-            - image_click/image_wait/image_assert/image_move/image_double_click/image_exist: 点击第 N 个匹配的图像
-            示例：index=1 表示点击第二个匹配结果
+            - image_click/image_wait/image_assert/image_double_click/image_exist: 点击第 N 个匹配的图像
+            - image_move: 移动到第 N 个匹配的图像
+            示例：index=1 表示使用第二个匹配结果
         anchor_text:
           type: string
           description: |
@@ -1769,7 +1772,7 @@ components:
   # 示例: 获取当前屏幕文字内容
   # {"action_type": "ocr_get_text", "value": ""}
 
-  # ocr_move - 移动鼠标到识别到的文字位置（仅桌面端支持）
+  # ocr_move - 移动到识别到的文字位置（桌面端、鸿蒙 PC 和鸿蒙移动端支持）
   # 示例 1: 移动鼠标到"登录"文字位置
   # {"action_type": "ocr_move", "value": "登录"}
   # 示例 2: 移动鼠标到"设置"文字右侧
@@ -1851,7 +1854,7 @@ components:
   # 示例: 点击"密码"文字附近 500 像素范围内的输入框图标
   # {"action_type": "image_click_near_text", "image_base64": "<base64_encoded_image>", "value": "密码", "end_x": 500}
 
-  # image_move - 移动鼠标到匹配的图像位置（仅桌面端支持）
+  # image_move - 移动到匹配的图像位置（桌面端、鸿蒙 PC 和鸿蒙移动端支持）
   # 示例 1: 移动鼠标到图像位置，匹配阈值 0.9
   # {"action_type": "image_move", "image_base64": "<base64_encoded_image>", "threshold": 0.9}
   # 示例 2: 移动鼠标到图像位置并向右偏移 20 像素

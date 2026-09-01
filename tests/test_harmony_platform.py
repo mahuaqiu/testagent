@@ -452,12 +452,97 @@ def test_harmony_pc_move_uses_hdc_uinput() -> None:
     assert calls == [(123, 456)]
 
 
-def test_harmony_mobile_move_is_not_supported() -> None:
+def test_harmony_mobile_move_uses_hdc_uinput() -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
-    client = SimpleNamespace(move_mouse=lambda *_: True)
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        move_mouse=lambda x, y: calls.append((x, y)) or True,
+    )
 
-    with pytest.raises(NotImplementedError, match="only supported on Harmony PC"):
-        manager.move(1, 2, context=client)
+    manager.move(1, 2, context=client)
+
+    assert calls == [(1, 2)]
+
+
+def test_harmony_move_actions_are_supported_on_both_device_shapes() -> None:
+    mobile = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    pc = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+
+    for manager in (mobile, pc):
+        assert manager.is_action_supported("ocr_move")
+        assert manager.is_action_supported("image_move")
+
+
+def test_harmony_ocr_move_returns_ocr_info() -> None:
+    ocr_info = [{"text": "设置", "confidence": 0.99}]
+    manager = HarmonyPlatformManager(
+        PlatformConfig(),
+        ocr_client=SimpleNamespace(get_last_ocr_info=lambda: ocr_info),
+        device_type="harmony_mobile",
+    )
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        move_mouse=lambda x, y: calls.append((x, y)) or True,
+    )
+    manager.take_screenshot = lambda context=None: b"screenshot"
+    manager._find_text_position = lambda *args, **kwargs: (10, 20)
+
+    result = manager.execute_action(
+        client,
+        Action.from_dict({"action_type": "ocr_move", "value": "设置"}),
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert result.ocr_info == ocr_info
+    assert calls == [(10, 20)]
+
+
+def test_harmony_ocr_move_failure_still_returns_ocr_info() -> None:
+    ocr_info = [{"text": "设置", "confidence": 0.99}]
+    manager = HarmonyPlatformManager(
+        PlatformConfig(),
+        ocr_client=SimpleNamespace(get_last_ocr_info=lambda: ocr_info),
+        device_type="harmony_mobile",
+    )
+    client = SimpleNamespace(
+        move_mouse=lambda *_: (_ for _ in ()).throw(NotImplementedError("移动失败")),
+    )
+    manager.take_screenshot = lambda context=None: b"screenshot"
+    manager._find_text_position = lambda *args, **kwargs: (10, 20)
+
+    result = manager.execute_action(
+        client,
+        Action.from_dict({"action_type": "ocr_move", "value": "设置"}),
+    )
+
+    assert result.status == ActionStatus.FAILED
+    assert result.error == "移动失败"
+    assert result.ocr_info == ocr_info
+
+
+def test_harmony_mobile_image_move_uses_hdc_uinput() -> None:
+    manager = HarmonyPlatformManager(
+        PlatformConfig(),
+        ocr_client=SimpleNamespace(get_last_ocr_info=lambda: []),
+        device_type="harmony_mobile",
+    )
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        move_mouse=lambda x, y: calls.append((x, y)) or True,
+    )
+    manager.take_screenshot = lambda context=None: b"screenshot"
+    manager._find_image_position = lambda *args, **kwargs: (30, 40)
+
+    result = manager.execute_action(
+        client,
+        Action.from_dict({
+            "action_type": "image_move",
+            "image_base64": "dGVzdA==",
+        }),
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert calls == [(30, 40)]
 
 
 def test_harmony_hdc_move_mouse_uses_uinput_command(monkeypatch: pytest.MonkeyPatch) -> None:
