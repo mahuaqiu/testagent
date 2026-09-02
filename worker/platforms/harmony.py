@@ -44,7 +44,7 @@ class HarmonyPlatformManager(PlatformManager):
 
     # 鸿蒙没有 sidecar，因此录屏、实时窗口流和宿主机命令不加入白名单。
     MOBILE_ACTIONS: set[str] = {
-        "click", "double_click", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "click", "double_click", "move", "swipe", "drag", "input", "press", "screenshot", "wait",
         "start_app", "stop_app", "unlock_screen",
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text",
         "ocr_move", "ocr_double_click", "ocr_exist", "ocr_get_position",

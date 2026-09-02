@@ -35,6 +35,6 @@ def test_harmony_keeps_shape_specific_capabilities() -> None:
     assert pc.is_action_supported("unlock_screen")
     assert pc.is_action_supported("move")
     assert pc.is_action_supported("activate_window")
-    assert not mobile.is_action_supported("move")
+    assert mobile.is_action_supported("move")
     assert not mobile.is_action_supported("activate_window")
     assert not mobile.is_action_supported("cmd_exec")
