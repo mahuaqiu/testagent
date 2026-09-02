@@ -231,15 +231,12 @@ public final class StreamBridge {
                     wakeStream();
                     return parts.length == 1;
                 case "TOUCH_DOWN":
-                    requireMobile();
                     device.onTouchDown(parseInt(parts, 1), parseInt(parts, 2));
                     return parts.length == 3;
                 case "TOUCH_MOVE":
-                    requireMobile();
                     device.onTouchMove(parseInt(parts, 1), parseInt(parts, 2));
                     return parts.length == 3;
                 case "TOUCH_UP":
-                    requireMobile();
                     device.onTouchUp(parseInt(parts, 1), parseInt(parts, 2));
                     return parts.length == 3;
                 case "MOUSE_DOWN":

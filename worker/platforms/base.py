@@ -213,6 +213,11 @@ class PlatformManager(ABC):
         """
         pass
 
+    def drag(self, start_x: int, start_y: int, end_x: int, end_y: int,
+             duration: int = 500, steps: int | None = None, context: Any = None) -> None:
+        """拖拽动作；未单独实现的平台默认复用 swipe。"""
+        self.swipe(start_x, start_y, end_x, end_y, duration, steps, context)
+
     # ========== 手势操作 ==========
 
     def pinch(self, direction: str, scale: float = 0.5,

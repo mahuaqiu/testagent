@@ -270,7 +270,7 @@ class DragAction(BaseActionExecutor):
         duration = action.duration or 500  # 默认 500ms
         steps = action.steps  # 默认由平台决定
 
-        platform.swipe(action.x, action.y, end_x, end_y, duration=duration, steps=steps, context=context)
+        platform.drag(action.x, action.y, end_x, end_y, duration=duration, steps=steps, context=context)
 
         if steps is not None:
             output = f"Dragged from ({action.x}, {action.y}) to ({end_x}, {end_y}) with steps={steps}"

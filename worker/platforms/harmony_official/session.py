@@ -340,23 +340,36 @@ class HarmonyOfficialSession:
         duration_ms: int,
         steps: int | None = None,
     ) -> None:
-        """移动端发送触摸轨迹，PC 发送官方左键拖拽。"""
+        """发送官方默认 swipe 手势，即 Touch down/move/up。"""
         self._wait_input_ready()
         duration_ms = max(1, int(duration_ms))
         event_count = self._gesture_steps(duration_ms, steps)
         interval = duration_ms / event_count / 1000.0
-        if self.device_type == "mobile":
-            self._send(command_touch_down(start_x, start_y))
-            try:
-                for index in range(1, event_count + 1):
-                    time.sleep(interval)
-                    x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
-                    self._send(command_touch_move(x, y))
-                time.sleep(0.02)
-            finally:
-                self._send(command_touch_up(end_x, end_y))
-            return
+        self._send(command_touch_down(start_x, start_y))
+        try:
+            for index in range(1, event_count + 1):
+                time.sleep(interval)
+                x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
+                self._send(command_touch_move(x, y))
+            time.sleep(0.02)
+        finally:
+            self._send(command_touch_up(end_x, end_y))
 
+    def drag(
+        self,
+        start_x: int,
+        start_y: int,
+        end_x: int,
+        end_y: int,
+        duration_ms: int,
+        steps: int | None = None,
+    ) -> None:
+        """发送官方 PC 鼠标拖拽：左键按下、带键移动、左键抬起。"""
+        self._require_pc()
+        self._wait_input_ready()
+        duration_ms = max(1, int(duration_ms))
+        event_count = self._gesture_steps(duration_ms, steps)
+        interval = duration_ms / event_count / 1000.0
         self._send(command_mouse_down("LEFT", start_x, start_y))
         try:
             for index in range(1, event_count + 1):

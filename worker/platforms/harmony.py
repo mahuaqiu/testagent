@@ -541,6 +541,27 @@ class HarmonyPlatformManager(PlatformManager):
         if not client.swipe(start_x, start_y, end_x, end_y, speed):
             raise HarmonyError("HDC 滑动失败")
 
+    def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
+        """鸿蒙 PC 拖拽优先使用官方鼠标按键保持轨迹。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if self._device_type != "harmony_pc":
+            self.swipe(start_x, start_y, end_x, end_y, duration, steps, client)
+            return
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session:
+            try:
+                official_session.drag(start_x, start_y, end_x, end_y, duration, steps)
+                return
+            except Exception as exc:
+                self._handle_official_failure(serial, "拖拽", exc)
+        distance = abs(end_x - start_x) + abs(end_y - start_y)
+        speed = int(distance * 1000 / duration) if duration > 0 else 1000
+        speed = max(200, min(speed, 40000))
+        if not client.swipe(start_x, start_y, end_x, end_y, speed):
+            raise HarmonyError("HDC 拖拽失败")
+
     def move(self, x: int, y: int, context=None) -> None:
         """
         通过 HDC uinput 移动鼠标。

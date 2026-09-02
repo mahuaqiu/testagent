@@ -22,6 +22,10 @@ from worker.platforms.harmony_official.protocol import (
     BridgeProtocolError,
     command_mouse_move,
     command_touch_down,
+    command_touch_move,
+    command_touch_up,
+    command_mouse_down,
+    command_mouse_up,
     encode_message,
     iter_messages,
 )
@@ -515,6 +519,49 @@ def test_input_commands_and_gesture_step_limits() -> None:
     assert HarmonyOfficialSession._gesture_steps(500, None) == 10
     assert HarmonyOfficialSession._gesture_steps(5_000, None) == 20
     assert HarmonyOfficialSession._gesture_steps(100, 100) == 40
+
+
+def _make_input_session(device_type: str) -> tuple[HarmonyOfficialSession, list[bytes]]:
+    sent: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type=device_type,
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._ready_event.set()
+    session._bridge = SimpleNamespace(is_running=True, send=sent.append)
+    return session, sent
+
+
+def test_official_pc_swipe_uses_touch_sequence(monkeypatch) -> None:
+    session, sent = _make_input_session("pc")
+    monkeypatch.setattr(session, "_wait_input_ready", lambda: None)
+    monkeypatch.setattr("worker.platforms.harmony_official.session.time.sleep", lambda _: None)
+
+    session.swipe(10, 20, 30, 40, duration_ms=100, steps=2)
+
+    assert sent == [
+        command_touch_down(10, 20),
+        command_touch_move(20, 30),
+        command_touch_move(30, 40),
+        command_touch_up(30, 40),
+    ]
+
+
+def test_official_pc_drag_uses_mouse_sequence(monkeypatch) -> None:
+    session, sent = _make_input_session("pc")
+    monkeypatch.setattr(session, "_wait_input_ready", lambda: None)
+    monkeypatch.setattr("worker.platforms.harmony_official.session.time.sleep", lambda _: None)
+
+    session.drag(10, 20, 30, 40, duration_ms=100, steps=2)
+
+    assert sent == [
+        command_mouse_down("LEFT", 10, 20),
+        command_mouse_move("LEFT", 20, 30),
+        command_mouse_move("LEFT", 30, 40),
+        command_mouse_up("LEFT", 30, 40),
+    ]
 
 
 def test_default_mode_returns_none_when_hdc_is_unavailable() -> None:
