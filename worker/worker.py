@@ -206,7 +206,7 @@ class Worker:
 
         logger.info(f"Stopping Worker {self.worker_id}...")
 
-        # 鍏堝仠姝换鍔℃湇鍔★紝纭繚鎵ц涓殑浠诲姟閲婃斁璧勬簮绉熺害
+        # 先停止任务服务，确保执行中的任务释放资源租约
         self.runtime.stop()
 
         # background=true 的命令属于宿主机独立进程，不随 Worker 生命周期回收。

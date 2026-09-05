@@ -357,7 +357,8 @@ class PlatformManager(ABC):
         self,
         text: str,
         match_mode: str = "exact",
-        index: int = 0
+        index: int = 0,
+        ocr_results: list | None = None,
     ) -> tuple[int, int] | None:
         """
         在 OCR 缓存结果中查找文字位置（不重新调用 OCR 服务）。
@@ -368,6 +369,8 @@ class PlatformManager(ABC):
             text: 目标文字
             match_mode: 匹配模式
             index: 选择第几个匹配结果
+            ocr_results: 直接传入的识别结果（recognize 返回值）。并发任务
+                共享 OCR 客户端时优先使用该参数，避免读取"最后一次"缓存。
 
         Returns:
             tuple[int, int] | None: 文字中心坐标
@@ -376,8 +379,9 @@ class PlatformManager(ABC):
             logger.error("OCR client not available")
             return None
 
-        # 获取缓存的 OCR 结果
-        ocr_results = self.ocr_client.get_last_ocr_results()
+        if ocr_results is None:
+            # 获取缓存的 OCR 结果（线程隔离，仅回退兼容旧调用方式）
+            ocr_results = self.ocr_client.get_last_ocr_results()
         if not ocr_results:
             logger.warning("No cached OCR results available")
             return None

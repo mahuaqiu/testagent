@@ -528,7 +528,16 @@ async def execute_task_async(request: TaskRequest, idempotency_key: str | None =
     request_id_token = set_request_id(request_id)
     try:
         logger.info(f"Async task raw request: {_format_request_for_log(request)}")
-        task_id, status, task_request_id = worker.execute_async(platform=request.platform, actions=request.actions, device_id=request.device_id, window=request.window.model_dump(by_alias=True) if request.window else None, idempotency_key=idempotency_key)
+        # 任务提交包含 SQLite 事务（BEGIN IMMEDIATE），必须放到线程池，
+        # 否则数据库忙时整个事件循环的 HTTP/WS 都会停摆。
+        task_id, status, task_request_id = await asyncio.to_thread(
+            worker.execute_async,
+            platform=request.platform,
+            actions=request.actions,
+            device_id=request.device_id,
+            window=request.window.model_dump(by_alias=True) if request.window else None,
+            idempotency_key=idempotency_key,
+        )
         logger.info(f"Async task submitted: task_id={task_id}, status={status}")
         return {"task_id": task_id, "status": status, "request_id": task_request_id}
     except WorkerError as exc:
@@ -543,7 +552,8 @@ async def get_task_result(task_id: str):
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    result = worker.get_task_result(task_id)
+    # SQLite 读取也可能被其它写事务阻塞，避免卡住事件循环
+    result = await asyncio.to_thread(worker.get_task_result, task_id)
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": "Task not found", "retryable": False, "details": {"task_id": task_id}})
     request_id = result.get("request_id")
@@ -563,11 +573,11 @@ async def cancel_task(task_id: str):
     """请求取消任务，任务记录不会因取消请求被删除。"""
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
-    snapshot = worker.get_task_result(task_id)
+    snapshot = await asyncio.to_thread(worker.get_task_result, task_id)
     request_id = snapshot.get("request_id") if snapshot else None
     request_id_token = set_request_id(request_id) if request_id else None
     try:
-        result = worker.cancel_task(task_id)
+        result = await asyncio.to_thread(worker.cancel_task, task_id)
         logger.info(f"Task cancellation requested: task_id={task_id}, status={result['status']}")
         return result
     except WorkerError as exc:
@@ -582,7 +592,8 @@ async def refresh_devices():
     if not worker:
         raise HTTPException(status_code=503, detail="Worker not initialized")
 
-    return worker.refresh_devices()
+    # 设备发现包含大量同步子进程调用，放到线程池避免阻塞事件循环
+    return await asyncio.to_thread(worker.refresh_devices)
 
 
 @app.get("/worker/logs", response_class=PlainTextResponse)
@@ -903,7 +914,8 @@ async def update_worker_script(request: ScriptUpdateRequest):
         logger.info(f"Script updated successfully: {request.name} -> {request.version}")
 
         # 9. 触发注册上报（通知平台脚本版本已更新）
-        worker._report_devices()
+        # register_env 是同步 HTTP 调用，放到线程池避免阻塞事件循环
+        await asyncio.to_thread(worker._report_devices)
 
         return {
             "status": "success",
@@ -930,12 +942,35 @@ def _trigger_restart_after_response():
             # GUI 模式：通过信号触发重启
             gui_app.ui_signals.show_config_restart.emit()
         else:
-            # CLI 模式：通过子进程重启
+            # CLI 模式：拉起新进程 + 当前进程优雅退出
             from worker.config import cli_restart
             cli_restart()
 
     # 启动后台线程执行重启
     threading.Thread(target=_do_restart_async, daemon=True).start()
+
+
+# uvicorn Server 实例（由 main.py 注入，用于 CLI 配置重启时优雅停机）
+_uvicorn_server: Any | None = None
+
+
+def set_uvicorn_server(server: Any) -> None:
+    """注入 uvicorn Server 实例。"""
+    global _uvicorn_server
+    _uvicorn_server = server
+
+
+def request_uvicorn_shutdown() -> None:
+    """请求 uvicorn 优雅停机（CLI 配置重启使用）。
+
+    uvicorn 退出后 main() 的 finally 会执行 worker.stop() 并结束进程，
+    端口随之释放；新进程会等待端口可用后再绑定。
+    """
+    if _uvicorn_server is not None:
+        logger.info("CLI restart: requesting uvicorn graceful shutdown")
+        _uvicorn_server.should_exit = True
+    else:
+        logger.warning("CLI restart: uvicorn server not registered, cannot shut down gracefully")
 
 
 # ========== 性能监控 API 端点 ==========
@@ -1193,8 +1228,18 @@ async def screen_stream(
         await websocket.close(code=1008, reason="Max connections reached")
         return
 
-    await websocket.accept()
+    # 先同步占位再 accept：检查与写入之间不能插入 await，否则两个并发
+    # 连接可同时通过检查导致超限。
     _ws_connections[conn_key] = current_count + 1
+    try:
+        await websocket.accept()
+    except Exception:
+        remaining = _ws_connections.get(conn_key, 1) - 1
+        if remaining <= 0:
+            _ws_connections.pop(conn_key, None)
+        else:
+            _ws_connections[conn_key] = remaining
+        raise
 
     # 日志显示 monitor 参数
     log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
@@ -1266,7 +1311,7 @@ async def screen_stream(
     h264_diag_packet_types: list[str] = []
     try:
         # 获取 ScreenManager
-        from worker.screen.manager import _screen_managers, get_screen_manager
+        from worker.screen.manager import get_existing_screen_manager, get_screen_manager
 
         # iOS/Android: 检查设备是否已注册（有 WDA/minicap 服务）
         if platform == "ios":
@@ -1321,22 +1366,27 @@ async def screen_stream(
                 idle_fps=1,
                 active_fps=streaming_fps,
             )
-        # 根据 platform 创建对应的 FrameSource
-        elif conn_key not in _screen_managers:
-            frame_source = _create_frame_source(platform, device_id, monitor)
-            screen_manager = get_screen_manager(conn_key, frame_source)
         else:
-            screen_manager = _screen_managers[conn_key]
-            # 获取已存在的 frame_source
-            frame_source = screen_manager._frame_source
+            # 复用或创建 ScreenManager（线程安全）
+            existing_manager = get_existing_screen_manager(conn_key)
+            if existing_manager is not None:
+                screen_manager = existing_manager
+                # 获取已存在的 frame_source
+                frame_source = screen_manager._frame_source
+            else:
+                frame_source = _create_frame_source(platform, device_id, monitor)
+                screen_manager = get_screen_manager(conn_key, frame_source)
 
         # iOS MJPEG 透传模式特殊处理
         if platform == "ios" and codec == "mjpeg":
             # 使用 MJPEG 透传
             # 建立 HTTP 长连接可能等待网络超时，不能阻塞 FastAPI 事件循环。
             mjpeg_proxy = await asyncio.to_thread(frame_source.start_mjpeg_proxy)
-            await mjpeg_proxy.proxy_to_websocket(websocket, stream_stop_event)
-            mjpeg_proxy.stop()
+            try:
+                await mjpeg_proxy.proxy_to_websocket(websocket, stream_stop_event)
+            finally:
+                # 透传异常或客户端断开时都必须停掉代理连接，避免泄漏
+                mjpeg_proxy.stop()
             return
 
         # 根据 codec 配置帧源（透传 bitrate/profile 给 H.264 推流；jpeg/mjpeg 忽略）
@@ -1727,12 +1777,12 @@ async def screen_stream(
                 frame_source.stop()
             except Exception as exc:
                 logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
-        # 确保减少连接计数
-        _ws_connections[conn_key] = _ws_connections.get(conn_key, 1) - 1
+        # 确保减少连接计数（并发下计数可能已被清理，用 pop 兜底）
+        remaining = _ws_connections.get(conn_key, 1) - 1
 
         # 当连接计数降至 0 时，关闭 ScreenManager 以停止后台帧捕获线程
-        if _ws_connections[conn_key] <= 0:
-            del _ws_connections[conn_key]
+        if remaining <= 0:
+            _ws_connections.pop(conn_key, None)
             if direct_h264_frame_source:
                 # 官方 H.264 使用独立帧源，不创建 ScreenManager。
                 pass
@@ -1790,12 +1840,14 @@ def _create_frame_source(
     )
 
     if platform == "ios":
-        # iOS: 使用 WDA MJPEG 流
+        # iOS: 使用 WDA MJPEG 流（端口按设备分配，避免多设备串台）
         if worker and worker.ios_manager:
-            wda_client = worker.ios_manager._device_clients.get(device_id)
+            ios_manager = worker.ios_manager
+            mjpeg_port = ios_manager.get_mjpeg_port(device_id)
+            wda_client = ios_manager._device_clients.get(device_id)
             if wda_client:
-                return MJPEGFrameSource(device_id, wda_client)
-        # Fallback: 直接连接 WDA（假设本地 9100 端口）
+                return MJPEGFrameSource(device_id, wda_client, mjpeg_port=mjpeg_port)
+        # Fallback: 直接连接 WDA（假设本地基础端口）
         from worker.platforms.wda_client import WDAClient
         wda_client = WDAClient("http://127.0.0.1:8100")
         return MJPEGFrameSource(device_id, wda_client)

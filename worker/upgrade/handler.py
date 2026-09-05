@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # 状态管理器（单例）
 _status_manager = UpgradeStatusManager()
 
+# 升级启动互斥锁：is_upgrading 检查与状态写入之间必须原子，
+# 否则两个并发请求都能通过检查各自启动升级线程。
+_upgrade_start_lock = threading.Lock()
+
 
 def _stop_device_monitor() -> None:
     """
@@ -90,49 +94,55 @@ def start_async_upgrade(request: UpgradeRequest) -> UpgradeResponse:
     Raises:
         UpgradeError: 已有升级正在进行
     """
-    # 检查是否已有升级
-    if _status_manager.is_upgrading():
-        raise UpgradeError("已有升级任务正在进行中")
+    with _upgrade_start_lock:
+        # 原子检查并占用：防止并发请求各自启动升级线程
+        if _status_manager.is_upgrading():
+            raise UpgradeError("已有升级任务正在进行中")
 
-    # 立即停止设备监控定时任务
-    _stop_device_monitor()
+        current_version = get_current_version()
+        target_version = request.version
 
-    current_version = get_current_version()
-    target_version = request.version
+        # 版本校验
+        if target_version and target_version == current_version:
+            return UpgradeResponse(
+                status="skipped",
+                message="当前版本已是最新，无需升级",
+                current_version=current_version,
+                target_version=target_version,
+            )
 
-    # 版本校验
-    if target_version and target_version == current_version:
-        return UpgradeResponse(
-            status="skipped",
-            message="当前版本已是最新，无需升级",
-            current_version=current_version,
-            target_version=target_version,
+        # 立即停止设备监控定时任务
+        _stop_device_monitor()
+
+        # 下载期间也不保留官方 Java 进程，避免升级包覆盖 JAR/Bridge 时发生占用。
+        _stop_harmony_official_sessions()
+
+        # 初始化状态
+        state = UpgradeState(
+            status="accepted",
+            target_version=target_version or "unknown",
+            current_version=current_version or "unknown",
+            download_url=request.download_url,
+            started_at=datetime.now().isoformat(),
+            download_progress=0,
+            downloaded_bytes=0,
+            total_bytes=0,
         )
+        _status_manager.set_state(state)
 
-    # 下载期间也不保留官方 Java 进程，避免升级包覆盖 JAR/Bridge 时发生占用。
-    _stop_harmony_official_sessions()
-
-    # 初始化状态
-    state = UpgradeState(
-        status="accepted",
-        target_version=target_version or "unknown",
-        current_version=current_version or "unknown",
-        download_url=request.download_url,
-        started_at=datetime.now().isoformat(),
-        download_progress=0,
-        downloaded_bytes=0,
-        total_bytes=0,
-    )
-    _status_manager.set_state(state)
-
-    # 启动后台线程
-    thread = threading.Thread(
-        target=_execute_upgrade_background,
-        args=(request, current_version, target_version),
-        daemon=False,  # 非 daemon 确保升级完成
-    )
-    _status_manager.set_thread(thread)
-    thread.start()
+        try:
+            # 启动后台线程
+            thread = threading.Thread(
+                target=_execute_upgrade_background,
+                args=(request, current_version, target_version),
+                daemon=False,  # 非 daemon 确保升级完成
+            )
+            _status_manager.set_thread(thread)
+            thread.start()
+        except Exception:
+            # 线程启动失败必须回滚状态，否则 is_upgrading 永远为 True
+            _status_manager.clear()
+            raise
 
     logger.info(f"异步升级已启动: {current_version} -> {target_version}")
 

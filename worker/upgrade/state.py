@@ -102,6 +102,7 @@ class UpgradeStatusManager:
                     cls._instance._state: UpgradeState | None = None
                     cls._instance._thread: threading.Thread | None = None
                     cls._instance._state_lock = threading.Lock()
+                    cls._instance._last_persisted_progress: int | None = None
         return cls._instance
 
     def is_upgrading(self) -> bool:
@@ -135,6 +136,7 @@ class UpgradeStatusManager:
         """
         with self._state_lock:
             self._state = state
+            self._last_persisted_progress = None  # 新一轮升级重置节流基准
         save_state(state)
 
     def update_status(self, status: str, **kwargs) -> None:
@@ -157,16 +159,25 @@ class UpgradeStatusManager:
         """
         更新下载进度。
 
+        内存中每次都更新（开销可忽略）；磁盘持久化按百分比变化节流，
+        避免下载期间每次回调都持锁全量写状态文件（150MB 包按 8KB 回调
+        会产生上万次写盘）。
+
         Args:
             downloaded: 已下载字节
             total: 总字节
         """
         with self._state_lock:
-            if self._state:
-                self._state.downloaded_bytes = downloaded
-                self._state.total_bytes = total
-                if total > 0:
-                    self._state.download_progress = int(downloaded / total * 100)
+            if not self._state:
+                return
+            self._state.downloaded_bytes = downloaded
+            self._state.total_bytes = total
+            if total > 0:
+                self._state.download_progress = int(downloaded / total * 100)
+            # 持久化节流：百分比变化或下载完成时才写盘
+            finished = total > 0 and downloaded >= total
+            if finished or self._last_persisted_progress != self._state.download_progress:
+                self._last_persisted_progress = self._state.download_progress
                 save_state(self._state)
 
     def set_thread(self, thread: threading.Thread | None) -> None:

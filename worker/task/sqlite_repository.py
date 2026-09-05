@@ -10,7 +10,7 @@ from worker.errors import IdempotencyConflictError
 from worker.storage.database import Database
 from worker.task.repository import TaskRepository
 from worker.task.result import TaskResult, TaskStatus
-from worker.task.task import Task
+from worker.task.task import Task, request_fingerprint
 
 
 class SQLiteTaskRepository(TaskRepository):
@@ -56,7 +56,7 @@ class SQLiteTaskRepository(TaskRepository):
         except Exception as exc:
             if idempotency_key and "UNIQUE constraint failed: worker_tasks.idempotency_key" in str(exc):
                 existing = self.get_by_idempotency(idempotency_key)
-                if existing and existing.get("request_json") != request_json:
+                if existing and request_fingerprint(existing["task"]) != request_fingerprint(task):
                     raise IdempotencyConflictError(idempotency_key) from exc
             raise
 

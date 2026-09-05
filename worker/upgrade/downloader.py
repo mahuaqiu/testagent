@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 TEMP_DIR = "temp"
 INSTALLER_FILENAME = "installer.exe"
 
+# 下载块大小：进度持久化按百分比节流，块大小可以放宽以减少循环次数
+DOWNLOAD_CHUNK_SIZE = 65536
+
 
 def get_temp_dir() -> str:
     """
@@ -33,6 +36,11 @@ def get_temp_dir() -> str:
     temp_dir = os.path.join(get_base_dir(), TEMP_DIR)
     os.makedirs(temp_dir, exist_ok=True)
     return temp_dir
+
+
+class DownloadError(Exception):
+    """下载错误。"""
+    pass
 
 
 def download_installer(url: str, expected_size: int | None = None) -> str:
@@ -112,11 +120,6 @@ def download_installer(url: str, expected_size: int | None = None) -> str:
         raise DownloadError(f"下载失败: {e}")
 
 
-class DownloadError(Exception):
-    """下载错误。"""
-    pass
-
-
 def download_installer_async(
     url: str,
     progress_callback: Callable[[int, int], None],
@@ -125,7 +128,8 @@ def download_installer_async(
     """
     异步下载安装包（支持进度回调）。
 
-    使用 httpx.stream 流式下载，实时报告进度。
+    使用 httpx.stream 流式下载，实时报告进度（进度持久化由状态层按
+    百分比节流，回调侧按 1% 粒度触发，避免每次回调都持锁全量写盘）。
 
     Args:
         url: 安装包下载地址（HTTP/HTTPS URL 或 UNC/本地路径）
@@ -161,15 +165,30 @@ def download_installer_async(
 
                     total_size = int(response.headers.get("content-length", 0))
                     downloaded = 0
+                    last_reported_percent = -1
+                    last_reported_bytes = 0
 
                     os.makedirs(temp_dir, exist_ok=True)
 
                     with open(installer_path, "wb") as f:
-                        for chunk in response.iter_bytes(chunk_size=8192):
+                        for chunk in response.iter_bytes(chunk_size=DOWNLOAD_CHUNK_SIZE):
                             f.write(chunk)
                             downloaded += len(chunk)
-                            # 调用进度回调
-                            progress_callback(downloaded, total_size)
+                            # 进度回调节流：已知大小时按 1% 粒度，未知大小时
+                            # 按 1MB 粒度；下载完成时必报。
+                            if total_size:
+                                percent = int(downloaded / total_size * 100)
+                                should_report = (
+                                    percent != last_reported_percent
+                                    or downloaded >= total_size
+                                )
+                                if should_report:
+                                    last_reported_percent = percent
+                            else:
+                                should_report = downloaded - last_reported_bytes >= 1_000_000
+                            if should_report:
+                                last_reported_bytes = downloaded
+                                progress_callback(downloaded, total_size)
 
                     logger.info(f"下载完成: {downloaded} bytes")
 

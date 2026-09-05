@@ -16,6 +16,7 @@ from typing import Any
 from common.packaging import get_base_dir
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
+from worker.actions.spec import ActionCancelled, ActionTimedOut
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.platforms.go_ios_client import GoIOSClient
@@ -98,6 +99,7 @@ class iOSPlatformManager(PlatformManager):
         self._device_clients: dict[str, WDAClient] = {}  # udid -> WDAClient
         self._device_tunnel_info: dict[str, dict] = {}  # udid -> tunnel info
         self._device_product_types: dict[str, str] = {}  # udid -> product_type（用于判断按键支持）
+        self._runtime_scale_cache: dict[int, tuple[int, int, int]] = {}  # id(client) -> 运行时推导的分辨率和缩放
         self._current_device: str | None = None
         self._unlock_config = unlock_config or {}
         self._busy_checker = busy_checker or (lambda _device_id: False)
@@ -476,6 +478,17 @@ class iOSPlatformManager(PlatformManager):
         wda_port = self.wda_base_port + index
         mjpeg_port = self.mjpeg_base_port + index
         return wda_port, mjpeg_port
+
+    def get_mjpeg_port(self, device_id: str | None = None) -> int:
+        """返回设备当前分配的 MJPEG 端口（未知设备回退基础端口）。
+
+        多设备时每台设备端口不同（base + 设备索引），MJPEG 帧源必须
+        使用各自端口，否则会连到其它设备的画面。
+        """
+        info = self._device_wda.get(device_id or "")
+        if info and info.get("mjpeg_port"):
+            return int(info["mjpeg_port"])
+        return self.mjpeg_base_port
 
     def _get_tunnel_info(self, udid: str, timeout: int = 30) -> dict | None:
         """获取 iOS 17+ 设备的 tunnel 信息（等待建立）。"""
@@ -1091,9 +1104,9 @@ class iOSPlatformManager(PlatformManager):
         """按任务上下文对应的设备转换坐标，避免并发任务串用当前设备。"""
         device_id = self._device_id_for_context(context)
         product_type = self._device_product_types.get(device_id, "")
-        return self._convert_coords_for_product(x, y, product_type)
+        return self._convert_coords_for_product(x, y, product_type, client=context if context else None)
 
-    def _convert_coords_for_product(self, x: int, y: int, product_type: str) -> tuple[int, int]:
+    def _convert_coords_for_product(self, x: int, y: int, product_type: str, client: Any = None) -> tuple[int, int]:
         """转换物理像素坐标到 WDA 逻辑坐标。
 
         判断逻辑：
@@ -1102,6 +1115,10 @@ class iOSPlatformManager(PlatformManager):
 
         注意：这种方法对于恰好落在逻辑范围内的物理坐标可能出错。
         建议用户使用物理坐标时确保超过逻辑分辨率阈值。
+
+        机型表未收录的设备通过 WDA 运行时推导逻辑分辨率和缩放因子，
+        推导失败时才回退旧的 //2 逻辑（新机型屏幕多为 3x，按 2x 折半
+        会系统性错点）。
         """
         # 获取设备的逻辑分辨率
         resolution = self._get_logic_resolution(product_type)
@@ -1119,10 +1136,62 @@ class iOSPlatformManager(PlatformManager):
             logger.debug(f"Coords ({x}, {y}) within logic resolution {logic_width}x{logic_height}, no conversion")
             return (x, y)
 
-        # 未知设备，使用旧逻辑（向后兼容）
+        # 未知机型：运行时从 WDA 推导
+        runtime = self._get_runtime_resolution_and_scale(client) if client else None
+        if runtime:
+            logic_width, logic_height, scale_factor = runtime
+            if x > logic_width * 1.05 or y > logic_height * 1.05:
+                logger.debug(
+                    f"Runtime scale {scale_factor}x for unknown product {product_type}: "
+                    f"({x}, {y}) -> ({x//scale_factor}, {y//scale_factor})"
+                )
+                return (x // scale_factor, y // scale_factor)
+            return (x, y)
+
+        # 推导失败，使用旧逻辑（向后兼容）
         if x > 400 or y > 700:
             return (x // 2, y // 2)
         return (x, y)
+
+    def _get_runtime_resolution_and_scale(self, client: Any) -> tuple[int, int, int] | None:
+        """运行时从 WDA 推导 (逻辑宽, 逻辑高, 缩放因子)。
+
+        逻辑分辨率来自 WDA window size，物理分辨率来自 WDA 截图，
+        两者相除即缩放因子。按 client 实例缓存，避免每次点击都截图。
+        """
+        if client is None:
+            return None
+        cache_key = id(client)
+        cached = self._runtime_scale_cache.get(cache_key)
+        if cached:
+            return cached
+        try:
+            from io import BytesIO
+
+            from PIL import Image
+
+            size = client.window_size()
+            if not size:
+                return None
+            screenshot = client.screenshot()
+            if not screenshot:
+                return None
+            with Image.open(BytesIO(screenshot)) as img:
+                physical_w, physical_h = img.size
+            logic_long = max(size[0], size[1])
+            physical_long = max(physical_w, physical_h)
+            scale = int(round(physical_long / logic_long))
+            if scale < 1:
+                return None
+            runtime = (size[0], size[1], scale)
+            self._runtime_scale_cache[cache_key] = runtime
+            logger.info(
+                f"Runtime scale derived: logic={size[0]}x{size[1]}, physical={physical_w}x{physical_h}, scale={scale}x"
+            )
+            return runtime
+        except Exception as e:
+            logger.warning(f"Failed to derive runtime scale: {e}")
+            return None
 
     def _get_scale_factor(self, product_type: str) -> int:
         """根据 product_type 获取缩放因子。
@@ -1323,9 +1392,11 @@ class iOSPlatformManager(PlatformManager):
 
         # WDA pinch 方法
         if direction == "in":
-            client.pinch(scale=scale, duration=duration_sec)
+            success = client.pinch(scale=scale, duration=duration_sec)
         else:
-            client.pinch(scale=1.0 / scale, duration=duration_sec)
+            success = client.pinch(scale=1.0 / scale, duration=duration_sec)
+        if not success:
+            raise RuntimeError(f"Pinch {direction} failed (scale={scale}, duration={duration}ms)")
 
         logger.debug(f"pinch {direction} executed: scale={scale}, duration={duration}ms")
 
@@ -1359,36 +1430,8 @@ class iOSPlatformManager(PlatformManager):
             raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
     def take_screenshot(self, context: Any = None) -> bytes:
-        """获取截图（使用 ScreenManager）。"""
-        device_id = self._device_id_for_context(context)
-        if not device_id:
-            # 尝试从 context 获取
-            client = context
-            if client:
-                for udid, c in self._device_clients.items():
-                    if c == client:
-                        device_id = udid
-                        break
-
-        if not device_id:
-            # 无设备上下文，回退到原有逻辑
-            return self._take_screenshot_fallback(context)
-
-        try:
-            from worker.screen.manager import get_screen_manager
-            from worker.screen.frame_source import MJPEGFrameSource
-
-            # 从 WDA client 创建 FrameSource
-            wda_client = self._device_clients.get(device_id)
-            if wda_client:
-                frame_source = MJPEGFrameSource(device_id, wda_client)
-                screen_manager = get_screen_manager(f"ios/{device_id}", frame_source)
-                return screen_manager.get_frame_jpeg()
-            else:
-                return self._take_screenshot_fallback(context)
-        except Exception as e:
-            logger.warning(f"ScreenManager screenshot failed: {e}, falling back to WDA")
-            return self._take_screenshot_fallback(context)
+        """获取截图（WDA 单帧截图，返回设备原生分辨率 PNG）。"""
+        return self._take_screenshot_fallback(context)
 
     def _take_screenshot_fallback(self, context: Any = None) -> bytes:
         """获取截图（回退逻辑）。"""
@@ -1453,6 +1496,10 @@ class iOSPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
+        except (ActionCancelled, ActionTimedOut):
+            # 取消和超时必须交回任务层处理（映射为 CANCELLED/TIMEOUT），
+            # 吞成普通 FAILED 会把任务结果伪装成动作失败。
+            raise
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(

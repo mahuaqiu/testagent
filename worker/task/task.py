@@ -2,6 +2,7 @@
 任务模型。
 """
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -9,6 +10,18 @@ from typing import List, Optional, Dict, Any
 
 from worker.task.action import Action
 from worker.task.result import TaskResult, TaskStatus
+
+
+def request_fingerprint(task: "Task") -> str:
+    """生成不受本地 task_id 和创建时间影响的请求指纹。
+
+    幂等键命中时必须用该指纹比较请求是否相同：重试方通常会生成新的
+    task_id，按原始 JSON（含 task_id）比较会把相同请求误判为冲突。
+    """
+    payload = task.to_dict()
+    payload.pop("task_id", None)
+    payload.pop("created_at", None)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 @dataclass

@@ -12,6 +12,7 @@ import logging
 import subprocess  # 用于 CalledProcessError 异常类型
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import pyautogui
@@ -19,6 +20,7 @@ import pyperclip
 
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
+from worker.actions.spec import ActionCancelled, ActionTimedOut
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
@@ -31,6 +33,19 @@ logger = logging.getLogger(__name__)
 # 该机制会阻止后续操作，干扰正常执行
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.1
+
+
+@dataclass
+class WindowsContext:
+    """Windows 执行上下文（窗口绑定按上下文隔离）。
+
+    窗口绑定曾保存为平台管理器的共享实例字段，remote 域与 task 域
+    并发执行时会互相清掉对方的绑定导致点击错位；绑定随上下文传递后
+    各执行域互不影响。
+    """
+
+    window_handle: int | None = None
+    window_rect: tuple[int, int, int, int] | None = None
 
 
 class WindowsPlatformManager(PlatformManager):
@@ -81,40 +96,60 @@ class WindowsPlatformManager(PlatformManager):
     # ========== 上下文管理 ==========
 
     def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
-        """创建桌面上下文，解析窗口绑定参数。"""
+        """创建桌面上下文，解析窗口绑定参数（绑定随上下文返回，不写共享字段）。"""
         logger.info("Windows context created")
 
-        # 每次创建上下文时重置窗口绑定
-        self._window_handle = None
-        self._window_rect = None
+        context = WindowsContext()
 
         # 解析窗口绑定参数
         if options:
             window_info = options.get("window")
             if window_info:
                 from worker.platforms.win_utils import find_window_handle, get_window_rect
-                self._window_handle = find_window_handle(
+                context.window_handle = find_window_handle(
                     title=window_info.get("title"),
                     class_name=window_info.get("class"),  # API 使用 alias "class"
                 )
-                if self._window_handle:
-                    self._window_rect = get_window_rect(self._window_handle)
-                    logger.info(f"Window bound: handle={self._window_handle}, rect={self._window_rect}")
+                if context.window_handle:
+                    context.window_rect = get_window_rect(context.window_handle)
+                    logger.info(
+                        f"Window bound: handle={context.window_handle}, rect={context.window_rect}"
+                    )
                 else:
                     logger.error("Window not found, fallback to fullscreen screenshot")
 
-        return None
+        return context
 
     def close_context(self, context: Any, close_session: bool = False) -> None:
-        """关闭桌面上下文，清除窗口绑定。"""
-        # 清除窗口绑定
-        self._window_handle = None
-        self._window_rect = None
-        logger.info("Windows context closed, window binding cleared")
+        """关闭桌面上下文。
+
+        窗口绑定随上下文对象持有，无需清理共享状态；保留共享字段的
+        清理仅为兼容手工构造的旧调用方式。
+        """
+        if not isinstance(context, WindowsContext):
+            self._window_handle = None
+            self._window_rect = None
+        logger.info("Windows context closed")
+
+    def _resolve_window_binding(
+        self, context: Any = None
+    ) -> tuple[int | None, tuple[int, int, int, int] | None]:
+        """解析当前生效的窗口绑定：优先上下文，回退共享字段（兼容旧调用）。"""
+        if isinstance(context, WindowsContext):
+            if context.window_handle or context.window_rect:
+                return context.window_handle, context.window_rect
+            return None, None
+        handle = getattr(context, "window_handle", None)
+        rect = getattr(context, "window_rect", None)
+        if handle or rect:
+            return handle, rect
+        return self._window_handle, self._window_rect
 
     # ========== 基础能力实现 ==========
 
-    def _convert_to_global_coords(self, x: int, y: int) -> tuple[int, int]:
+    def _convert_to_global_coords(
+        self, x: int, y: int, context: Any = None
+    ) -> tuple[int, int]:
         """将截图相对坐标转换为全局坐标。
 
         窗口模式：窗口相对坐标 + 窗口位置偏移 = 全局坐标
@@ -123,14 +158,16 @@ class WindowsPlatformManager(PlatformManager):
         Args:
             x: 截图相对 X 坐标
             y: 截图相对 Y 坐标
+            context: 执行上下文（携带窗口绑定）
 
         Returns:
             Tuple[int, int]: 全局坐标 (global_x, global_y)
         """
-        if self._window_rect:
+        window_handle, window_rect = self._resolve_window_binding(context)
+        if window_rect:
             # 窗口模式：窗口相对坐标 + 窗口左上角偏移
-            global_x = x + self._window_rect[0]
-            global_y = y + self._window_rect[1]
+            global_x = x + window_rect[0]
+            global_y = y + window_rect[1]
         else:
             # 全屏模式：使用显示器坐标转换
             from worker.screen.monitor_utils import convert_to_global_coords
@@ -149,7 +186,7 @@ class WindowsPlatformManager(PlatformManager):
         Note:
             自动将窗口/截图相对坐标转换为全局坐标。
         """
-        global_x, global_y = self._convert_to_global_coords(x, y)
+        global_x, global_y = self._convert_to_global_coords(x, y, context)
 
         if duration > 0:
             duration_sec = duration / 1000.0
@@ -167,7 +204,7 @@ class WindowsPlatformManager(PlatformManager):
         Note:
             自动将窗口/截图相对坐标转换为全局坐标。
         """
-        global_x, global_y = self._convert_to_global_coords(x, y)
+        global_x, global_y = self._convert_to_global_coords(x, y, context)
         pyautogui.rightClick(global_x, global_y)
         logger.info(f"Right click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
@@ -177,7 +214,7 @@ class WindowsPlatformManager(PlatformManager):
         Note:
             自动将窗口/截图相对坐标转换为全局坐标。
         """
-        global_x, global_y = self._convert_to_global_coords(x, y)
+        global_x, global_y = self._convert_to_global_coords(x, y, context)
         pyautogui.doubleClick(global_x, global_y)
         logger.debug(f"Double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
@@ -187,7 +224,7 @@ class WindowsPlatformManager(PlatformManager):
         Note:
             自动将窗口/截图相对坐标转换为全局坐标。
         """
-        global_x, global_y = self._convert_to_global_coords(x, y)
+        global_x, global_y = self._convert_to_global_coords(x, y, context)
         pyautogui.moveTo(global_x, global_y)
         logger.debug(f"Move to ({x}, {y}) -> global ({global_x}, {global_y})")
 
@@ -213,8 +250,8 @@ class WindowsPlatformManager(PlatformManager):
             pyautogui 不支持 steps 参数，始终使用 duration 控制滑动时间。
             自动将窗口/截图相对坐标转换为全局坐标。
         """
-        global_start_x, global_start_y = self._convert_to_global_coords(start_x, start_y)
-        global_end_x, global_end_y = self._convert_to_global_coords(end_x, end_y)
+        global_start_x, global_start_y = self._convert_to_global_coords(start_x, start_y, context)
+        global_end_x, global_end_y = self._convert_to_global_coords(end_x, end_y, context)
 
         duration_sec = duration / 1000.0
         pyautogui.moveTo(global_start_x, global_start_y)
@@ -275,21 +312,24 @@ class WindowsPlatformManager(PlatformManager):
         """获取截图，sidecar 失败时使用同一坐标基准的桌面截图。"""
         device_id = getattr(self, "_current_device", None) or "windows"
         monitor = getattr(self, "_current_monitor", 1) or 1
+        window_handle, window_rect = self._resolve_window_binding(context)
         try:
             from worker.screen.windows_sidecar import get_windows_sidecar_manager
 
             manager = get_windows_sidecar_manager(f"windows/{device_id}/{monitor}", monitor=monitor)
-            if self._window_handle and self._window_rect:
-                return self._take_window_screenshot(manager, monitor)
+            if window_handle and window_rect:
+                return self._take_window_screenshot(manager, monitor, window_rect)
             screenshot = manager.get_frame_jpeg()
             if not screenshot:
                 raise RuntimeError("sidecar returned an empty screenshot")
             return screenshot
         except Exception as exc:
             logger.error("Sidecar screenshot failed, fallback to desktop capture: %s", exc)
-            return self._take_desktop_screenshot(monitor)
+            return self._take_desktop_screenshot(monitor, window_rect)
 
-    def _take_window_screenshot(self, manager: Any, monitor: int) -> bytes:
+    def _take_window_screenshot(
+        self, manager: Any, monitor: int, window_rect: tuple[int, int, int, int]
+    ) -> bytes:
         """获取窗口截图并校验原始帧，失败时由调用方执行窗口区域 fallback。"""
         from PIL import Image
         from worker.screen.monitor_utils import get_monitor_offset
@@ -310,7 +350,7 @@ class WindowsPlatformManager(PlatformManager):
         image = Image.frombuffer("RGBA", (width, height), bgra_bytes, "raw", "BGRA", 0, 1)
 
         offset_x, offset_y = get_monitor_offset(monitor)
-        left, top, right, bottom = self._window_rect
+        left, top, right, bottom = window_rect
         crop_box = (
             max(0, left - offset_x),
             max(0, top - offset_y),
@@ -318,20 +358,26 @@ class WindowsPlatformManager(PlatformManager):
             min(height, bottom - offset_y),
         )
         if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
-            raise RuntimeError(f"window is outside captured monitor: rect={self._window_rect}")
+            raise RuntimeError(f"window is outside captured monitor: rect={window_rect}")
 
         image = image.crop(crop_box)
         if image.mode != "RGB":
             image = image.convert("RGB")
         return self._image_to_png(image)
 
-    def _take_desktop_screenshot(self, monitor: int) -> bytes:
+    def _take_desktop_screenshot(
+        self,
+        monitor: int,
+        window_rect: tuple[int, int, int, int] | None = None,
+    ) -> bytes:
         """按当前窗口或显示器范围获取桌面截图，保持截图与坐标基准一致。"""
         from PIL import ImageGrab
         from worker.screen.monitor_utils import get_mapped_monitor_index
 
-        if self._window_rect:
-            bbox = self._window_rect
+        if window_rect is None:
+            _, window_rect = self._resolve_window_binding(None)
+        if window_rect:
+            bbox = window_rect
         else:
             _, monitor_config = get_mapped_monitor_index(monitor)
             bbox = (
@@ -348,7 +394,7 @@ class WindowsPlatformManager(PlatformManager):
         try:
             image = ImageGrab.grab(bbox=bbox, all_screens=True)
         except Exception:
-            if self._window_rect or monitor != 1:
+            if window_rect or monitor != 1:
                 raise
             logger.warning("全屏桌面区域截图失败，尝试 pyautogui 主屏截图")
             image = pyautogui.screenshot()
@@ -405,6 +451,10 @@ class WindowsPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
+        except (ActionCancelled, ActionTimedOut):
+            # 取消和超时必须交回任务层处理（映射为 CANCELLED/TIMEOUT），
+            # 吞成普通 FAILED 会把任务结果伪装成动作失败。
+            raise
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             return ActionResult(
@@ -509,6 +559,10 @@ class WindowsPlatformManager(PlatformManager):
             from win_control.display import set_resolution, DisplayError
             monitor_index = action.monitor_index
             set_resolution(width, height, monitor_index)
+            # 分辨率变化后所有显示器几何信息失效，必须刷新缓存，
+            # 否则后续点击会按旧几何换算导致错位。
+            from worker.screen.monitor_utils import invalidate_monitors_cache
+            invalidate_monitors_cache()
             monitor_desc = f"monitor {monitor_index}" if monitor_index else "primary monitor"
             return ActionResult(
                 number=0,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -18,12 +19,14 @@ from worker.scheduling.models import ResourceLease
 from worker.scheduling.scheduler import ResourceScheduler
 from worker.task.repository import TaskRepository
 from worker.task.result import TaskResult, TaskStatus
-from worker.task.task import Task
+from worker.task.task import Task, request_fingerprint
 
 logger = logging.getLogger(__name__)
 
 HOST_COMMAND_RESOURCE_KEY = "host:command"
 REMOTE_EXECUTION_DOMAIN = "remote"
+# 共享物理输入设备的桌面平台：task/remote 两个域必须串行执行
+DESKTOP_PLATFORMS = {"windows", "mac"}
 
 TERMINAL_STATUSES = {
     TaskStatus.SUCCESS.value,
@@ -80,14 +83,14 @@ class TaskService:
             if self._stopping:
                 raise RuntimeError("Worker is stopping")
 
-            request_json = json.dumps(task.to_dict(), ensure_ascii=False)
+            request_json = request_fingerprint(task)
             existing = (
                 self.repository.get_by_idempotency(idempotency_key)
                 if idempotency_key
                 else None
             )
             if existing:
-                if existing.get("request_json") != request_json:
+                if request_fingerprint(existing["task"]) != request_json:
                     raise IdempotencyConflictError(idempotency_key or "")
                 return existing["task"].task_id, self._status_value(existing["status"])
 
@@ -159,16 +162,49 @@ class TaskService:
             handle = self._handles.get(task_id)
             if handle:
                 handle.cancel_event.set()
-            self.repository.update_status(task_id, TaskStatus.RUNNING, cancel_requested=True)
-            return {"task_id": task_id, "status": "cancelling"}
+                self.repository.update_status(task_id, TaskStatus.RUNNING, cancel_requested=True)
+                return {"task_id": task_id, "status": "cancelling"}
+            # 没有运行句柄的任务永远等不到自然结束（如 Worker 重启残留），
+            # 直接标记为 cancelled，避免状态永久卡在 running。
+            self.repository.update_status(
+                task_id,
+                TaskStatus.CANCELLED,
+                result=TaskResult(
+                    task_id=task_id,
+                    request_id=row.get("request_id"),
+                    status=TaskStatus.CANCELLED,
+                    platform=row.get("platform", ""),
+                    error="Task cancelled without running handle",
+                ),
+            )
+            return {"task_id": task_id, "status": TaskStatus.CANCELLED.value}
 
-    def shutdown(self) -> None:
-        """停止接受任务并等待现有任务结束。"""
+    def shutdown(self, timeout: float | None = None) -> None:
+        """停止接受任务并等待现有任务结束。
+
+        Args:
+            timeout: 最长等待秒数；None 表示无限等待。超时后取消排队任务
+                并放弃等待仍在执行的任务（由日志提示，进程退出前由启动
+                恢复逻辑在下次启动时兜底）。
+        """
         with self._lock:
             self._stopping = True
             for handle in self._handles.values():
                 handle.cancel_event.set()
-        self._executor.shutdown(wait=True, cancel_futures=False)
+        if timeout is None:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            return
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self._handles and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if self._handles:
+            logger.warning(
+                "Task shutdown timed out after %.1fs, abandoning task(s): %s",
+                timeout,
+                ",".join(self._handles.keys()),
+            )
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def cleanup_expired(self) -> int:
         """清理过期任务。"""
@@ -212,9 +248,12 @@ class TaskService:
         finally:
             try:
                 self.scheduler.release_lease(handle.lease, "task_finished")
+                # 先落结果再弹句柄：execute_sync 的兜底查询依赖
+                # "句柄不在 ⇒ 结果已在仓库中" 这一顺序，反过来会出现
+                # 极快完成的任务被误报 "Task handle unavailable"。
+                self.repository.update_status(task.task_id, result.status, result=result)
                 with self._lock:
                     self._handles.pop(task.task_id, None)
-                self.repository.update_status(task.task_id, result.status, result=result)
             finally:
                 if request_id_token is not None:
                     reset_request_id(request_id_token)
@@ -244,6 +283,11 @@ class TaskService:
                 message="cmd_exec cannot be mixed with platform actions",
                 http_status=400,
             )
+        if task.platform in DESKTOP_PLATFORMS:
+            # 桌面平台共享物理鼠标/键盘：task 域与 remote 域统一使用相同
+            # 资源键（忽略设备 ID），保证两个域在任何情况下都互斥，
+            # 避免同时驱动同一台机器的输入设备导致动作互相干扰。
+            return f"platform:{task.platform}"
         if task.execution_domain == REMOTE_EXECUTION_DOMAIN:
             if task.device_id:
                 return f"remote:{task.platform}:{task.device_id}"

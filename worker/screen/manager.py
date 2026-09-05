@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # 全局缓存
 _screen_managers: dict[str, "ScreenManager"] = {}
+_screen_managers_lock = threading.Lock()
 
 # 帧捕获失败回调（全局）
 _on_capture_failed: Callable[[str], None] | None = None
@@ -32,13 +33,15 @@ def set_capture_failed_callback(callback: Callable[[str], None]) -> None:
 
 
 def get_screen_manager(device_id: str, frame_source: FrameSource) -> "ScreenManager":
-    """获取或创建 ScreenManager（按设备 ID 缓存）。"""
-    if device_id not in _screen_managers:
-        manager = ScreenManager(frame_source, device_id)
-        manager.start_capture()
-        _screen_managers[device_id] = manager
-        logger.info(f"ScreenManager created for device: {device_id}")
-    return _screen_managers[device_id]
+    """获取或创建 ScreenManager（按设备 ID 缓存，线程安全）。"""
+    with _screen_managers_lock:
+        manager = _screen_managers.get(device_id)
+        if manager is None:
+            manager = ScreenManager(frame_source, device_id)
+            manager.start_capture()
+            _screen_managers[device_id] = manager
+            logger.info(f"ScreenManager created for device: {device_id}")
+        return manager
 
 
 def close_screen_manager(device_id: str) -> None:
@@ -47,18 +50,26 @@ def close_screen_manager(device_id: str) -> None:
     注意：只关闭 HTTP 流连接和后台线程，不清理端口转发进程。
     端口转发进程的生命周期由 iOSPlatformManager 管理，与设备连接状态绑定。
     """
-    if device_id in _screen_managers:
-        manager = _screen_managers[device_id]
+    with _screen_managers_lock:
+        manager = _screen_managers.pop(device_id, None)
+    if manager is not None:
         manager.stop()
-        del _screen_managers[device_id]
         logger.info(f"ScreenManager closed for device: {device_id}")
 
 
 def close_all_screen_managers() -> None:
     """关闭所有 ScreenManager（Worker 停止时调用）。"""
-    for device_id in list(_screen_managers.keys()):
+    with _screen_managers_lock:
+        device_ids = list(_screen_managers.keys())
+    for device_id in device_ids:
         close_screen_manager(device_id)
     logger.info("All ScreenManagers closed")
+
+
+def get_existing_screen_manager(device_id: str) -> "ScreenManager | None":
+    """返回已缓存的 ScreenManager（不创建，线程安全）。"""
+    with _screen_managers_lock:
+        return _screen_managers.get(device_id)
 
 
 class ScreenManager:
@@ -72,29 +83,30 @@ class ScreenManager:
         self._capture_thread: threading.Thread | None = None
         self._running: bool = False
         self._streamer: WebSocketStreamer | None = None
-        # 消费者计数与延迟释放
-        self._active_consumers: int = 0
-        self._consumers_lock: threading.Lock = threading.Lock()
-        self._release_timer: threading.Timer | None = None
-        self._release_delay: float = 60.0
+        # 保护 _running/_capture_thread 状态迁移，避免并发 start/stop
+        # 出现"看到线程在跑却被对方 join 掉"的竞态
+        self._state_lock: threading.Lock = threading.Lock()
 
     def start_capture(self) -> None:
-        """启动后台截图线程。"""
-        if self._running:
-            return
-
-        self._running = True
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._capture_thread.start()
+        """启动后台截图线程（已在运行时幂等返回）。"""
+        with self._state_lock:
+            if self._running and self._capture_thread and self._capture_thread.is_alive():
+                return
+            self._running = True
+            self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._capture_thread.start()
         logger.info("Frame capture thread started")
 
     def stop(self) -> None:
         """停止所有资源（截图线程、推流）。"""
-        self._running = False
-        if self._capture_thread:
+        with self._state_lock:
+            self._running = False
+            capture_thread = self._capture_thread
+            self._capture_thread = None
+        if capture_thread:
             # 如果是当前线程调用 stop（如帧捕获线程检测失败后），则不 join（避免死锁）
-            if self._capture_thread != threading.current_thread():
-                self._capture_thread.join(timeout=5)
+            if capture_thread != threading.current_thread():
+                capture_thread.join(timeout=5)
         if self._streamer:
             self._streamer.stop()
         self._frame_source.stop()
@@ -138,12 +150,16 @@ class ScreenManager:
         return self._frame_source.get_frame_bgra()
 
     def get_frame_jpeg(self) -> bytes:
-        """从 BGRA 队列获取帧并转换为 JPEG。
+        """从队列获取一帧并返回 JPEG。
 
-        Returns:
-            bytes: JPEG 格式的图像数据
+        BGRA 队列仅对支持 BGRA 的帧源（如 MacFrameSource）有意义；
+        其它帧源（MJPEG/minicap/鸿蒙）直接输出 JPEG，走帧队列兜底，
+        不能因缺少 BGRA 支持而抛 NotImplementedError。
         """
-        bgra = self.get_frame_bgra()
+        try:
+            bgra = self.get_frame_bgra()
+        except NotImplementedError:
+            return self.get_frame()
         if not bgra:
             return self._frame_source.get_blank_frame()
 
@@ -156,76 +172,6 @@ class ScreenManager:
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=80)
         return buffer.getvalue()
-
-    def _ensure_capture_running(self) -> None:
-        """确保截图线程正在运行（消费者模式）。
-
-        取消待执行的释放定时器，增加消费者计数。
-        如果是第一个消费者，启动截图线程。
-        """
-        with self._consumers_lock:
-            # 取消待执行的释放定时器
-            if self._release_timer is not None:
-                self._release_timer.cancel()
-                self._release_timer = None
-                logger.debug("Release timer cancelled")
-
-            self._active_consumers += 1
-            logger.debug(f"Consumer added, active_consumers={self._active_consumers}")
-
-            if self._active_consumers == 1 and not self._running:
-                self.start_capture()
-                logger.info("Capture started by first consumer")
-
-    def _release_capture(self) -> None:
-        """释放消费者引用，无消费者时延迟释放截图资源。
-
-        消费者计数 -1，如果计数归零，启动 60 秒延迟释放定时器。
-        """
-        with self._consumers_lock:
-            if self._active_consumers > 0:
-                self._active_consumers -= 1
-            logger.debug(f"Consumer released, active_consumers={self._active_consumers}")
-
-            if self._active_consumers == 0:
-                self._schedule_release()
-
-    def _schedule_release(self) -> None:
-        """启动延迟释放定时器（60 秒后无新消费者则释放截图资源）。"""
-        if self._release_timer is not None:
-            self._release_timer.cancel()
-
-        self._release_timer = threading.Timer(self._release_delay, self._do_release)
-        self._release_timer.daemon = True
-        self._release_timer.start()
-        logger.info(f"Release scheduled in {self._release_delay}s (no active consumers)")
-
-    def _do_release(self) -> None:
-        """延迟释放定时器回调：停止截图线程，释放 MSS 等资源。"""
-        with self._consumers_lock:
-            # 再次确认没有新消费者加入
-            if self._active_consumers > 0:
-                logger.debug("Release cancelled: new consumer joined")
-                return
-            self._release_timer = None
-
-        logger.info("Release timer fired, stopping capture and releasing resources")
-        self._running = False
-        if self._capture_thread and self._capture_thread != threading.current_thread():
-            self._capture_thread.join(timeout=5)
-        self._capture_thread = None
-        self._frame_source.stop()
-        # 清空队列
-        while not self._bgra_queue.empty():
-            try:
-                self._bgra_queue.get_nowait()
-            except Empty:
-                break
-        while not self._frame_queue.empty():
-            try:
-                self._frame_queue.get_nowait()
-            except Empty:
-                break
 
     def _capture_loop(self) -> None:
         """后台截图循环（队列满时丢弃旧帧，带帧率控制）。
@@ -350,8 +296,8 @@ class ScreenManager:
         """
         from worker.screen.streamer import WebSocketStreamer
 
-        # 确保截图线程运行
-        self._ensure_capture_running()
+        # 确保截图线程运行（幂等）
+        self.start_capture()
 
         # 检测 codec 切换：如果 codec 发生变化，需要重新创建 streamer
         if self._streamer:

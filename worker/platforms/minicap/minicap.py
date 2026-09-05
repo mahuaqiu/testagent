@@ -150,9 +150,18 @@ class Minicap:
 
     def _setup_stream(self) -> None:
         """设置 minicap 流式截图服务器"""
-        if self._proc and self._proc.poll() is None:
+        if self._proc and self._proc.poll() is None and self._socket:
             return  # 已启动
 
+        try:
+            self._setup_stream_inner()
+        except Exception:
+            # setup 失败必须回收已创建的进程/端口转发，否则每次重试
+            # 都会在设备上残留一个 minicap 进程和一条 adb forward 规则
+            self.stop_stream()
+            raise
+
+    def _setup_stream_inner(self) -> None:
         display_info = self.get_display_info()
         width = display_info["width"]
         height = display_info["height"]
@@ -216,6 +225,7 @@ class Minicap:
 
     def _connect_socket(self) -> None:
         """连接 minicap socket 并读取全局 header"""
+        self._close_socket()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.settimeout(self.RECV_TIMEOUT)
         self._socket.connect(('127.0.0.1', self._local_port))
@@ -231,6 +241,15 @@ class Minicap:
         # 解析 quirk_flag
         self._quirk_flag = global_headers[-1]
 
+    def _close_socket(self) -> None:
+        """关闭当前 socket（幂等）。"""
+        if self._socket:
+            try:
+                self._socket.close()
+            except Exception:
+                pass
+            self._socket = None
+
     def _recv_all(self, size: int) -> bytes:
         """接收指定大小的数据"""
         data = b''
@@ -241,14 +260,44 @@ class Minicap:
             data += chunk
         return data
 
+    def _resync_stream(self) -> None:
+        """读超时/半帧残留后重建连接。
+
+        socket 读超时会丢掉半帧数据，缓冲区从此与流错位：下一帧的
+        帧大小头会被当成数据、JPEG 数据会被当成头，流永久损坏。
+        minicap 是请求-响应模式，重建连接后重新发帧请求即可恢复到
+        干净状态。
+        """
+        logger.warning("Minicap stream desynchronized, reconnecting")
+        self._close_socket()
+        self._connect_socket()
+
     def get_frame(self) -> bytes:
-        """获取单帧（JPEG 格式）- 流式模式"""
+        """获取单帧（JPEG 格式）- 流式模式（读错位时自动重同步一次）"""
         if not self._installed:
             raise MinicapError("Minicap not installed, call install() first")
 
         # 确保流已启动
         self._setup_stream()
 
+        try:
+            return self._read_frame()
+        except (MinicapError, OSError, socket.timeout):
+            # 读失败（超时/断开/半帧）后重建连接再试一次；截图是幂等
+            # 请求，重发不会产生副作用
+            logger.warning("Minicap frame read failed, resyncing stream and retrying once")
+            try:
+                self._resync_stream()
+                return self._read_frame()
+            except (MinicapError, OSError, socket.timeout) as e:
+                # 重试仍失败：回收整条流，下次调用重新 setup
+                self.stop_stream()
+                if isinstance(e, MinicapError):
+                    raise
+                raise MinicapError(f"Minicap frame read failed after resync: {e}") from e
+
+    def _read_frame(self) -> bytes:
+        """发送帧请求并读取完整一帧（JPEG 格式）。"""
         # 发送请求帧信号
         self._socket.send(b"1")
 
@@ -258,7 +307,8 @@ class Minicap:
             raise MinicapError("Failed to read frame size")
 
         frame_size = struct.unpack("<I", header)[0]
-        if frame_size <= 0:
+        if frame_size <= 0 or frame_size > 64 * 1024 * 1024:
+            # 非法的帧大小说明缓冲区已经错位
             raise MinicapError(f"Invalid frame size: {frame_size}")
 
         # 读取帧数据

@@ -33,6 +33,8 @@ def validate_script_name(name: str) -> bool:
     规则：
     - 只允许 .ps1、.sh、.bat 扩展名
     - 禁止路径穿越（../、/、\\）
+    - 禁止盘符相对路径（C:evil.ps1）等含冒号的名称
+    - 禁止 Windows 保留设备名和非法字符
 
     Args:
         name: 脚本名称
@@ -40,6 +42,9 @@ def validate_script_name(name: str) -> bool:
     Returns:
         bool: 是否合法
     """
+    if not name or len(name) > 255:
+        return False
+
     # 只允许合法扩展名
     allowed_exts = {'.ps1', '.sh', '.bat'}
     ext = os.path.splitext(name)[1].lower()
@@ -50,7 +55,28 @@ def validate_script_name(name: str) -> bool:
     if '..' in name or '/' in name or '\\' in name:
         return False
 
-    return True
+    # 禁止盘符相对路径和其它冒号用法（如 "C:evil.ps1" 会按盘符相对路径
+    # 写到 tools 目录之外）
+    if ':' in name:
+        return False
+
+    # 禁止 Windows 非法字符和控制字符
+    if any(ch in name for ch in '<>"|') or any(ord(ch) < 32 for ch in name):
+        return False
+
+    # 禁止 Windows 保留设备名（CON.ps1、NUL.bat 等同样命中保留名）
+    reserved = {
+        'CON', 'PRN', 'AUX', 'NUL',
+        *(f'COM{i}' for i in range(1, 10)),
+        *(f'LPT{i}' for i in range(1, 10)),
+    }
+    if os.path.splitext(name)[0].upper() in reserved:
+        return False
+
+    # 最终防线：解析后的绝对路径必须仍在 tools 目录内
+    tools_dir = os.path.abspath(get_tools_dir())
+    target = os.path.abspath(os.path.join(tools_dir, name))
+    return target == os.path.join(tools_dir, name)
 
 
 def get_versions_file() -> str:

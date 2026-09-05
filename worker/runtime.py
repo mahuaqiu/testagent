@@ -41,6 +41,7 @@ class WorkerRuntime:
         artifact_retention_hours: int = 72,
         max_workers: int = 16,
         cleanup_interval_hours: int = 6,
+        shutdown_timeout: float = 30.0,
     ) -> None:
         root = Path(base_dir or get_base_dir()).resolve()
         self.root_dir = root
@@ -65,6 +66,7 @@ class WorkerRuntime:
         )
         self._started = False
         self._cleanup_interval = max(1, cleanup_interval_hours) * 3600.0
+        self._shutdown_timeout = max(1.0, float(shutdown_timeout))
         self._stop_event = threading.Event()
         self._cleanup_thread: threading.Thread | None = None
 
@@ -138,7 +140,9 @@ class WorkerRuntime:
         if not self._started:
             return
         self._stop_event.set()
-        self.task_service.shutdown()
+        # 有界等待：单个动作卡死不能让 Worker 永远无法退出。
+        # 超时后放弃等待，未完成任务由下次启动的恢复逻辑统一收尾。
+        self.task_service.shutdown(timeout=self._shutdown_timeout)
         if self._cleanup_thread is not None:
             self._cleanup_thread.join(timeout=5)
             if self._cleanup_thread.is_alive():

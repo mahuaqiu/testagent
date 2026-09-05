@@ -279,11 +279,13 @@ class OcrAssertAction(BaseActionExecutor):
         if action.region:
             screenshot = self._crop_region(screenshot, action.region)
 
-        # 调用一次 OCR，结果缓存在 ocr_client 中
-        platform.ocr_client.recognize(screenshot)
+        # 调用一次 OCR，结果直接传递给批量检查（并发任务间不共享缓存）
+        ocr_results = platform.ocr_client.recognize(screenshot)
 
-        # 在缓存结果中批量检查
-        found, not_found = self._check_texts_in_ocr_result(platform, texts, action.match_mode)
+        # 在识别结果中批量检查
+        found, not_found = self._check_texts_in_ocr_result(
+            platform, texts, action.match_mode, ocr_results=ocr_results
+        )
 
         # 根据 negate 参数返回结果
         if action.negate:
@@ -722,11 +724,13 @@ class OcrExistAction(BaseActionExecutor):
         if action.region:
             screenshot = self._crop_region(screenshot, action.region)
 
-        # 调用一次 OCR，结果缓存在 ocr_client 中
-        platform.ocr_client.recognize(screenshot)
+        # 调用一次 OCR，结果直接传递给批量检查（并发任务间不共享缓存）
+        ocr_results = platform.ocr_client.recognize(screenshot)
 
-        # 在缓存结果中批量检查
-        found, not_found = self._check_texts_in_ocr_result(platform, texts, action.match_mode)
+        # 在识别结果中批量检查
+        found, not_found = self._check_texts_in_ocr_result(
+            platform, texts, action.match_mode, ocr_results=ocr_results
+        )
 
         # 根据 negate 参数返回结果（保持兼容格式）
         if action.negate:

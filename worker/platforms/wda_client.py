@@ -112,6 +112,57 @@ class WDAClient:
             logger.error(f"Screenshot failed: {e}")
         return b""
 
+    def window_size(self) -> tuple[int, int] | None:
+        """获取逻辑分辨率 (width, height)，失败返回 None。"""
+        try:
+            session_id = self._get_session()
+            response = self.session.get(
+                f"{self.base_url}/session/{session_id}/window/size"
+            )
+            if response.status_code == 200:
+                data = response.json().get("value", {})
+                width = int(data.get("width", 0))
+                height = int(data.get("height", 0))
+                if width > 0 and height > 0:
+                    return (width, height)
+        except Exception as e:
+            logger.warning(f"Get window size failed: {e}")
+        return None
+
+    def pinch(self, scale: float = 1.0, duration: float = 1.0) -> bool:
+        """捏合手势（对活跃应用执行，等效全屏 pinch）。
+
+        WDA 路由 POST /session/{sid}/wda/pinch：
+        - scale > 1 放大（pinch open），scale < 1 缩小（pinch close）；
+        - velocity 为每秒缩放倍率，scale < 1 时必须为负（XCUITest 契约）。
+
+        Args:
+            scale: 缩放倍率（>0）
+            duration: 持续时间（秒）
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            session_id = self._get_session()
+            scale = float(scale)
+            if scale <= 0:
+                logger.warning(f"Pinch scale must be positive, got {scale}, using 1.0")
+                scale = 1.0
+            velocity = abs(scale - 1.0) / max(duration, 0.1)
+            if scale < 1.0:
+                velocity = -velocity
+            response = self.session.post(
+                f"{self.base_url}/session/{session_id}/wda/pinch",
+                json={"scale": scale, "velocity": velocity},
+            )
+            if response.status_code != 200:
+                logger.warning(f"Pinch failed: status={response.status_code}, body={response.text}")
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Pinch failed: {e}")
+            return False
+
     def send_keys(self, text: str) -> bool:
         """输入文本。"""
         try:

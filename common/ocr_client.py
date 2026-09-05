@@ -26,6 +26,7 @@ Usage:
 
 import base64
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -123,8 +124,28 @@ class OCRClient:
         self.retry = retry
         self.lang = lang
         self._client = httpx.Client(timeout=self.timeout, trust_env=False)
-        self._last_response: dict = {}  # 缓存最后一次调用结果
-        self._last_ocr_results: list[TextBlock] = []  # 新增：缓存最后识别结果
+        # "最后一次调用结果"缓存按线程隔离：全局单例客户端被多个并发任务
+        # 线程共享时，共享缓存会让 A 任务读到 B 任务的识别结果，导致
+        # ocr_assert/ocr_exist 基于另一块屏幕做判定。
+        self._tls = threading.local()
+
+    @property
+    def _last_response(self) -> dict:
+        """最后一次调用响应（线程隔离）。"""
+        return getattr(self._tls, "last_response", {})
+
+    @_last_response.setter
+    def _last_response(self, value: dict) -> None:
+        self._tls.last_response = value
+
+    @property
+    def _last_ocr_results(self) -> list["TextBlock"]:
+        """最后一次 OCR 识别结果（线程隔离）。"""
+        return getattr(self._tls, "last_ocr_results", [])
+
+    @_last_ocr_results.setter
+    def _last_ocr_results(self, value: list["TextBlock"]) -> None:
+        self._tls.last_ocr_results = value
 
     def recognize(
         self,

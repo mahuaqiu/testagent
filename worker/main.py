@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="websocket
 
 from worker.config import load_config
 from worker.logger import setup_logging
-from worker.server import app, set_worker
+from worker.server import app, set_uvicorn_server, set_worker
 from worker.worker import Worker
 
 
@@ -36,6 +36,32 @@ class SocketErrorFilter(logging.Filter):
         if "Connection closed by the peer" in str(record):
             return False
         return True
+
+
+def _wait_port_released(port: int, timeout: float = 60.0) -> None:
+    """重启场景下等待旧进程释放端口后再绑定。
+
+    配置更新触发的重启会先拉起新进程再优雅退出旧进程；新进程必须
+    等旧进程释放端口，否则绑定失败直接退出，重启永远不会生效。
+    """
+    import socket
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("0.0.0.0", port))
+            logger.info(f"Port {port} released, starting server")
+            return
+        except OSError:
+            time.sleep(0.5)
+        finally:
+            try:
+                probe.close()
+            except OSError:
+                pass
+    logger.warning(f"Timed out waiting for port {port} to be released, trying to bind anyway")
 
 
 def main():
@@ -85,14 +111,23 @@ def main():
     # 设置 Worker 实例到 Server
     set_worker(worker)
 
-    # 启动 HTTP Server
+    # 重启场景：等待旧进程释放端口
+    if os.environ.get("WORKER_RESTARTED") == "1":
+        logger.info("Restarted by config update, waiting for old process to release port")
+        _wait_port_released(config.port)
+
+    # 启动 HTTP Server（持有 Server 实例，供配置重启触发优雅停机）
     try:
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=config.port,
-            log_level=config.log_level.lower(),
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=config.port,
+                log_level=config.log_level.lower(),
+            )
         )
+        set_uvicorn_server(server)
+        server.run()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:

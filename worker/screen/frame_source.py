@@ -114,24 +114,35 @@ class MinicapFrameSource(FrameSource):
 
 
 class MJPEGFrameSource(FrameSource):
-    """iOS: WDA MJPEG 流（固定端口 9100）。"""
+    """iOS: WDA MJPEG 流。
 
-    def __init__(self, device_id: str, wda_client):
+    每台设备的 MJPEG 端口为 mjpeg_base_port + 设备索引（默认 9100 起），
+    多设备时端口各不相同；端口必须由调用方显式传入，硬编码会串到
+    其它设备的画面。
+    """
+
+    DEFAULT_MJPEG_PORT = 9100
+
+    def __init__(self, device_id: str, wda_client, mjpeg_port: int | None = None):
         self.device_id = device_id
         self.wda_client = wda_client
+        self.mjpeg_port = int(mjpeg_port) if mjpeg_port else self.DEFAULT_MJPEG_PORT
         self._screen_size: Optional[tuple[int, int]] = None
         self._stream_response = None
         self._stream_iterator = None
         self._stream_buffer = b""
+
+    def _mjpeg_url(self) -> str:
+        host_with_port = self.wda_client.base_url.split('/')[2]
+        host = host_with_port.split(':')[0]
+        return f"http://{host}:{self.mjpeg_port}"
 
     def get_frame(self) -> bytes:
         """从 WDA MJPEG 流获取帧（流式读取 multipart 格式）。"""
         import re
         import requests
 
-        host_with_port = self.wda_client.base_url.split('/')[2]
-        host = host_with_port.split(':')[0]
-        mjpeg_url = f"http://{host}:9100"
+        mjpeg_url = self._mjpeg_url()
 
         # 打开持续流（stream=True）
         if self._stream_response is None:
@@ -183,8 +194,11 @@ class MJPEGFrameSource(FrameSource):
             return self._screen_size
         # 从 WDA 获取窗口尺寸
         try:
-            window_size = self.wda_client.window_size()
-            self._screen_size = (window_size.width, window_size.height)
+            size = self.wda_client.window_size()
+            if size:
+                self._screen_size = (size[0], size[1])
+            else:
+                self._screen_size = (375, 667)  # iPhone 8 默认逻辑分辨率
         except Exception:
             self._screen_size = (375, 667)  # iPhone 8 默认逻辑分辨率
         return self._screen_size
@@ -215,7 +229,7 @@ class MJPEGFrameSource(FrameSource):
         host_with_port = self.wda_client.base_url.split('/')[2]
         host = host_with_port.split(':')[0]
 
-        proxy = MJPEGProxy(host=host, port=9100)
+        proxy = MJPEGProxy(host=host, port=self.mjpeg_port)
         proxy.start()
         return proxy
 

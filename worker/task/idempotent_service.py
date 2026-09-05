@@ -1,20 +1,11 @@
 """具备稳定请求比较的任务服务。"""
 
-from __future__ import annotations
-
-import json
-
 from worker.errors import IdempotencyConflictError
 from worker.task.service import TaskService
-from worker.task.task import Task
+from worker.task.task import Task, request_fingerprint
 
 
-def request_fingerprint(task: Task) -> str:
-    """生成不受本地 task_id 和创建时间影响的请求指纹。"""
-    payload = task.to_dict()
-    payload.pop("task_id", None)
-    payload.pop("created_at", None)
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+__all__ = ["IdempotentTaskService", "request_fingerprint"]
 
 
 class IdempotentTaskService(TaskService):

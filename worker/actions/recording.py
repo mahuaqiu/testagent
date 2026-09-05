@@ -58,7 +58,7 @@ class StartRecordingAction(ActionExecutor):
                 os.makedirs(filename, exist_ok=True)
                 output_path = os.path.join(filename, f"recording_{datetime.now():%Y%m%d_%H%M%S}.mp4")
         else:
-            # 相对��径，视为文件名
+            # 相对路径，视为文件名
             relative_path = os.path.normpath(filename)
             if relative_path == ".." or relative_path.startswith(".." + os.sep):
                 return ActionResult(

@@ -629,17 +629,34 @@ def save_config_with_version(
 
 
 def cli_restart():
-    """CLI 模式重启：启动新进程并退出当前进程。"""
+    """CLI 模式重启：拉起新进程后让当前进程优雅退出。
+
+    之前直接在新线程里 ``sys.exit(0)``，只能退出该线程：旧进程继续
+    占用端口和资源，新进程绑定失败退出，配置更新后的重启永远不会生效。
+
+    现在的流程：
+    1. 以 WORKER_RESTARTED=1 环境变量启动新进程（新进程在 main() 里
+       会等待端口释放后再绑定）；
+    2. 通知当前进程的 uvicorn 优雅停机，main() 的 finally 会完成
+       worker.stop() 并退出进程，端口随之释放。
+    """
     executable = sys.executable
     args = sys.argv
 
     logger.info(f"CLI mode: restarting with args={args}")
 
     try:
-        # 启动新进程（分离运行，隐藏窗口）
-        popen_cmd([executable] + args)
-        # 退出当前进程
-        sys.exit(0)
+        env = dict(os.environ)
+        env["WORKER_RESTARTED"] = "1"
+        popen_cmd([executable] + args, env=env)
     except Exception as e:
-        logger.error(f"CLI restart failed: {e}")
+        logger.error(f"CLI restart failed to launch new process: {e}")
+        sys.exit(1)
+
+    # 触发当前进程优雅退出（函数级导入避免循环依赖）
+    try:
+        from worker.server import request_uvicorn_shutdown
+        request_uvicorn_shutdown()
+    except Exception as e:
+        logger.error(f"CLI restart failed to stop current server: {e}")
         sys.exit(1)

@@ -423,7 +423,8 @@ class BaseActionExecutor(ActionExecutor):
         self,
         platform: "PlatformManager",
         texts: list[str],
-        match_mode: str = "exact"
+        match_mode: str = "exact",
+        ocr_results: list | None = None,
     ) -> tuple[list[str], list[str]]:
         """
         在 OCR 缓存结果中批量检查多个文字是否存在（不重新调用 OCR）。
@@ -432,6 +433,8 @@ class BaseActionExecutor(ActionExecutor):
             platform: 平台管理器
             texts: 待检查的文字列表
             match_mode: 匹配模式
+            ocr_results: 直接传入的识别结果（recognize 返回值），并发任务
+                共享 OCR 客户端时优先使用，避免读取"最后一次"缓存
 
         Returns:
             tuple[list[str], list[str]]: (found_texts, not_found_texts)
@@ -445,8 +448,10 @@ class BaseActionExecutor(ActionExecutor):
             if match_mode == "regex" and not text.startswith("reg_"):
                 actual_text = f"reg_{text}"
 
-            # 在 OCR 缓存结果中查找（不调用 OCR 服务）
-            position = platform._find_text_position_cached(actual_text, match_mode, 0)
+            # 在 OCR 结果中查找（不调用 OCR 服务）
+            position = platform._find_text_position_cached(
+                actual_text, match_mode, 0, ocr_results=ocr_results
+            )
 
             if position:
                 found.append(text)
