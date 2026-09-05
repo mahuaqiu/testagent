@@ -153,6 +153,9 @@ class HarmonyOfficialSession:
         self._h264_received_access_units = 0
         self._h264_forwarded_packets = 0
         self._h264_idr_requests = 0
+        # 最近一次收到设备 H.264 access unit 的单调时钟；0 表示尚未收到。
+        # 首帧超时时用它区分"设备静默（息屏/编码器停）"与"本地链路丢帧"。
+        self._last_h264_access_unit_at = 0.0
         self._h264_monitor_thread: threading.Thread | None = None
         self._h264_monitor_stop = threading.Event()
 
@@ -267,11 +270,23 @@ class HarmonyOfficialSession:
         if not has_existing_subscribers:
             self.wake_stream()
             self.request_idr(force=True)
+            logger.info(
+                "鸿蒙 H.264 起播请求已发送: serial=%s, subscriber=%s, wake_stream=1, request_idr=1, 重试节奏=%s",
+                self.serial,
+                subscriber_id,
+                H264_IDR_RETRY_DELAYS_SECONDS,
+            )
         elif cached_config is None or cached_keyframe is None:
             # 活动流尚未形成完整起播缓存时补请求；缓存完整时直接复用，
             # 避免新增查看页面打断现有订阅者。
             self.wake_stream()
             self.request_idr(force=True)
+            logger.info(
+                "鸿蒙 H.264 起播补请求已发送: serial=%s, subscriber=%s, wake_stream=1, request_idr=1, 重试节奏=%s",
+                self.serial,
+                subscriber_id,
+                H264_IDR_RETRY_DELAYS_SECONDS,
+            )
         self._schedule_h264_idr_retry(subscriber_id)
         return subscriber.queue
 
@@ -300,6 +315,25 @@ class HarmonyOfficialSession:
             self._send(command_request_idr())
         except HarmonyOfficialError:
             pass
+
+    def h264_startup_diagnosis(self) -> dict[str, Any]:
+        """首帧超时诊断快照：区分设备静默与本地链路丢帧。
+
+        last_access_unit_age_seconds 为 None 表示本会话从未收到设备回调
+        （设备侧静默，典型原因是息屏/AOD）；数值很小则说明设备仍在产帧，
+        问题在起播握手或订阅链路。
+        """
+        with self._state_lock:
+            last_at = self._last_h264_access_unit_at
+            return {
+                "bridge_running": self.is_running,
+                "received_access_units": self._h264_received_access_units,
+                "forwarded_packets": self._h264_forwarded_packets,
+                "idr_requests": self._h264_idr_requests,
+                "last_access_unit_age_seconds": (
+                    round(time.monotonic() - last_at, 1) if last_at else None
+                ),
+            }
 
     def wake_stream(self) -> None:
         """请求官方 SDK 让静止画面产生一次新的 H.264 回调。"""
@@ -434,6 +468,7 @@ class HarmonyOfficialSession:
         self._h264_received_access_units = 0
         self._h264_forwarded_packets = 0
         self._h264_idr_requests = 0
+        self._last_h264_access_unit_at = 0.0
         self._h264_monitor_stop.clear()
         with self._state_lock:
             self._h264_subscribers.clear()
@@ -478,7 +513,7 @@ class HarmonyOfficialSession:
                     self._h264_idr_retry_counts[subscriber_id] = retry_index + 1
 
                 if self.is_running:
-                    logger.debug(
+                    logger.info(
                         "鸿蒙 H.264 起播补请求 IDR: serial=%s, subscriber=%s, attempt=%d/%d",
                         self.serial,
                         subscriber_id,
@@ -529,6 +564,7 @@ class HarmonyOfficialSession:
         """将官方 H.264 access unit 广播给所有 WebSocket 订阅者。"""
         with self._state_lock:
             self._h264_received_access_units += 1
+            self._last_h264_access_unit_at = time.monotonic()
             if not self._h264_subscribers:
                 # 预热只保持 Java 和设备采集会话，不保存或解码无消费者的视频。
                 return
@@ -1132,6 +1168,40 @@ class HarmonyOfficialSessionManager:
             session = self._sessions.pop(serial, None)
         if session:
             session.stop()
+
+    def stop_session_if_idle(self, serial: str, wait_idle_seconds: float = 0.0) -> dict[str, Any]:
+        """立即停止没有租约的官方会话，供平台调试页显式断开使用。
+
+        与空闲保活的分工：保活兜底的是 WS 意外断开、任务间歇等隐式空闲；
+        这里是用户主动"断开"，期望设备侧投屏立刻终止。wait_idle_seconds
+        给 WebSocket 关闭后的 stream 租约释放留时间；仍被任务租约占用时
+        放弃立即停止，交回空闲保活兜底。
+        """
+        deadline = time.monotonic() + max(0.0, wait_idle_seconds)
+        owners: list[str] = []
+        while True:
+            with self._lock:
+                owners_set = self._owners.get(serial)
+                if not owners_set:
+                    timer = self._idle_timers.pop(serial, None)
+                    session = self._sessions.pop(serial, None)
+                    self._prewarm_failure_until.pop(serial, None)
+                    break
+                owners = sorted(owners_set)
+            if time.monotonic() >= deadline:
+                logger.info(
+                    "平台请求断开，但官方会话仍有租约，交给空闲保活: serial=%s, owners=%s",
+                    serial,
+                    owners,
+                )
+                return {"stopped": False, "owners": owners}
+            time.sleep(0.05)
+        if timer:
+            timer.cancel()
+        if session:
+            logger.info("平台调试页断开，立即停止鸿蒙官方会话: serial=%s", serial)
+            session.stop()
+        return {"stopped": True, "owners": []}
 
     def stop_all(self) -> None:
         with self._lock:

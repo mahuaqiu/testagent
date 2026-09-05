@@ -507,6 +507,16 @@ class HarmonyOfficialFrameSource:
         with self._start_lock:
             return bool(self._session and self._session.is_running)
 
+    def h264_startup_diagnosis(self) -> dict:
+        """首帧超时诊断快照（转发给官方会话；会话缺失时显式标注）。"""
+        with self._start_lock:
+            session = self._session
+        if session is None:
+            return {"session_active": False}
+        diag = session.h264_startup_diagnosis()
+        diag["session_active"] = True
+        return diag
+
     def stop(self) -> None:
         """停止帧源并释放官方会话租约。"""
         with self._start_lock:

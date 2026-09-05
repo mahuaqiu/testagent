@@ -755,3 +755,105 @@ def test_repeated_prewarm_does_not_extend_idle_timer() -> None:
 
     assert manager._idle_timers["device-1"] is first_timer
     manager.stop_all()
+
+
+def test_stop_session_if_idle_stops_session_without_owners() -> None:
+    class FakeSession:
+        is_running = True
+
+        def __init__(self) -> None:
+            self.stop_count = 0
+
+        def stop(self) -> None:
+            self.stop_count += 1
+
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    fake = FakeSession()
+    manager._sessions["device-1"] = fake  # type: ignore[assignment]
+    # 模拟 WS 断开后的空闲保活计时器已挂起。
+    with manager._lock:
+        manager._schedule_idle_release_locked("device-1")
+    assert "device-1" in manager._idle_timers
+
+    result = manager.stop_session_if_idle("device-1", wait_idle_seconds=0)
+
+    assert result == {"stopped": True, "owners": []}
+    assert fake.stop_count == 1
+    assert manager.get("device-1") is None
+    assert "device-1" not in manager._idle_timers
+
+
+def test_stop_session_if_idle_waits_for_stream_owner_release() -> None:
+    """HTTP 释放请求可能先于 WS 关闭的租约释放到达，需要短暂等待。"""
+    class FakeSession:
+        is_running = True
+
+        def __init__(self) -> None:
+            self.stop_count = 0
+
+        def stop(self) -> None:
+            self.stop_count += 1
+
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    fake = FakeSession()
+    manager._sessions["device-1"] = fake  # type: ignore[assignment]
+    manager.acquire("device-1", "stream:1")
+
+    def release_soon() -> None:
+        time.sleep(0.1)
+        manager.release("device-1", "stream:1")
+
+    thread = threading.Thread(target=release_soon)
+    thread.start()
+    result = manager.stop_session_if_idle("device-1", wait_idle_seconds=2.0)
+    thread.join()
+
+    assert result == {"stopped": True, "owners": []}
+    assert fake.stop_count == 1
+
+
+def test_stop_session_if_idle_skips_when_task_owner_active() -> None:
+    class FakeSession:
+        is_running = True
+
+        def __init__(self) -> None:
+            self.stop_count = 0
+
+        def stop(self) -> None:
+            self.stop_count += 1
+
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    fake = FakeSession()
+    manager._sessions["device-1"] = fake  # type: ignore[assignment]
+    manager.acquire("device-1", "task:1")
+
+    result = manager.stop_session_if_idle("device-1", wait_idle_seconds=0.05)
+
+    assert result["stopped"] is False
+    assert result["owners"] == ["task:1"]
+    assert fake.stop_count == 0
+    assert manager.get("device-1") is fake
+    manager.release("device-1", "task:1")
+    manager.stop_all()
+
+
+def test_h264_startup_diagnosis_reports_last_access_unit_age() -> None:
+    """首帧超时诊断必须能区分设备静默与仍在产帧。"""
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings={"startup_timeout_seconds": 1},
+    )
+    diag = session.h264_startup_diagnosis()
+    assert diag["received_access_units"] == 0
+    assert diag["last_access_unit_age_seconds"] is None
+
+    session._broadcast_h264(b"\x67\x64\x00\x1f")
+    diag = session.h264_startup_diagnosis()
+    assert diag["received_access_units"] == 1
+    assert diag["last_access_unit_age_seconds"] is not None
+    assert diag["last_access_unit_age_seconds"] < 5.0

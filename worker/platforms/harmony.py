@@ -407,6 +407,20 @@ class HarmonyPlatformManager(PlatformManager):
         """释放一份官方会话租约。"""
         self._official_sessions.release(udid, owner)
 
+    def stop_official_session_if_idle(
+        self,
+        udid: str,
+        wait_idle_seconds: float = 0.0,
+    ) -> dict:
+        """平台调试页显式断开：立即停止无租约的官方会话。
+
+        仍有任务租约时不强制停止，返回 stopped=False 交给空闲保活兜底。
+        """
+        return self._official_sessions.stop_session_if_idle(
+            udid,
+            wait_idle_seconds=wait_idle_seconds,
+        )
+
     def stop_official_sessions(self) -> None:
         """升级或退出前立即停止本平台的 Java Bridge。"""
         self._official_sessions.stop_all()

@@ -181,6 +181,9 @@ class JavaBridgeProcess:
         important_markers = (
             "SDK_READY", "STREAM_START", "STREAM_STOP", "ERROR",
             "Exception", "FATAL",
+            # 起播诊断关键事件：WAKE_STREAM / REQUEST_IDR 是否真正送达执行
+            # 是首帧超时排查的核心证据（含 *_FAILED 变体）。
+            "WAKE_STREAM", "REQUEST_IDR",
         )
         try:
             for raw_line in iter(stream.readline, b""):

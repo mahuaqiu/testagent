@@ -81,6 +81,38 @@ class _WebSocketClosed(RuntimeError):
     """WebSocket 已关闭，当前推流应按正常断开处理。"""
 
 
+def _log_harmony_h264_timeout_diagnosis(
+    frame_source: Any,
+    conn_key: str,
+    wait_seconds: float,
+) -> None:
+    """H.264 首帧超时诊断：区分设备静默（息屏/编码器停）与本地链路丢帧。
+
+    last_access_unit_age_seconds 很小 → 设备仍在产帧，问题在起播握手；
+    为 None 或很大 → 会话从未/很久没收到设备回调，优先怀疑设备息屏。
+    """
+    diag: dict[str, Any] = {"wait_seconds": round(wait_seconds, 1)}
+    snapshot_fn = getattr(frame_source, "h264_startup_diagnosis", None)
+    if snapshot_fn is not None:
+        try:
+            diag.update(snapshot_fn())
+        except Exception as exc:
+            diag["diagnosis_error"] = str(exc)
+    manager = getattr(frame_source, "manager", None)
+    lock_fn = getattr(manager, "is_device_locked", None)
+    device_id = getattr(frame_source, "device_id", None)
+    if lock_fn is not None and device_id:
+        try:
+            diag["device_locked"] = lock_fn(device_id)
+        except Exception as exc:
+            diag["device_locked_error"] = str(exc)
+    logger.warning(
+        "鸿蒙 H.264 首帧超时诊断: conn_key=%s, %s",
+        conn_key,
+        json.dumps(diag, ensure_ascii=False),
+    )
+
+
 def _is_expected_websocket_close(exc: BaseException) -> bool:
     """判断异常是否表示客户端或 ASGI 层已关闭 WebSocket。"""
     if isinstance(
@@ -303,6 +335,13 @@ class TaskRequest(BaseModel):
     window: WindowSpec | None = Field(None, description="窗口定位参数（Windows 平台）")
 
 
+class RemoteReleaseRequest(BaseModel):
+    """远程调试页断开请求：要求 Worker 立即释放设备常驻会话。"""
+
+    platform: str = Field(..., description="目标平台")
+    device_id: str = Field(..., description="设备 ID")
+
+
 class ConfigUpdateRequest(BaseModel):
     """配置更新请求。"""
     config_content: str = Field(..., description="完整的 YAML 配置文件内容")
@@ -514,6 +553,38 @@ async def execute_remote_task(request: TaskRequest):
                 "details": {},
             },
         ) from exc
+    finally:
+        reset_request_id(request_id_token)
+
+
+@app.post("/remote/release")
+async def release_remote_session(request: RemoteReleaseRequest):
+    """远程调试页显式断开：立即停止设备常驻会话（鸿蒙官方 HOScrcpy 投屏）。
+
+    与空闲保活的分工：保活针对 WS 意外断开等隐式空闲（600s 后才释放）；
+    这里是用户在平台点击"断开"，属于主动结束，设备侧投屏应立刻终止。
+    仍有任务租约（用例执行中）时不强制停止，交回空闲保活兜底。
+    其他平台无常驻会话（Windows 等 ScreenManager 随最后一个 WS 关闭），
+    直接返回成功。
+    """
+    if not worker:
+        raise HTTPException(status_code=503, detail="Worker not initialized")
+
+    request_id = generate_request_id()
+    request_id_token = set_request_id(request_id)
+    try:
+        manager = worker.platform_managers.get(request.platform)
+        stop_fn = getattr(manager, "stop_official_session_if_idle", None)
+        if stop_fn is None:
+            logger.info(
+                f"Remote release: 平台无常驻官方会话, 跳过: platform={request.platform}, device_id={request.device_id}"
+            )
+            return {"stopped": False, "owners": [], "reason": f"平台无常驻官方会话: {request.platform}"}
+        result = await asyncio.to_thread(stop_fn, request.device_id, 2.0)
+        logger.info(
+            f"Remote release response: platform={request.platform}, device_id={request.device_id}, result={result}"
+        )
+        return result
     finally:
         reset_request_id(request_id_token)
 
@@ -1644,6 +1715,12 @@ async def screen_stream(
                     not first_video_received
                     and time.monotonic() >= first_video_deadline
                 ):
+                    await asyncio.to_thread(
+                        _log_harmony_h264_timeout_diagnosis,
+                        frame_source,
+                        conn_key,
+                        DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT,
+                    )
                     await _send_harmony_h264_fallback(
                         websocket,
                         "鸿蒙官方 H.264 首个视频帧超时",
@@ -1665,6 +1742,12 @@ async def screen_stream(
                         not first_video_received
                         and time.monotonic() >= first_video_deadline
                     ):
+                        await asyncio.to_thread(
+                            _log_harmony_h264_timeout_diagnosis,
+                            frame_source,
+                            conn_key,
+                            DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT,
+                        )
                         await _send_harmony_h264_fallback(
                             websocket,
                             "鸿蒙官方 H.264 首个视频帧超时",
