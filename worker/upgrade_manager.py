@@ -184,7 +184,7 @@ class UpgradeManager:
         """
         执行静默安装。
 
-        启动 Inno Setup 静默安装进程后立即返回，不等待安装完成。
+        启动 NSIS 静默安装进程后立即返回，不等待安装完成。
 
         Args:
             installer_path: 安装包路径
@@ -198,31 +198,35 @@ class UpgradeManager:
         # 获取当前安装目录
         install_dir = self._get_current_install_dir()
 
-        # 构建静默安装命令
-        # /VERYSILENT - 完全静默，无任何界面
-        # /SUPPRESSMSGBOXES - 抑制消息框
-        # /NORESTART - 不自动重启系统
+        # 构建静默安装命令（安装包为 NSIS，不是 Inno Setup）
+        # /S - NSIS 静默安装（完全静默，无任何界面）
+        # /D= - 安装目录（NSIS 要求此参数必须是最后一个，且值不加引号）
         cmd = [
             installer_path,
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            f'/DIR="{install_dir}"',
+            "/S",
+            f"/D={install_dir}",
         ]
 
-        logger.info(f"启动静默安装: {' '.join(cmd)}")
+        logger.info(f"启动 NSIS 静默安装: {' '.join(cmd)}")
 
         try:
-            # 启动安装进程（后台运行，不等待）
+            # 启动安装进程（后台运行，不等待，独立进程）
+            # 与 worker/upgrade/installer.py 保持一致：脱离父进程组，
+            # 避免安装器随托盘进程退出而被连带终止。
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_BREAKAWAY_FROM_JOB = 0x01000000
             subprocess.Popen(
                 cmd,
-                shell=True,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=SUBPROCESS_HIDE_WINDOW,
+                creationflags=DETACHED_PROCESS
+                | CREATE_NEW_PROCESS_GROUP
+                | CREATE_BREAKAWAY_FROM_JOB
+                | SUBPROCESS_HIDE_WINDOW,
             )
-            logger.info("静默安装进程已启动")
+            logger.info("NSIS 静默安装进程已启动（独立进程）")
 
         except Exception as e:
             raise InstallError(f"启动安装失败: {e}")

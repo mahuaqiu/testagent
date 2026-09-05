@@ -118,12 +118,29 @@ class DeviceMonitor:
             if self._stop_event.is_set():
                 break
 
-            self._check_and_maintain()
+            # 监控线程是周期注册的唯一驱动，线程死亡会导致平台侧机器状态
+            # （含升级中）永久停滞、只能重启进程恢复，因此单轮异常必须隔离
+            try:
+                self._check_and_maintain()
+            except Exception:
+                logger.exception("设备检查/维护轮次异常，等待下个周期重试")
 
     def _check_and_maintain(self) -> None:
-        """检查和维护设备。"""
-        self._detect_physical_devices()
-        self._maintain_services()
+        """检查和维护设备。
+
+        检测与维护各自捕获异常：二者失败时仍要触发注册上报——周期注册
+        是后端判定宿主机存活（含清除升级中状态）的唯一依据，不能被
+        设备发现的偶发失败阻断。
+        """
+        try:
+            self._detect_physical_devices()
+        except Exception:
+            logger.exception("物理设备检测失败，本轮跳过设备维护")
+
+        try:
+            self._maintain_services()
+        except Exception:
+            logger.exception("设备服务维护失败")
 
         if self.on_device_change:
             self.on_device_change(self.get_all_devices())

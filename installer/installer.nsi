@@ -125,6 +125,14 @@ Section "MainSection" SEC01
   WriteRegStr HKLM "${PRODUCT_UNINST_KEY}" "UninstallString" "$INSTDIR\uninst.exe"
   WriteRegStr HKLM "${PRODUCT_UNINST_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "${PRODUCT_UNINST_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
+
+  ; 升级安装完成后自动拉起 Worker。
+  ; 静默安装（/S）不走完成页，MUI_FINISHPAGE_RUN 不生效；平台升级链路
+  ; 会先退出旧 Worker，若不在此拉起，升级后 Worker 将保持停止状态。
+  StrCmp $IsUpgrade "1" 0 skip_upgrade_relaunch
+    DetailPrint "Launching Test Worker..."
+    Exec '"$INSTDIR\test-worker.exe"'
+  skip_upgrade_relaunch:
 SectionEnd
 
 ; ============================================
