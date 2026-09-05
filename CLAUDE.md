@@ -318,9 +318,9 @@ PlatformManager (抽象基类)
 ```
 
 **行为说明**：
-- 找不到窗口 → `FAILED`
-- 已发送 `WM_CLOSE` 但窗口仍在（如弹出「是否保存」）→ `FAILED`
-- 关闭成功 → `SUCCESS`
+- 找不到窗口（含已关闭后重复调用）→ `SUCCESS`（幂等，视为目标状态已达成）
+- 发送 `WM_CLOSE` 后轮询等待窗口销毁或隐藏，最长 2 秒、每 0.3 秒检查一次，关闭即 `SUCCESS`
+- 等待超时后窗口仍存在（如弹出「是否保存」）→ `FAILED`
 
 ### set_resolution 设置分辨率（Windows 专用）
 

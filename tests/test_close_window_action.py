@@ -77,7 +77,8 @@ def test_close_window_success() -> None:
     assert "Closed window" in (result.output or "")
 
 
-def test_close_window_not_found() -> None:
+def test_close_window_already_closed_returns_success() -> None:
+    """窗口已关闭（找不到）时重复调用应返回成功（幂等）。"""
     platform = MagicMock()
     platform.platform = "windows"
     action = Action(action_type="close_window", value="不存在的窗口")
@@ -89,8 +90,9 @@ def test_close_window_not_found() -> None:
     ):
         result = executor.execute(platform, action)
 
-    assert result.status == ActionStatus.FAILED
-    assert "Window not found" in (result.error or "")
+    assert result.status == ActionStatus.SUCCESS
+    assert result.error is None
+    assert "already closed" in (result.output or "")
 
 
 def test_close_window_still_exists_after_wm_close() -> None:
@@ -103,12 +105,57 @@ def test_close_window_still_exists_after_wm_close() -> None:
         patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
         patch("win32gui.PostMessage"),
         patch("win32gui.IsWindow", return_value=True),
+        patch("win32gui.IsWindowVisible", return_value=True),
         patch("worker.actions.window.time.sleep"),
     ):
         result = executor.execute(platform, action)
 
     assert result.status == ActionStatus.FAILED
     assert "still exists" in (result.error or "")
+
+
+def test_close_window_hidden_counts_as_closed() -> None:
+    """窗口被隐藏（而非销毁）也应视为关闭成功。"""
+    platform = MagicMock()
+    platform.platform = "windows"
+    action = Action(action_type="close_window", value="托盘窗口")
+    executor = CloseWindowAction()
+
+    with (
+        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
+        patch("win32gui.PostMessage") as post_msg,
+        patch("win32gui.IsWindow", return_value=True),
+        patch("win32gui.IsWindowVisible", return_value=False),
+        patch("worker.actions.window.time.sleep") as sleep_mock,
+    ):
+        result = executor.execute(platform, action)
+
+    assert result.status == ActionStatus.SUCCESS
+    post_msg.assert_called_once()
+    sleep_mock.assert_called_once()
+    assert "Closed window" in (result.output or "")
+
+
+def test_close_window_closes_on_second_poll() -> None:
+    """关闭慢的窗口：第一次轮询仍存在，第二次轮询已销毁，应返回成功。"""
+    platform = MagicMock()
+    platform.platform = "windows"
+    action = Action(action_type="close_window", value="声音", window_class="#32770")
+    executor = CloseWindowAction()
+
+    with (
+        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
+        patch("win32gui.PostMessage") as post_msg,
+        patch("win32gui.IsWindow", side_effect=[True, False]),
+        patch("win32gui.IsWindowVisible", return_value=True),
+        patch("worker.actions.window.time.sleep") as sleep_mock,
+    ):
+        result = executor.execute(platform, action)
+
+    assert result.status == ActionStatus.SUCCESS
+    post_msg.assert_called_once()
+    assert sleep_mock.call_count == 2
+    assert "Closed window" in (result.output or "")
 
 
 def test_close_window_unsupported_platform() -> None:

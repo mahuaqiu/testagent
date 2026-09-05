@@ -2116,7 +2116,8 @@ components:
 
   # ---------- 关闭窗口动作 ----------
   # close_window - 关闭指定窗口/弹窗（Windows/Web 平台）
-  # 通过 PostMessage(WM_CLOSE) 请求窗口关闭；找不到窗口或关闭后仍存在则 FAILED
+  # 通过 PostMessage(WM_CLOSE) 请求窗口关闭；发送后轮询等待窗口销毁或隐藏（最长 2 秒，每 0.3 秒检查一次）
+  # 幂等：窗口不存在（含已关闭后重复调用）返回 SUCCESS；超时后窗口仍可见则 FAILED
   # 示例 1: 按标题关闭（包含匹配）
   # {"action_type": "close_window", "value": "声音"}
   # 示例 2: 按窗口类名关闭
