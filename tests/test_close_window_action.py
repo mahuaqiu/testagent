@@ -55,6 +55,7 @@ def test_resolve_filters_requires_value_or_class() -> None:
 
 
 def test_close_window_success() -> None:
+    """单个匹配窗口：发送 WM_CLOSE 后下一次枚举已消失，应返回成功。"""
     platform = MagicMock()
     platform.platform = "windows"
     action = Action(
@@ -65,97 +66,98 @@ def test_close_window_success() -> None:
     executor = CloseWindowAction()
 
     with (
-        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
+        patch("worker.platforms.win_utils.find_window_handles", side_effect=[[0x1234], []]),
         patch("win32gui.PostMessage") as post_msg,
-        patch("win32gui.IsWindow", return_value=False),
-        patch("worker.actions.window.time.sleep"),
+        patch("worker.actions.window.time.sleep") as sleep_mock,
     ):
         result = executor.execute(platform, action)
 
     assert result.status == ActionStatus.SUCCESS
     post_msg.assert_called_once()
+    assert post_msg.call_args[0][0] == 0x1234
     assert "Closed window" in (result.output or "")
+    sleep_mock.assert_called_once()
 
 
 def test_close_window_already_closed_returns_success() -> None:
-    """窗口已关闭（找不到）时重复调用应返回成功（幂等）。"""
+    """一个匹配窗口都没有（含已全部关闭后重复调用）应返回成功，且不发送任何消息。"""
     platform = MagicMock()
     platform.platform = "windows"
     action = Action(action_type="close_window", value="不存在的窗口")
     executor = CloseWindowAction()
 
     with (
-        patch("worker.platforms.win_utils.find_window_handle", return_value=None),
+        patch("worker.platforms.win_utils.find_window_handles", return_value=[]),
+        patch("win32gui.PostMessage") as post_msg,
         patch("worker.actions.window.time.sleep"),
     ):
         result = executor.execute(platform, action)
 
     assert result.status == ActionStatus.SUCCESS
     assert result.error is None
+    post_msg.assert_not_called()
     assert "already closed" in (result.output or "")
 
 
-def test_close_window_still_exists_after_wm_close() -> None:
+def test_close_window_closes_all_matching_windows() -> None:
+    """多个匹配窗口应全部发送 WM_CLOSE，并等待全部关闭。"""
+    platform = MagicMock()
+    platform.platform = "windows"
+    action = Action(action_type="close_window", value="声音")
+    executor = CloseWindowAction()
+
+    with (
+        patch("worker.platforms.win_utils.find_window_handles", side_effect=[[0x11, 0x22], []]),
+        patch("win32gui.PostMessage") as post_msg,
+        patch("worker.actions.window.time.sleep"),
+    ):
+        result = executor.execute(platform, action)
+
+    assert result.status == ActionStatus.SUCCESS
+    closed_hwnds = [call[0][0] for call in post_msg.call_args_list]
+    assert closed_hwnds == [0x11, 0x22]
+    assert "count=2" in (result.output or "")
+
+
+def test_close_window_closes_new_window_appeared_during_poll() -> None:
+    """轮询期间新出现的匹配窗口（连环弹窗）也应补发关闭请求，且已发过的不重复发送。"""
+    platform = MagicMock()
+    platform.platform = "windows"
+    action = Action(action_type="close_window", value="声音")
+    executor = CloseWindowAction()
+
+    with (
+        patch(
+            "worker.platforms.win_utils.find_window_handles",
+            side_effect=[[0x11], [0x11, 0x22], []],
+        ),
+        patch("win32gui.PostMessage") as post_msg,
+        patch("worker.actions.window.time.sleep"),
+    ):
+        result = executor.execute(platform, action)
+
+    assert result.status == ActionStatus.SUCCESS
+    closed_hwnds = [call[0][0] for call in post_msg.call_args_list]
+    assert closed_hwnds == [0x11, 0x22]
+
+
+def test_close_window_still_exists_after_timeout() -> None:
+    """超时后仍有匹配窗口可见（如弹出确认框）应返回失败，且不重复发送 WM_CLOSE。"""
     platform = MagicMock()
     platform.platform = "windows"
     action = Action(action_type="close_window", value="声音", window_class="#32770")
     executor = CloseWindowAction()
 
     with (
-        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
-        patch("win32gui.PostMessage"),
-        patch("win32gui.IsWindow", return_value=True),
-        patch("win32gui.IsWindowVisible", return_value=True),
+        patch("worker.platforms.win_utils.find_window_handles", return_value=[0x1234]),
+        patch("win32gui.PostMessage") as post_msg,
         patch("worker.actions.window.time.sleep"),
     ):
         result = executor.execute(platform, action)
 
     assert result.status == ActionStatus.FAILED
-    assert "still exists" in (result.error or "")
-
-
-def test_close_window_hidden_counts_as_closed() -> None:
-    """窗口被隐藏（而非销毁）也应视为关闭成功。"""
-    platform = MagicMock()
-    platform.platform = "windows"
-    action = Action(action_type="close_window", value="托盘窗口")
-    executor = CloseWindowAction()
-
-    with (
-        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
-        patch("win32gui.PostMessage") as post_msg,
-        patch("win32gui.IsWindow", return_value=True),
-        patch("win32gui.IsWindowVisible", return_value=False),
-        patch("worker.actions.window.time.sleep") as sleep_mock,
-    ):
-        result = executor.execute(platform, action)
-
-    assert result.status == ActionStatus.SUCCESS
+    assert "still exist" in (result.error or "")
     post_msg.assert_called_once()
-    sleep_mock.assert_called_once()
-    assert "Closed window" in (result.output or "")
-
-
-def test_close_window_closes_on_second_poll() -> None:
-    """关闭慢的窗口：第一次轮询仍存在，第二次轮询已销毁，应返回成功。"""
-    platform = MagicMock()
-    platform.platform = "windows"
-    action = Action(action_type="close_window", value="声音", window_class="#32770")
-    executor = CloseWindowAction()
-
-    with (
-        patch("worker.platforms.win_utils.find_window_handle", return_value=0x1234),
-        patch("win32gui.PostMessage") as post_msg,
-        patch("win32gui.IsWindow", side_effect=[True, False]),
-        patch("win32gui.IsWindowVisible", return_value=True),
-        patch("worker.actions.window.time.sleep") as sleep_mock,
-    ):
-        result = executor.execute(platform, action)
-
-    assert result.status == ActionStatus.SUCCESS
-    post_msg.assert_called_once()
-    assert sleep_mock.call_count == 2
-    assert "Closed window" in (result.output or "")
 
 
 def test_close_window_unsupported_platform() -> None:

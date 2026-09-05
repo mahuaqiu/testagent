@@ -81,14 +81,53 @@ def find_window_handle(
     return found_hwnd
 
 
-def _do_find_window_handle(
+def find_window_handles(
     title: str | None = None,
     class_name: str | None = None,
     exe_name: str | None = None,
-) -> int | None:
-    """执行单次窗口查找。"""
-    # 统一使用 EnumWindows 遍历查找，避免 FindWindow 只返回一个窗口的问题
-    result: list[int | None] = [None]
+) -> list[int]:
+    """
+    查找所有匹配的可见顶层窗口（按 Z 序，最前在前）。
+
+    匹配逻辑与 find_window_handle 相同，但返回全部匹配窗口且不重试，
+    用于 close_window 一次关闭所有匹配窗口等场景。
+
+    Args:
+        title: 窗口标题（包含匹配），可选
+        class_name: 窗口类名（精确匹配），可选
+        exe_name: 进程 exe 名称过滤（精确匹配），可选，如 "chrome.exe"
+
+    Returns:
+        list[int]: 窗口句柄列表，找不到返回空列表
+    """
+    if not title and not class_name:
+        return []
+
+    matches = _enumerate_matching_windows(title, class_name, exe_name, warn_invisible=False)
+    if matches:
+        logger.debug(f"Windows found: count={len(matches)}, hwnds={matches}")
+    else:
+        extra = f", exe='{exe_name}'" if exe_name else ""
+        logger.debug(f"No matching window: class='{class_name}', title='{title}'{extra}")
+
+    return matches
+
+
+def _enumerate_matching_windows(
+    title: str | None = None,
+    class_name: str | None = None,
+    exe_name: str | None = None,
+    warn_invisible: bool = True,
+) -> list[int]:
+    """按 Z 序枚举所有匹配条件的可见顶层窗口（内部共用实现）。
+
+    匹配逻辑（统一使用 EnumWindows 遍历，确保可见性）：
+        - 只传 title: 所有可见且标题包含匹配的
+        - 只传 class: 所有可见且类名精确匹配的
+        - 都传: 所有可见且类名精确匹配 + 标题包含匹配的
+        - 可叠加 exe_name 进一步收窄
+    """
+    matches: list[int] = []
 
     def enum_callback(hwnd, _):
         try:
@@ -115,43 +154,46 @@ def _do_find_window_handle(
 
             # 匹配成功但不可见，打印提醒日志
             if not visible:
-                matched_title = ""
-                matched_class = ""
-                try:
-                    matched_title = win32gui.GetWindowText(hwnd)
-                    matched_class = win32gui.GetClassName(hwnd)
-                except Exception:
-                    pass
-                logger.warning(
-                    f"Window matched but not visible: hwnd={hwnd}, "
-                    f"class='{matched_class}', title='{matched_title}'"
-                )
+                if warn_invisible:
+                    matched_title = ""
+                    matched_class = ""
+                    try:
+                        matched_title = win32gui.GetWindowText(hwnd)
+                        matched_class = win32gui.GetClassName(hwnd)
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"Window matched but not visible: hwnd={hwnd}, "
+                        f"class='{matched_class}', title='{matched_title}'"
+                    )
                 return True  # 不可见，继续枚举
 
-            # 所有条件都匹配且可见，记录结果并停止枚举
-            result[0] = hwnd
-            return False
+            matches.append(hwnd)
         except pywintypes.error:
             # 某些系统窗口访问属性会抛异常，跳过即可
-            return True
+            pass
         except Exception:
             # 回调函数中任何异常都不应中断枚举
-            return True
+            pass
+        return True
 
     try:
         win32gui.EnumWindows(enum_callback, None)
-    except pywintypes.error as e:
-        # 回调返回 False 主动停止枚举时，pywin32 会把 EnumWindows 返回 0 视为失败
-        # 并抛出 error(2, 'EnumWindows', ...)，此时窗口实际已找到，属预期行为，
-        # 不能返回 None 丢弃已找到的句柄
-        if result[0] is None:
-            logger.error(f"EnumWindows failed: {e}")
-            return None
     except Exception as e:
         logger.error(f"EnumWindows failed: {e}")
-        return None
 
-    return result[0]
+    return matches
+
+
+def _do_find_window_handle(
+    title: str | None = None,
+    class_name: str | None = None,
+    exe_name: str | None = None,
+) -> int | None:
+    """执行单次窗口查找，返回 Z 序最前的匹配可见窗口。"""
+    # 统一使用 EnumWindows 遍历查找，避免 FindWindow 只返回一个窗口的问题
+    matches = _enumerate_matching_windows(title, class_name, exe_name)
+    return matches[0] if matches else None
 
 
 def get_window_rect(hwnd: int) -> tuple[int, int, int, int]:

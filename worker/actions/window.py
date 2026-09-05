@@ -2,7 +2,7 @@
 窗口相关 Action 执行器。
 
 - activate_window: 将指定窗口带到前台并获取焦点（Windows/Mac/Web）
-- close_window: 通过 WM_CLOSE 关闭指定窗口（Windows/Web）
+- close_window: 通过 WM_CLOSE 关闭所有匹配窗口（Windows/Web）
 
 match_by 支持 title（窗口标题）、class（窗口类名）。
 close_window 额外支持 window_class，可与 title 组合实现双条件精确定位。
@@ -352,14 +352,16 @@ class ActivateWindowAction(BaseActionExecutor):
 
 
 class CloseWindowAction(BaseActionExecutor):
-    """关闭指定窗口（Windows/Web）。
+    """关闭所有匹配的窗口（Windows/Web）。
 
-    通过 Win32 PostMessage(WM_CLOSE) 请求窗口关闭。
+    通过 Win32 PostMessage(WM_CLOSE) 逐个请求关闭所有匹配的可见窗口。
     支持 title / class / window_class + name(exe) 组合精确定位，
     避免 #32770 等通用对话框类名误关其他窗口。
 
-    幂等语义：窗口不存在（含已关闭后重复调用）视为成功。
-    发送 WM_CLOSE 后轮询等待窗口销毁或隐藏（最长 2 秒，每 0.3 秒检查一次）。
+    幂等语义：没有任何匹配窗口（含已全部关闭后重复调用）视为成功。
+    发送后轮询重新枚举（最长 2 秒，每 0.3 秒一次），
+    期间新出现的匹配窗口（如连环弹窗）也会补发 WM_CLOSE，
+    直到所有匹配窗口销毁或隐藏。
     """
 
     name = "close_window"
@@ -397,88 +399,63 @@ class CloseWindowAction(BaseActionExecutor):
         class_name: str | None,
         exe_name: str | None,
     ) -> ActionResult:
-        """Windows 平台关闭窗口。"""
+        """Windows 平台关闭所有匹配窗口。"""
         import win32con
         import win32gui
 
-        from worker.platforms.win_utils import find_window_handle
+        from worker.platforms.win_utils import find_window_handles
 
         filter_desc = self._format_filters(title, class_name, exe_name)
 
-        hwnd = find_window_handle(
-            title=title,
-            class_name=class_name,
-            exe_name=exe_name,
-            retry=True,
-        )
-        if not hwnd:
-            # 幂等：窗口已关闭（或不存在）即为目标状态，返回成功
-            logger.info(f"Window not found for close_window (already closed): {filter_desc}")
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.SUCCESS,
-                output=f"Window not found (already closed): {filter_desc}",
-            )
-
-        try:
-            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-        except Exception as e:
-            logger.error(f"PostMessage WM_CLOSE failed: hwnd={hwnd}, {e}")
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error=f"Failed to post WM_CLOSE: {e}",
-            )
-
-        # 部分应用关闭慢，轮询等待：每 _CLOSE_POLL_INTERVAL 检查一次，
-        # 最长 _CLOSE_WAIT_TIMEOUT；窗口销毁或隐藏均视为已关闭
+        # 一次关闭所有匹配窗口：发送 WM_CLOSE 后轮询重新枚举，直到没有匹配窗口可见
+        # （销毁或隐藏都算已关闭）；一个都没有（含重复调用）直接成功。
+        sent: set[int] = set()
         deadline = time.monotonic() + self._CLOSE_WAIT_TIMEOUT
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(self._CLOSE_POLL_INTERVAL, remaining))
-            if not self._window_alive(hwnd):
-                logger.info(f"Closed window: {filter_desc}, hwnd={hwnd}")
+            hwnds = find_window_handles(title=title, class_name=class_name, exe_name=exe_name)
+            for hwnd in hwnds:
+                if hwnd in sent:
+                    continue  # 每个 hwnd 只发一次，避免对弹了确认框的窗口反复发送
+                try:
+                    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                    sent.add(hwnd)
+                except Exception as e:
+                    logger.error(f"PostMessage WM_CLOSE failed: hwnd={hwnd}, {e}")
+
+            if not hwnds:
+                if not sent:
+                    logger.info(f"Window not found for close_window (already closed): {filter_desc}")
+                    return ActionResult(
+                        number=0,
+                        action_type=self.name,
+                        status=ActionStatus.SUCCESS,
+                        output=f"Window not found (already closed): {filter_desc}",
+                    )
+                logger.info(f"Closed {len(sent)} matching window(s): {filter_desc}, hwnds={sorted(sent)}")
                 return ActionResult(
                     number=0,
                     action_type=self.name,
                     status=ActionStatus.SUCCESS,
-                    output=f"Closed window: {filter_desc}",
+                    output=f"Closed window(s), count={len(sent)}: {filter_desc}",
                 )
 
-        logger.warning(
-            f"WM_CLOSE sent but window still exists after "
-            f"{self._CLOSE_WAIT_TIMEOUT:.0f}s: hwnd={hwnd}, {filter_desc}"
-        )
-        return ActionResult(
-            number=0,
-            action_type=self.name,
-            status=ActionStatus.FAILED,
-            error=(
-                f"WM_CLOSE sent but window still exists after "
-                f"{self._CLOSE_WAIT_TIMEOUT:.0f}s: {filter_desc} "
-                f"(hwnd={hwnd}). App may show a confirm dialog."
-            ),
-        )
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    f"WM_CLOSE sent but {len(hwnds)} matching window(s) still exist after "
+                    f"{self._CLOSE_WAIT_TIMEOUT:.0f}s: hwnds={hwnds}, {filter_desc}"
+                )
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error=(
+                        f"WM_CLOSE sent but {len(hwnds)} matching window(s) still exist after "
+                        f"{self._CLOSE_WAIT_TIMEOUT:.0f}s: {filter_desc} (hwnds={hwnds}). "
+                        f"App may show a confirm dialog."
+                    ),
+                )
 
-    @staticmethod
-    def _window_alive(hwnd: int) -> bool:
-        """窗口是否仍然存活且可见。
-
-        已销毁（IsWindow=False）或已隐藏（IsWindowVisible=False）都视为已关闭；
-        查询异常按已关闭处理。
-        """
-        try:
-            import win32gui
-
-            if not win32gui.IsWindow(hwnd):
-                return False
-            return bool(win32gui.IsWindowVisible(hwnd))
-        except Exception:
-            return False
+            time.sleep(min(self._CLOSE_POLL_INTERVAL, deadline - time.monotonic()))
 
     @staticmethod
     def _format_filters(
