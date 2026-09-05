@@ -565,9 +565,11 @@ class GUIApp:
         """运行 GUI 应用。"""
         # 检查单实例（启动画面已在 __init__ 中显示）
         if not check_single_instance():
-            logger.warning("Another instance is already running")
+            # 静默退出，不弹模态框：平台升级链路安装完成后会自动拉起新实例，
+            # 若此时有残留实例持有锁，模态框会阻塞新实例启动——worker 不注册，
+            # 平台侧状态会一直停在“升级中”，直到人工关掉弹窗。
+            logger.warning("Another instance is already running, exiting silently")
             self._splash.close()
-            self._show_error_dialog("错误", "已有一个实例运行")
             return 1
 
         # 启动 Worker
