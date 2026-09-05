@@ -485,14 +485,16 @@ Function OptionsPageCreate
   Pop $0
 
   ; Device Discovery（从配置页迁移，拆两行更宽松）
+  ; Harmony Mobile 文本较长，90u 宽度在部分 DPI 下会折行且第二行被控件
+  ; 高度裁掉，加宽到 135u 保持单行，Harmony PC 顺延右移
   ${NSD_CreateLabel} 0 0 100% 12u "Device Discovery:"
   ${NSD_CreateCheckbox} 0 18 80 12u "Android"
   Pop $DiscoverAndroid
   ${NSD_CreateCheckbox} 100 18 60 12u "iOS"
   Pop $DiscoverIos
-  ${NSD_CreateCheckbox} 0 40 90 12u "Harmony Mobile"
+  ${NSD_CreateCheckbox} 0 40 135 12u "Harmony Mobile"
   Pop $DiscoverHarmonyMobile
-  ${NSD_CreateCheckbox} 110 40 80 12u "Harmony PC"
+  ${NSD_CreateCheckbox} 145 40 115 12u "Harmony PC"
   Pop $DiscoverHarmonyPc
 
   ; 分隔线
