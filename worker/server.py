@@ -1341,8 +1341,12 @@ async def screen_stream(
                 await websocket.close(code=1008, reason=f"{platform} platform not initialized")
                 return
             if not harmony_manager._device_clients.get(device_id):
-                # 未注册时尝试拉起设备服务（与 DeviceMonitor 同一入口）
-                status, message = harmony_manager.ensure_device_service(device_id)
+                # 未注册时尝试拉起设备服务（与 DeviceMonitor 同一入口）。
+                # ensure_device_service 内含 HDC 命令（最坏含 30s 的 server 重启），
+                # 必须放入线程池，否则会阻塞整个事件循环（H-3）。
+                status, message = await asyncio.to_thread(
+                    harmony_manager.ensure_device_service, device_id
+                )
                 if status != "online":
                     logger.warning(f"WebSocket rejected: Harmony device not available: {device_id}, {message}")
                     await websocket.close(code=1008, reason=f"Harmony device not available: {device_id}")
@@ -1351,7 +1355,10 @@ async def screen_stream(
         if direct_h264_frame_source:
             # 官方 H.264 不需要 ScreenManager 的 JPEG 捕获线程；锁屏时保留
             # 独立帧源，等待解锁后再启动 Java Bridge，避免直接降级成旧 JPEG。
-            frame_source = _create_frame_source(
+            # _create_frame_source 内部会构造 HarmonyHdcWrapper（构造即探测
+            # is_online → list targets），放入线程池避免阻塞事件循环。
+            frame_source = await asyncio.to_thread(
+                _create_frame_source,
                 platform,
                 device_id,
                 monitor,
@@ -1374,7 +1381,9 @@ async def screen_stream(
                 # 获取已存在的 frame_source
                 frame_source = screen_manager._frame_source
             else:
-                frame_source = _create_frame_source(platform, device_id, monitor)
+                frame_source = await asyncio.to_thread(
+                    _create_frame_source, platform, device_id, monitor
+                )
                 screen_manager = get_screen_manager(conn_key, frame_source)
 
         # iOS MJPEG 透传模式特殊处理
@@ -1417,6 +1426,7 @@ async def screen_stream(
             h264_subscriber_id = f"{conn_key}/h264/{id(websocket)}"
             h264_wait_deadline = time.monotonic() + DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT
             h264_wait_logged = False
+            h264_wait_notified = False
             while not stream_stop_event.is_set():
                 try:
                     h264_queue = await asyncio.to_thread(
@@ -1435,6 +1445,24 @@ async def screen_stream(
                                 conn_key,
                             )
                             h264_wait_logged = True
+                        if not h264_wait_notified:
+                            # 锁屏等待最长可达 300s，必须先告知客户端当前状态，
+                            # 否则调试页表现为无任何反馈的静默黑屏。
+                            h264_wait_notified = True
+                            try:
+                                await _send_websocket_message(
+                                    websocket,
+                                    json.dumps({
+                                        "type": "waiting_unlock",
+                                        "message": "鸿蒙设备已锁屏，解锁后自动开始推流",
+                                    }),
+                                    stop_event=stream_stop_event,
+                                    timeout=send_timeout,
+                                )
+                            except Exception as notify_exc:
+                                logger.debug(
+                                    "screen_stream: 发送锁屏等待通知失败: %s", notify_exc
+                                )
                         await asyncio.sleep(1.0)
                         continue
                     await _send_harmony_h264_fallback(websocket, str(exc), stream_stop_event)
@@ -1446,6 +1474,33 @@ async def screen_stream(
                 return
             h264_diag_started_at = time.monotonic()
             logger.info("screen_stream: 使用鸿蒙官方 H.264 直通通道, conn_key=%s", conn_key)
+
+            # 与 JPEG 分支一致：推流前先把真机原生分辨率下发给前端做坐标基准，
+            # 与视频流实际尺寸解耦（官方 SDK 的缩放参数只作用于图片流，
+            # 对 H.264 视频不生效；一旦未来生效，前端坐标仍以 meta 为准不漂移）。
+            try:
+                real_w, real_h = await asyncio.to_thread(
+                    _get_harmony_display_size, platform, device_id
+                )
+            except Exception as exc:
+                real_w, real_h = 0, 0
+                logger.debug("screen_stream: 获取鸿蒙真机分辨率失败，跳过 meta: %s", exc)
+            if real_w > 0 and real_h > 0:
+                try:
+                    await _send_websocket_message(
+                        websocket,
+                        json.dumps({"type": "meta", "width": real_w, "height": real_h}),
+                        stop_event=stream_stop_event,
+                        timeout=send_timeout,
+                    )
+                    logger.info(
+                        "screen_stream: 鸿蒙 H.264 已下发真机分辨率 meta: %dx%d, conn_key=%s",
+                        real_w,
+                        real_h,
+                        conn_key,
+                    )
+                except Exception as exc:
+                    logger.debug("screen_stream: 下发 H264 meta 失败: %s", exc)
 
         # Windows H.264 推流使用推模式
         if platform == "windows" and codec == "h264" and streamer.uses_binary_media:
@@ -1814,6 +1869,24 @@ def _get_harmony_manager(platform: str):
     return None
 
 
+def _get_harmony_display_size(platform: str, device_id: str) -> tuple[int, int]:
+    """查询鸿蒙真机原生分辨率，供推流 meta 帧做前端坐标基准。
+
+    内部走 HDC hidumper，调用方需放在线程池中执行。查询失败返回 (0, 0)，
+    调用方据此跳过 meta 下发（前端退回视频尺寸基准）。
+    """
+    manager = _get_harmony_manager(platform)
+    client = manager._device_clients.get(device_id) if manager else None
+    if not client:
+        return 0, 0
+    try:
+        width, height = client.display_size()
+    except Exception as exc:
+        logger.warning("查询鸿蒙真机分辨率异常: device=%s, error=%s", device_id, exc)
+        return 0, 0
+    return int(width or 0), int(height or 0)
+
+
 def _create_frame_source(
     platform: str,
     device_id: str,
@@ -1847,10 +1920,23 @@ def _create_frame_source(
             wda_client = ios_manager._device_clients.get(device_id)
             if wda_client:
                 return MJPEGFrameSource(device_id, wda_client, mjpeg_port=mjpeg_port)
-        # Fallback: 直接连接 WDA（假设本地基础端口）
+            # Fallback: 设备未注册时直连本地 WDA。此时无法得知该设备的
+            # 实际 MJPEG 端口，只能取配置的基础端口并显式告警——
+            # 静默使用默认值在多设备场景会拿到别的设备的画面。
+            from worker.platforms.wda_client import WDAClient
+            fallback_port = int(getattr(ios_manager, "mjpeg_base_port", 0) or 9100)
+            logger.warning(
+                "iOS 设备未注册，MJPEG 回退直连本地 WDA: device=%s, "
+                "mjpeg_port=%d（多设备场景可能串台，请先刷新设备）",
+                device_id,
+                fallback_port,
+            )
+            wda_client = WDAClient("http://127.0.0.1:8100")
+            return MJPEGFrameSource(device_id, wda_client, mjpeg_port=fallback_port)
+        # worker 未初始化时的最后兜底
         from worker.platforms.wda_client import WDAClient
         wda_client = WDAClient("http://127.0.0.1:8100")
-        return MJPEGFrameSource(device_id, wda_client)
+        return MJPEGFrameSource(device_id, wda_client, mjpeg_port=9100)
 
     elif platform == "android":
         # Android: 使用 minicap 流

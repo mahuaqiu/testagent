@@ -144,6 +144,11 @@ class UnlockScreenAction(ActionExecutor):
                         error="Screen still off after wake attempt",
                     )
 
+            # 3.5 鸿蒙手机 AOD（熄屏时钟）：亮屏但合成触摸被静默忽略，
+            # 需 suspend+wakeup 一轮才能到达可交互的锁屏界面（真机验证）
+            if platform.platform == "harmony_mobile":
+                self._ensure_interactive(platform, context)
+
             # 4. 触发解锁界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
@@ -500,6 +505,36 @@ class UnlockScreenAction(ActionExecutor):
                 hdc.wakeup()
                 logger.info("Harmony screen awakened via power-shell wakeup")
                 time.sleep(0.5)  # 等待屏幕点亮
+
+    def _ensure_interactive(self, platform: "PlatformManager", context: object) -> None:
+        """确认鸿蒙设备处于可交互状态，AOD 息屏时钟则 suspend+wakeup 一轮。
+
+        AOD 亮屏（is_screen_on 为 True）但不接受合成触摸，且 wakeup 对已
+        处于 AOD 的设备是空操作；suspend → wakeup 才能到达可交互的锁屏
+        界面（真机实测 interactiveState 0=非交互，2=可交互）。执行到此处
+        时设备已确认锁屏或熄屏，suspend 不会打断正在进行的操作。
+        """
+        hdc = context or platform._device_clients.get(platform._current_device)
+        if not hdc or not hasattr(hdc, "is_interactive"):
+            return
+        try:
+            if hdc.is_interactive():
+                return
+        except Exception as e:
+            logger.warning(f"Failed to check Harmony interactive state: {e}")
+            return
+
+        logger.warning(
+            "Harmony device in AOD (non-interactive) state, "
+            "suspend+wakeup to reach interactive lock screen"
+        )
+        try:
+            hdc.suspend()
+            time.sleep(1.0)
+            hdc.wakeup()
+            time.sleep(1.0)
+        except Exception as e:
+            logger.warning(f"Harmony AOD suspend+wakeup cycle failed: {e}")
 
     def _swipe_unlock(self, platform: "PlatformManager", context: object) -> None:
         """滑动解锁界面（旧方法，保留兼容）。"""

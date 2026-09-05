@@ -176,11 +176,21 @@ class JavaBridgeProcess:
             self._on_closed(close_reason)
 
     def _stderr_loop(self, stream: object) -> None:
+        # Java 每帧/每事件都可能写 stderr，逐行 INFO 会刷屏；仅关键
+        # 生命周期与异常关键字保留 INFO，其余降为 DEBUG。
+        important_markers = (
+            "SDK_READY", "STREAM_START", "STREAM_STOP", "ERROR",
+            "Exception", "FATAL",
+        )
         try:
             for raw_line in iter(stream.readline, b""):
                 line = raw_line.decode("utf-8", errors="replace").rstrip()
-                if line:
+                if not line:
+                    continue
+                if any(marker in line for marker in important_markers):
                     logger.info("Harmony Java[%s]: %s", self.serial, line)
+                else:
+                    logger.debug("Harmony Java[%s]: %s", self.serial, line)
         except Exception as exc:
             logger.debug("读取鸿蒙官方 Java Bridge stderr 失败: %s", exc)
 

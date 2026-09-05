@@ -111,6 +111,14 @@ class HarmonyOfficialError(RuntimeError):
     """官方 HOScrcpy 会话不可用或执行失败。"""
 
 
+class HarmonyOfficialPartialActionError(HarmonyOfficialError):
+    """官方手势已开始执行（至少 down 事件送达设备）后的失败。
+
+    平台层收到此异常时不得回退 HDC 重放同一动作，否则同一手势会被执行
+    两次；会话通道已不可信，调用方应停用会话，由上层决定是否整体重试。
+    """
+
+
 class HarmonyOfficialSession:
     """单台鸿蒙设备的官方视频、触摸或鼠标会话。"""
 
@@ -302,14 +310,21 @@ class HarmonyOfficialSession:
             logger.debug("鸿蒙官方 H.264 静止画面唤醒失败: serial=%s", self.serial)
 
     def tap(self, x: int, y: int, duration_ms: int = 0) -> None:
-        """执行移动端触摸点击或长按，PC 使用左键点击。"""
+        """执行移动端触摸点击或长按。"""
         self._wait_input_ready()
         if self.device_type == "mobile":
             self._send(command_touch_down(x, y))
             try:
                 time.sleep(max(duration_ms, 80) / 1000.0)
             finally:
-                self._send(command_touch_up(x, y))
+                # down 已送达：up 失败时手势可能已作用于设备，必须以部分执行
+                # 异常上报，禁止调用方回退 HDC 重放同一动作。
+                try:
+                    self._send(command_touch_up(x, y))
+                except HarmonyOfficialError as exc:
+                    raise HarmonyOfficialPartialActionError(
+                        f"touch_up 发送失败（touch_down 已送达）: {exc}"
+                    ) from exc
             return
         self._mouse_click("LEFT", x, y, duration_ms)
 
@@ -346,14 +361,25 @@ class HarmonyOfficialSession:
         event_count = self._gesture_steps(duration_ms, steps)
         interval = duration_ms / event_count / 1000.0
         self._send(command_touch_down(start_x, start_y))
+        # touch_down 已送达：此后任何失败都意味着手势已部分执行于设备，
+        # 必须以部分执行异常上报，禁止调用方回退 HDC 重放同一动作。
         try:
             for index in range(1, event_count + 1):
                 time.sleep(interval)
                 x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
                 self._send(command_touch_move(x, y))
             time.sleep(0.02)
+        except HarmonyOfficialError as exc:
+            raise HarmonyOfficialPartialActionError(
+                f"滑动手势中断（touch_down 已送达）: {exc}"
+            ) from exc
         finally:
-            self._send(command_touch_up(end_x, end_y))
+            try:
+                self._send(command_touch_up(end_x, end_y))
+            except HarmonyOfficialError as exc:
+                raise HarmonyOfficialPartialActionError(
+                    f"touch_up 发送失败（手势已开始）: {exc}"
+                ) from exc
 
     def drag(
         self,
@@ -371,14 +397,24 @@ class HarmonyOfficialSession:
         event_count = self._gesture_steps(duration_ms, steps)
         interval = duration_ms / event_count / 1000.0
         self._send(command_mouse_down("LEFT", start_x, start_y))
+        # mouse_down 已送达：此后任何失败都意味着拖拽已部分执行。
         try:
             for index in range(1, event_count + 1):
                 time.sleep(interval)
                 x, y = self._interpolate(start_x, start_y, end_x, end_y, index, event_count)
                 self._send(command_mouse_move("LEFT", x, y))
             time.sleep(0.02)
+        except HarmonyOfficialError as exc:
+            raise HarmonyOfficialPartialActionError(
+                f"拖拽手势中断（mouse_down 已送达）: {exc}"
+            ) from exc
         finally:
-            self._send(command_mouse_up("LEFT", end_x, end_y))
+            try:
+                self._send(command_mouse_up("LEFT", end_x, end_y))
+            except HarmonyOfficialError as exc:
+                raise HarmonyOfficialPartialActionError(
+                    f"mouse_up 发送失败（拖拽已开始）: {exc}"
+                ) from exc
 
     def wheel(self, direction: str, x: int, y: int) -> None:
         """发送鸿蒙 PC 官方滚轮事件。"""
@@ -726,7 +762,13 @@ class HarmonyOfficialSession:
         try:
             time.sleep(max(duration_ms, 80) / 1000.0)
         finally:
-            self._send(command_mouse_up(button, x, y))
+            # 同 tap：down 已送达后 up 失败视为部分执行。
+            try:
+                self._send(command_mouse_up(button, x, y))
+            except HarmonyOfficialError as exc:
+                raise HarmonyOfficialPartialActionError(
+                    f"mouse_up 发送失败（mouse_down 已送达）: {exc}"
+                ) from exc
 
     def _require_pc(self) -> None:
         if self.device_type != "pc":
@@ -787,6 +829,9 @@ class HarmonyOfficialSessionManager:
         self._prewarm_threads: dict[str, threading.Thread] = {}
         self._prewarm_failure_until: dict[str, float] = {}
         self._prewarm_generation = 0
+        # per-serial 启动锁：start()（最长 startup_timeout×重试次数）在锁外执行，
+        # 只串行同一设备的并发启动，不阻塞其他设备的 acquire/订阅/预热。
+        self._start_locks: dict[str, threading.Lock] = {}
         self._device_lock_checker: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
 
@@ -823,7 +868,13 @@ class HarmonyOfficialSessionManager:
         *,
         retry_attempts: int | None = None,
     ) -> HarmonyOfficialSession | None:
-        """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。"""
+        """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。
+
+        全局锁只保护会话字典的读写；耗时的 ``session.start()`` 在 per-serial
+        启动锁下锁外执行，一台设备的启动（最长 startup_timeout×重试次数）不再
+        阻塞其他设备的 acquire/订阅/预热操作。
+        """
+        generation = self._prewarm_generation
         try:
             if not self._hdc_path:
                 return self._handle_start_failure("HDC 路径不可用")
@@ -837,16 +888,23 @@ class HarmonyOfficialSessionManager:
                     # 预热会话只需 Bridge 仍在运行即可复用；视频数据由真实的
                     # WebSocket 订阅消费，不能在这里阻塞等待消费者。
                     return current
-                if current:
-                    self._sessions.pop(serial, None)
-                    try:
-                        current.stop(timeout=1.0)
-                    except Exception as exc:
-                        logger.warning(
-                            "清理失效的鸿蒙官方会话失败，继续尝试 HDC 回退: serial=%s, error=%s",
-                            serial,
-                            exc,
-                        )
+
+            start_lock = self._start_locks.setdefault(serial, threading.Lock())
+            with start_lock:
+                with self._lock:
+                    current = self._sessions.get(serial)
+                    if current and current.is_running:
+                        return current
+                    if current:
+                        self._sessions.pop(serial, None)
+                        try:
+                            current.stop(timeout=1.0)
+                        except Exception as exc:
+                            logger.warning(
+                                "清理失效的鸿蒙官方会话失败，继续尝试 HDC 回退: serial=%s, error=%s",
+                                serial,
+                                exc,
+                            )
 
                 attempts = max(
                     1,
@@ -865,9 +923,8 @@ class HarmonyOfficialSessionManager:
                         settings=self._settings_for_serial(serial),
                     )
                     try:
+                        # start() 持 per-serial 启动锁在全局锁外执行。
                         session.start()
-                        self._sessions[serial] = session
-                        return session
                     except Exception as exc:
                         last_error = str(exc)
                         if not last_error:
@@ -889,6 +946,40 @@ class HarmonyOfficialSessionManager:
                         )
                         if attempt < attempts:
                             time.sleep(float(self._settings["reconnect_backoff_seconds"]))
+                        continue
+                    with self._lock:
+                        existing = self._sessions.get(serial)
+                        if existing and existing.is_running:
+                            # 另一线程（如预热）已抢先装入新会话，丢弃本次重复启动。
+                            logger.debug(
+                                "鸿蒙官方会话已被并发启动，丢弃重复实例: serial=%s", serial
+                            )
+                            try:
+                                session.stop(timeout=1.0)
+                            except Exception as stop_exc:
+                                logger.warning(
+                                    "清理重复启动的鸿蒙官方会话失败: serial=%s, error=%s",
+                                    serial,
+                                    stop_exc,
+                                )
+                            return existing
+                        if generation != self._prewarm_generation:
+                            # 启动期间发生 stop_all（升级/停机），不把新会话装回字典。
+                            logger.info(
+                                "鸿蒙官方会话启动完成但管理器已停机，直接释放: serial=%s",
+                                serial,
+                            )
+                            try:
+                                session.stop(timeout=1.0)
+                            except Exception as stop_exc:
+                                logger.warning(
+                                    "清理停机后启动的鸿蒙官方会话失败: serial=%s, error=%s",
+                                    serial,
+                                    stop_exc,
+                                )
+                            return self._handle_start_failure("会话管理器已停机")
+                        self._sessions[serial] = session
+                        return session
                 return self._handle_start_failure(last_error)
         except Exception as exc:
             # 官方链路是可选加速路径，任何启动阶段异常都必须交给调用方回退 HDC。
@@ -1008,12 +1099,16 @@ class HarmonyOfficialSessionManager:
         serial: str,
         owner: str,
     ) -> HarmonyOfficialSession | None:
-        """获取一份官方会话租约；同一 owner 重复获取不会增加引用。"""
+        """获取一份官方会话租约；同一 owner 重复获取不会增加引用。
+
+        get_or_start 可能耗时数十秒（冷启动/重试），期间不能持有全局锁，
+        否则会阻塞其他设备的所有会话操作（H-2）。
+        """
+        session = self.get_or_start(serial)
+        if session is None:
+            return None
         with self._lock:
             self._cancel_idle_timer_locked(serial)
-            session = self.get_or_start(serial)
-            if session is None:
-                return None
             self._owners.setdefault(serial, set()).add(owner)
             return session
 

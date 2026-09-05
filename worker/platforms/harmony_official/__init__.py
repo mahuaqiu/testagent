@@ -2,12 +2,14 @@
 
 from worker.platforms.harmony_official.session import (
     HarmonyOfficialError,
+    HarmonyOfficialPartialActionError,
     HarmonyOfficialSession,
     HarmonyOfficialSessionManager,
 )
 
 __all__ = [
     "HarmonyOfficialError",
+    "HarmonyOfficialPartialActionError",
     "HarmonyOfficialSession",
     "HarmonyOfficialSessionManager",
 ]

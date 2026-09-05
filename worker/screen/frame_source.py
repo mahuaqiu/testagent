@@ -317,6 +317,12 @@ class HarmonyFrameSource(FrameSource):
     # 轮询模式最低截图间隔（秒），避免高频 hdc 命令拖垮设备
     POLL_MIN_INTERVAL = 0.5
 
+    @property
+    def prefers_latest_frame(self) -> bool:
+        """帧流约 10fps 且只保留最新帧槽位，消费者应跳过积压旧帧，
+        否则通用 FIFO 会把滞后画面继续推给 WebSocket。"""
+        return True
+
     def __init__(self, device_id: str, hdc_wrapper: "HarmonyHdcWrapper"):
         self.device_id = device_id
         self.hdc = hdc_wrapper

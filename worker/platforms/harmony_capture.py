@@ -4,10 +4,11 @@
 agent.so 来自华为官方 Hypium（DevEco Testing）投屏插件，协议参考
 hmdriver2/hmnextauto 的实现（不集成其代码）：
 1. 推送 agent.so 到设备（MD5 比对，按需更新；新版不兼容时自动回退旧版）；
-2. 重启 uitest start-daemon singleness 守护进程（监听设备 8012 端口）；
+2. 按需重启 uitest start-daemon singleness 守护进程（监听设备 8012 端口；
+   端口已在监听时跳过重启，避免打断同设备其他 uitest 自动化）；
 3. hdc fport 转发本地空闲端口到设备 8012；
-4. socket 发送 Captures/startCaptureScreen 请求，成功后同一连接持续
-   收取 JPEG 字节流，按 FFD8/FFD9 魔数切帧（约 10fps）。
+4. socket 发送 Captures/startCaptureScreen 请求（按行聚合 JSON 回复），
+   成功后同一连接持续收取 JPEG 字节流，按 JPEG 段结构切帧（约 10fps）。
 """
 
 import hashlib
@@ -37,6 +38,9 @@ AGENT_CANDIDATES = ("uitest_agent_v1.2.2.so", "uitest_agent_v1.1.0.so")
 SOCKET_TIMEOUT = 20
 # 单次 recv 的缓冲大小（JPEG 帧较大，用大缓冲减少系统调用）
 RECV_BUFF_SIZE = 4096 * 1024
+# 最新帧的可信时长：断流后超龄帧视为陈旧，get_frame 返回 None 让调用方
+# 感知断流，而不是拿着旧画面继续 OCR/断言。
+FRAME_STALE_SECONDS = 3.0
 
 # JPEG 帧起止魔数
 JPEG_START = b"\xff\xd8"
@@ -49,9 +53,61 @@ class HarmonyCaptureError(Exception):
     pass
 
 
+def _jpeg_frame_end(data: bytearray, soi: int) -> int:
+    """返回以 ``soi`` 开头 JPEG 的结束位置（EOI 之后，切片排他上界）。
+
+    按标记段结构解析：普通段读段长跳过，SOS 段后的熵编码数据跳过
+    FF00 填充与 RST 标记直至 EOI。数据不足返回 -1。
+    """
+    size = len(data)
+    i = soi + 2  # 跳过 SOI
+    while i < size:
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        j = i
+        while j < size and data[j] == 0xFF:
+            j += 1
+        if j >= size:
+            return -1
+        marker = data[j]
+        pos = j + 1  # marker 后第一个字节
+        if marker == 0xD9:  # EOI，无负载
+            return pos
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7 or marker == 0xD8:
+            i = pos  # 无长度标记（TEM/RST/异常嵌套 SOI）
+            continue
+        if pos + 2 > size:
+            return -1
+        seg_len = (data[pos] << 8) | data[pos + 1]
+        if seg_len < 2:
+            return -1  # 非法流
+        if marker == 0xDA:  # SOS：段头之后为熵编码数据
+            k = pos + seg_len
+            while k + 1 < size:
+                if data[k] == 0xFF:
+                    nxt = data[k + 1]
+                    if nxt == 0x00 or 0xD0 <= nxt <= 0xD7:
+                        k += 2
+                        continue
+                    if nxt == 0xD9:
+                        return k + 2
+                    i = k  # 熵编码后出现其他标记，回到段解析
+                    break
+                k += 1
+            else:
+                return -1
+            continue
+        i = pos + seg_len
+    return -1
+
+
 def split_jpeg_frames(buffer: bytearray) -> Tuple[List[bytes], bytearray]:
     """
-    按 JPEG 魔数从字节流缓冲区切出完整帧。
+    从字节流缓冲区按 JPEG 段结构切出完整帧。
+
+    不按 FFD9 魔数简单查找：JPEG 内嵌的 EXIF 缩略图自身也是完整 JPEG
+    （含 FFD8/FFD9），魔数匹配会把带 EXIF 的帧提前截断。
 
     Args:
         buffer: 累积的原始字节流缓冲区
@@ -60,17 +116,20 @@ def split_jpeg_frames(buffer: bytearray) -> Tuple[List[bytes], bytearray]:
         Tuple[List[bytes], bytearray]: (完整 JPEG 帧列表, 剩余未完整的缓冲)
     """
     frames: List[bytes] = []
-    start_idx = buffer.find(JPEG_START)
-    end_idx = buffer.find(JPEG_END, start_idx + 2 if start_idx != -1 else 0)
-    while start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        frames.append(bytes(buffer[start_idx:end_idx + 2]))
-        buffer = buffer[end_idx + 2:]
-        start_idx = buffer.find(JPEG_START)
-        end_idx = buffer.find(JPEG_END, start_idx + 2 if start_idx != -1 else 0)
-    # 丢弃帧头之前的脏数据，避免缓冲无限膨胀
-    if start_idx > 0:
-        buffer = buffer[start_idx:]
-    return frames, buffer
+    size = len(buffer)
+    pos = 0
+    while True:
+        soi = buffer.find(JPEG_START, pos)
+        if soi < 0:
+            pos = size  # 丢弃 SOI 之前的脏数据，避免缓冲无限膨胀
+            break
+        end = _jpeg_frame_end(buffer, soi)
+        if end < 0:
+            pos = soi  # 帧未完整到达，保留 SOI 起的数据等待后续字节
+            break
+        frames.append(bytes(buffer[soi:end]))
+        pos = end
+    return frames, buffer[pos:]
 
 
 def find_free_port() -> int:
@@ -102,8 +161,14 @@ class HarmonyScreenCapture:
         self._stop_event = threading.Event()
         # 只保留最新一帧，避免消费慢时积压导致画面延迟
         self._latest_frame: Optional[bytes] = None
+        self._latest_frame_at: float = 0.0
+        self._stale_warned = False
         self._frame_cond = threading.Condition()
         self._frame_seq = 0
+        # startCaptureScreen 回复行之后可能已带入 JPEG 帧流首段
+        self._pending_stream_prefix = bytearray()
+        # daemon 探测通过但后续启动失败时，下一次尝试强制重启 daemon
+        self._force_daemon_restart = False
 
     @property
     def is_running(self) -> bool:
@@ -130,6 +195,10 @@ class HarmonyScreenCapture:
                 os.path.join(AGENT_ASSETS_DIR, name) for name in AGENT_CANDIDATES
             ]
 
+        with self._frame_cond:
+            # 复用实例重开流时丢弃上一轮残留的流前缀
+            self._pending_stream_prefix = bytearray()
+
         last_error: Optional[Exception] = None
         for agent_path in agent_paths:
             try:
@@ -138,10 +207,13 @@ class HarmonyScreenCapture:
                 self._setup_fport()
                 self._connect_sock()
                 self._start_capture_screen()
+                self._force_daemon_restart = False
                 break
             except Exception as exc:
                 self._cleanup()
                 last_error = exc
+                # daemon 端口在监听但握手失败，说明实例已僵死，下一轮强制重启
+                self._force_daemon_restart = True
                 logger.warning(
                     f"agent {os.path.basename(agent_path)} 启动帧流失败: {exc}"
                 )
@@ -193,21 +265,40 @@ class HarmonyScreenCapture:
         """
         获取最新 JPEG 帧。
 
+        断流保护：接收线程已退出，或最新帧龄超过 FRAME_STALE_SECONDS
+        时返回 None，让调用方感知断流，而不是拿旧画面继续 OCR/断言。
+
         Args:
             timeout: 等待新帧的超时时间（秒）
 
         Returns:
-            Optional[bytes]: JPEG 帧数据，超时返回 None
+            Optional[bytes]: JPEG 帧数据，超时或已陈旧返回 None
         """
         with self._frame_cond:
             seq = self._frame_seq
             if self._latest_frame is not None:
-                return self._latest_frame
+                return self._fresh_frame_or_none()
             self._frame_cond.wait_for(
                 lambda: self._frame_seq != seq or self._stop_event.is_set(),
                 timeout=timeout,
             )
-            return self._latest_frame
+            return self._fresh_frame_or_none()
+
+    def _fresh_frame_or_none(self) -> Optional[bytes]:
+        """仅当流仍活跃且帧未超龄时返回最新帧，否则返回 None（需持有 _frame_cond）。"""
+        frame = self._latest_frame
+        if frame is None or not self.is_running:
+            return None
+        if time.monotonic() - self._latest_frame_at > FRAME_STALE_SECONDS:
+            if not self._stale_warned:
+                self._stale_warned = True
+                logger.warning(
+                    "鸿蒙帧流超过 %.1fs 无新帧，视为断流: %s",
+                    FRAME_STALE_SECONDS,
+                    self.hdc.serial,
+                )
+            return None
+        return frame
 
     # ------------------------------------------------------------------
     # 内部实现
@@ -245,8 +336,32 @@ class HarmonyScreenCapture:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    def _daemon_port_listening(self) -> bool:
+        """探测设备侧 uitest 端口是否处于监听状态（探测失败按未监听处理）。"""
+        try:
+            output = self.hdc.shell(
+                f"netstat -an 2>/dev/null | grep {UITEST_SERVICE_PORT} | grep -i listen"
+            ).output
+        except Exception as exc:
+            logger.debug("netstat 探测 uitest 端口失败: %s", exc)
+            return False
+        return bool(output.strip())
+
     def _restart_uitest_daemon(self) -> None:
-        """kill 残留 daemon 后重启（单例进程，残留会导致连接失败）。"""
+        """按需重启 uitest daemon。
+
+        端口已在监听时跳过 kill/启动，避免打断同设备上其他 uitest 自动化
+        （单例进程，kill -9 会连带伤及）；仅在上轮握手失败标记了
+        _force_daemon_restart 时才强制重启。
+        """
+        if not self._force_daemon_restart and self._daemon_port_listening():
+            logger.debug(
+                "uitest daemon 端口 %d 已监听，跳过重启: %s",
+                UITEST_SERVICE_PORT,
+                self.hdc.serial,
+            )
+            return
+
         ps_output = self.hdc.shell("ps -ef").output
         for line in ps_output.splitlines():
             if "uitest start-daemon singleness" not in line:
@@ -287,18 +402,44 @@ class HarmonyScreenCapture:
         self.sock.sendall(payload.encode("utf-8") + b"\n")
 
     def _start_capture_screen(self) -> None:
-        """发送 startCaptureScreen 并校验回复。"""
+        """发送 startCaptureScreen 并按行读取 JSON 回复。
+
+        回复与后续 JPEG 帧流共用同一条连接：一次 recv 可能只带回半行回复，
+        也可能带回完整回复 + 帧流首段。因此按行聚合，整行可解析为 JSON 才
+        算回复完整；回复行之后的多余字节留存给接收线程作流前缀。
+        """
         self._send_captures_msg("startCaptureScreen")
+        chunks = bytearray()
+        deadline = time.monotonic() + SOCKET_TIMEOUT
+        while b"\n" not in chunks and time.monotonic() < deadline:
+            try:
+                data = self.sock.recv(4096)
+            except socket.timeout as exc:
+                raise HarmonyCaptureError("startCaptureScreen 回复超时") from exc
+            if not data:
+                raise HarmonyCaptureError("startCaptureScreen 连接被关闭，回复不完整")
+            chunks += data
+        if b"\n" not in chunks:
+            raise HarmonyCaptureError("startCaptureScreen 回复超时（未收到完整一行）")
+        line, _, remainder = bytes(chunks).partition(b"\n")
+        reply = line.decode("utf-8", errors="ignore")
         try:
-            reply = self.sock.recv(1024).decode("utf-8", errors="ignore")
-        except socket.timeout as exc:
-            raise HarmonyCaptureError("startCaptureScreen 回复超时") from exc
+            json.loads(reply)
+        except ValueError as exc:
+            raise HarmonyCaptureError(
+                f"startCaptureScreen 回复不完整或非法: {reply.strip()!r}"
+            ) from exc
         if "true" not in reply:
             raise HarmonyCaptureError(f"startCaptureScreen 被拒绝: {reply.strip()}")
+        if remainder:
+            self._pending_stream_prefix += remainder
 
     def _recv_worker(self) -> None:
-        """持续收取 JPEG 字节流并按魔数切帧，只保留最新帧。"""
-        buffer = bytearray()
+        """持续收取 JPEG 字节流并按段结构切帧，只保留最新帧。"""
+        with self._frame_cond:
+            # startCaptureScreen 回复行之后可能已带入帧流首段
+            buffer = bytearray(self._pending_stream_prefix)
+            self._pending_stream_prefix = bytearray()
         while not self._stop_event.is_set():
             try:
                 chunk = self.sock.recv(RECV_BUFF_SIZE)
@@ -323,6 +464,8 @@ class HarmonyScreenCapture:
             if frames:
                 with self._frame_cond:
                     self._latest_frame = frames[-1]
+                    self._latest_frame_at = time.monotonic()
+                    self._stale_warned = False
                     self._frame_seq += 1
                     self._frame_cond.notify_all()
         # 唤醒等待中的 get_frame，避免消费者卡住

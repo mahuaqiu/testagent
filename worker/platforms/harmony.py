@@ -10,7 +10,7 @@ import time
 import tempfile
 import os
 import io
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from common.utils import compress_image_to_jpeg
 from worker.actions import ActionRegistry
@@ -27,6 +27,7 @@ from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.platforms.harmony_official import (
     HarmonyOfficialError,
+    HarmonyOfficialPartialActionError,
     HarmonyOfficialSession,
     HarmonyOfficialSessionManager,
 )
@@ -437,18 +438,57 @@ class HarmonyPlatformManager(PlatformManager):
         operation: str,
         exc: Exception,
     ) -> None:
-        """记录官方链路运行期故障，并回退到 HDC。"""
+        """记录官方链路运行期故障，停用会话并返回回退决策信息。"""
         if not isinstance(exc, HarmonyOfficialError):
             exc = HarmonyOfficialError(str(exc))
         self._official_sessions.stop_session(udid)
+        if isinstance(exc, HarmonyOfficialPartialActionError):
+            # 手势已开始执行于设备：回退 HDC 重放同一动作会造成动作二次执行。
+            logger.error(
+                "鸿蒙官方%s已部分执行，放弃 HDC 回退: device=%s, error=%s",
+                operation,
+                udid,
+                exc,
+            )
+            return
         logger.error(
-            "鸿蒙官方%s失败，即将执行 HDC 回退（可能造成动作再次执行）: "
+            "鸿蒙官方%s失败，即将执行 HDC 回退: "
             "device=%s, error_type=%s, error=%s",
             operation,
             udid,
             type(exc).__name__,
             exc,
         )
+
+    def _execute_with_official_fallback(
+        self,
+        client: Any,
+        operation: str,
+        official_fn: Optional[Callable[[HarmonyOfficialSession], None]],
+        hdc_fn: Callable[[Any], bool],
+        hdc_error: str,
+    ) -> None:
+        """动作执行模板：官方会话优先，失败回退 HDC。
+
+        官方手势已部分执行（HarmonyOfficialPartialActionError）时放弃 HDC
+        回退并抛错，避免同一动作在设备上执行两次；会话已在
+        _handle_official_failure 中停用，后续动作自然走 HDC 直连。
+        official_fn 传 None 表示该动作在当前设备类型下无官方实现。
+        """
+        serial, official_session = self._get_official_session_for_client(client)
+        if official_session and official_fn is not None:
+            try:
+                official_fn(official_session)
+                return
+            except HarmonyOfficialPartialActionError as exc:
+                self._handle_official_failure(serial, operation, exc)
+                raise HarmonyError(
+                    f"鸿蒙官方{operation}已部分执行，放弃 HDC 回退以免动作重复"
+                ) from exc
+            except Exception as exc:
+                self._handle_official_failure(serial, operation, exc)
+        if not hdc_fn(client):
+            raise HarmonyError(hdc_error)
 
     def click(self, x: int, y: int, duration: int = 0, context=None) -> None:
         """
@@ -457,37 +497,32 @@ class HarmonyPlatformManager(PlatformManager):
         Args:
             x: X 坐标
             y: Y 坐标
-            duration: 按压时长（毫秒，未使用）
+            duration: 按压时长（毫秒，0 表示单击）
             context: 执行上下文（可选）
         """
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
-            try:
-                official_session.tap(x, y, duration)
-                return
-            except Exception as exc:
-                self._handle_official_failure(serial, "点击", exc)
-        success = client.long_tap(x, y, duration) if duration > 0 else client.tap(x, y)
-        if not success:
-            raise HarmonyError(f"HDC 点击失败: ({x}, {y})")
+        self._execute_with_official_fallback(
+            client,
+            "点击",
+            lambda session: session.tap(x, y, duration),
+            lambda c: c.long_tap(x, y, duration) if duration > 0 else c.tap(x, y),
+            f"HDC 点击失败: ({x}, {y})",
+        )
 
     def double_click(self, x: int, y: int, context=None) -> None:
         """执行双击。"""
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
-            try:
-                official_session.double_click(x, y)
-                return
-            except Exception as exc:
-                self._handle_official_failure(serial, "双击", exc)
-        if not client.double_tap(x, y):
-            raise HarmonyError(f"HDC 双击失败: ({x}, {y})")
+        self._execute_with_official_fallback(
+            client,
+            "双击",
+            lambda session: session.double_click(x, y),
+            lambda c: c.double_tap(x, y),
+            f"HDC 双击失败: ({x}, {y})",
+        )
 
     def right_click(self, x: int, y: int, context=None) -> None:
         """鸿蒙 PC 右键：uitest 无鼠标右键命令，但长按（longClick）会触发
@@ -495,15 +530,15 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session and self._device_type == "harmony_pc":
-            try:
-                official_session.right_click(x, y)
-                return
-            except Exception as exc:
-                self._handle_official_failure(serial, "右键", exc)
-        if not client.long_tap(x, y):
-            raise HarmonyError(f"HDC 右键（长按）失败: ({x}, {y})")
+        self._execute_with_official_fallback(
+            client,
+            "右键",
+            (lambda session: session.right_click(x, y))
+            if self._device_type == "harmony_pc"
+            else None,
+            lambda c: c.long_tap(x, y),
+            f"HDC 右键（长按）失败: ({x}, {y})",
+        )
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
         """
@@ -521,25 +556,27 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
-            try:
-                official_session.swipe(
-                    start_x,
-                    start_y,
-                    end_x,
-                    end_y,
-                    duration,
-                    steps,
-                )
-                return
-            except Exception as exc:
-                self._handle_official_failure(serial, "滑动", exc)
-        distance = abs(end_x - start_x) + abs(end_y - start_y)
-        speed = int(distance * 1000 / duration) if duration > 0 else 1000
-        speed = max(200, min(speed, 40000))
-        if not client.swipe(start_x, start_y, end_x, end_y, speed):
-            raise HarmonyError("HDC 滑动失败")
+
+        def _hdc_swipe(c: Any) -> bool:
+            distance = abs(end_x - start_x) + abs(end_y - start_y)
+            speed = int(distance * 1000 / duration) if duration > 0 else 1000
+            speed = max(200, min(speed, 40000))
+            return c.swipe(start_x, start_y, end_x, end_y, speed)
+
+        self._execute_with_official_fallback(
+            client,
+            "滑动",
+            lambda session: session.swipe(
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                duration,
+                steps,
+            ),
+            _hdc_swipe,
+            "HDC 滑动失败",
+        )
 
     def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
         """鸿蒙 PC 拖拽优先使用官方鼠标按键保持轨迹。"""
@@ -549,18 +586,20 @@ class HarmonyPlatformManager(PlatformManager):
         if self._device_type != "harmony_pc":
             self.swipe(start_x, start_y, end_x, end_y, duration, steps, client)
             return
-        serial, official_session = self._get_official_session_for_client(client)
-        if official_session:
-            try:
-                official_session.drag(start_x, start_y, end_x, end_y, duration, steps)
-                return
-            except Exception as exc:
-                self._handle_official_failure(serial, "拖拽", exc)
-        distance = abs(end_x - start_x) + abs(end_y - start_y)
-        speed = int(distance * 1000 / duration) if duration > 0 else 1000
-        speed = max(200, min(speed, 40000))
-        if not client.swipe(start_x, start_y, end_x, end_y, speed):
-            raise HarmonyError("HDC 拖拽失败")
+
+        def _hdc_drag(c: Any) -> bool:
+            distance = abs(end_x - start_x) + abs(end_y - start_y)
+            speed = int(distance * 1000 / duration) if duration > 0 else 1000
+            speed = max(200, min(speed, 40000))
+            return c.swipe(start_x, start_y, end_x, end_y, speed)
+
+        self._execute_with_official_fallback(
+            client,
+            "拖拽",
+            lambda session: session.drag(start_x, start_y, end_x, end_y, duration, steps),
+            _hdc_drag,
+            "HDC 拖拽失败",
+        )
 
     def move(self, x: int, y: int, context=None) -> None:
         """
@@ -575,16 +614,15 @@ class HarmonyPlatformManager(PlatformManager):
         if not client:
             raise HarmonyError("No device context")
         # 官方会话只提供鸿蒙 PC 鼠标事件；移动端统一复用 HDC uinput 移动指针。
-        if self._device_type == "harmony_pc":
-            serial, official_session = self._get_official_session_for_client(client)
-            if official_session:
-                try:
-                    official_session.move_mouse(x, y)
-                    return
-                except Exception as exc:
-                    self._handle_official_failure(serial, "鼠标移动", exc)
-        if not client.move_mouse(x, y):
-            raise HarmonyError(f"HDC 鼠标移动失败: ({x}, {y})")
+        self._execute_with_official_fallback(
+            client,
+            "鼠标移动",
+            (lambda session: session.move_mouse(x, y))
+            if self._device_type == "harmony_pc"
+            else None,
+            lambda c: c.move_mouse(x, y),
+            f"HDC 鼠标移动失败: ({x}, {y})",
+        )
 
     def input_text(self, text: str, context=None) -> None:
         """

@@ -209,6 +209,63 @@ def test_execute_hdc_command_retries_transient_failure(monkeypatch: pytest.Monke
     assert result == CommandResult("ok", "", 0)
 
 
+def test_execute_hdc_command_no_retry_for_action_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """动作类命令（如 uiInput）瞬态失败不得自动重试，避免动作重复执行。"""
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 1
+
+        def communicate(self, timeout=None):
+            return b"", b"service unavailable"
+
+        def kill(self):
+            pass
+
+    def fake_popen(cmdline, *args, **kwargs):
+        calls.append(list(cmdline))
+        return FakeProcess()
+
+    monkeypatch.setattr(harmony_hdc, "popen_cmd", fake_popen)
+    monkeypatch.setattr(harmony_hdc.time, "sleep", lambda _: None)
+
+    result = harmony_hdc._execute_hdc_command(
+        "hdc.exe",
+        ["-t", "serial-1", "shell", "uitest uiInput click 100 200"],
+        retries=1,
+    )
+
+    assert result == CommandResult("", "service unavailable", 1)
+    assert len(calls) == 1
+
+
+def test_is_readonly_hdc_command_classification() -> None:
+    """只读命令可重试，动作类命令不可重试。"""
+    readonly = [
+        ["-t", "s1", "shell", "hidumper -s 3704 -a -all"],
+        ["-t", "s1", "shell", "rm -f /a && snapshot_display -f /a"],
+        ["-t", "s1", "shell", "settings get secure x"],
+        ["-t", "s1", "shell", "uitest dumpLayout /tmp/d.json"],
+        ["list", "targets", "-v"],
+        ["-t", "s1", "fport", "ls"],
+        ["-t", "s1", "file", "recv", "/a", "/b"],
+    ]
+    for args in readonly:
+        assert harmony_hdc._is_readonly_hdc_command(args), f"应视为只读: {args}"
+
+    actions = [
+        ["-t", "s1", "shell", "uitest uiInput click 100 200"],
+        ["-t", "s1", "shell", "uitest uiInput swipe 1 2 3 4 100"],
+        ["-t", "s1", "shell", "power-shell suspend"],
+        ["-t", "s1", "shell", "settings put secure x 1"],
+        ["-t", "s1", "shell", "uitest start-daemon singleness"],
+        ["-t", "s1", "file", "send", "/a", "/b"],
+        ["-t", "s1", "fport", "tcp:9000", "tcp:8012"],
+    ]
+    for args in actions:
+        assert not harmony_hdc._is_readonly_hdc_command(args), f"不应视为只读: {args}"
+
+
 def test_input_text_escapes_single_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
     wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
     commands: list[str] = []

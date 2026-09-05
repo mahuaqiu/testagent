@@ -15,6 +15,7 @@ import shutil
 import shlex
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict, Union
 
@@ -31,7 +32,11 @@ from worker.platforms.harmony_hdc_process import (
 logger = logging.getLogger(__name__)
 
 _HDC_RESTART_LOCK = threading.Lock()
-_SCREENSHOT_LOCKS: dict[str, threading.Lock] = {}
+# 设备级截图锁：WeakValueDictionary 保证设备移除后锁不会在映射中长期堆积；
+# 使用中的锁被 with 语句强引用，并发调用仍能拿到同一把锁。
+_SCREENSHOT_LOCKS: "weakref.WeakValueDictionary[str, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _SCREENSHOT_LOCKS_LOCK = threading.Lock()
 
 
@@ -107,6 +112,25 @@ def parse_harmony_screen_state(output: str) -> str:
     return "UNKNOWN"
 
 
+def parse_harmony_interactive_state(output: str) -> Optional[int]:
+    """解析 ScreenlockService 输出中的交互状态值，无法判断返回 None。
+
+    真机实测（Mate 60 Pro）：0 = 非交互（AOD 息屏时钟亮屏但合成触摸
+    被忽略），2 = 可交互（锁屏界面，触摸有效）。
+    """
+    match = re.search(
+        r"interactiveState\s*(?:\*\s*)?(-?\d+)",
+        output,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def parse_harmony_lock_state(output: str) -> Optional[bool]:
     """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。"""
     match = re.search(
@@ -177,6 +201,61 @@ class HdcCommandError(HarmonyError):
 # ============================================================================
 
 
+# 允许在疑似瞬态失败（timeout / connection reset 等）时自动重试的命令。
+# 只保留只读或幂等操作：动作类命令（如 uitest uiInput、power-shell suspend）
+# 可能已在设备侧实际生效，超时重试会把同一动作执行两次。
+_HDC_RETRYABLE_SHELL_TOKENS = frozenset({
+    "hidumper", "snapshot_display", "ps", "netstat", "top", "cat", "ls",
+    "free", "df", "date", "id", "md5sum", "stat",
+})
+_HDC_RETRYABLE_SHELL_PAIRS = frozenset({
+    ("settings", "get"),
+    ("param", "get"),
+    ("uitest", "dumplayout"),
+    ("uitest", "uidump"),
+    ("aa", "dump"),
+})
+_HDC_RETRYABLE_HDC_TOKENS = frozenset({"tlist", "tconn", "wait", "list"})
+_HDC_RETRYABLE_HDC_PAIRS = frozenset({
+    ("list", "targets"),
+    ("fport", "ls"),
+    ("file", "recv"),
+})
+
+
+def _is_readonly_hdc_command(args: List[str]) -> bool:
+    """判断 HDC 命令是否只读/幂等，仅这类命令允许瞬态失败自动重试。"""
+    tokens = list(args)
+    # 跳过 -t <serial> 等带值全局选项
+    while len(tokens) >= 2 and tokens[0] in ("-t", "-c"):
+        tokens = tokens[2:]
+    if not tokens:
+        return False
+    first = tokens[0].lower()
+    if first == "shell":
+        # shell 命令串可能复合（如 "rm -f x && snapshot_display ..."），
+        # 每一段都只读/幂等才允许重试
+        segments = re.split(r"&&|\|\||;", tokens[1] if len(tokens) > 1 else "")
+        for segment in segments:
+            parts = segment.strip().split()
+            if not parts:
+                continue
+            cmd0 = parts[0].lower()
+            if cmd0 in _HDC_RETRYABLE_SHELL_TOKENS:
+                continue
+            pair = (cmd0, parts[1].lower() if len(parts) > 1 else "")
+            if pair in _HDC_RETRYABLE_SHELL_PAIRS:
+                continue
+            if cmd0 == "rm" and len(parts) > 1 and parts[1].lower() == "-f":
+                continue
+            return False
+        return True
+    if first in _HDC_RETRYABLE_HDC_TOKENS:
+        return True
+    pair = (first, tokens[1].lower() if len(tokens) > 1 else "")
+    return pair in _HDC_RETRYABLE_HDC_PAIRS
+
+
 def _execute_hdc_command(
     hdc_path: str,
     args: List[str],
@@ -238,7 +317,14 @@ def _execute_hdc_command(
                     "service unavailable",
                 )
             )
-            if last_result.exit_code == 0 or not transient or attempt >= retries:
+            # 仅只读/幂等命令允许瞬态失败重试；动作类命令可能已在设备侧
+            # 实际生效，重试会把同一动作执行两次。
+            if (
+                last_result.exit_code == 0
+                or not transient
+                or not _is_readonly_hdc_command(args)
+                or attempt >= retries
+            ):
                 return last_result
         except subprocess.TimeoutExpired:
             if process is not None:
@@ -254,7 +340,8 @@ def _execute_hdc_command(
                 except Exception as exc:
                     logger.debug("超时后更新 HDC 进程归属失败: %s", exc)
             last_result = CommandResult("", "命令执行超时", -1)
-            if attempt >= retries:
+            # 同输出瞬态失败：动作类命令超时可能已实际生效，不自动重试
+            if attempt >= retries or not _is_readonly_hdc_command(args):
                 return last_result
         except Exception as exc:
             last_result = CommandResult("", str(exc), -1)
@@ -691,8 +778,12 @@ class HarmonyHdcWrapper:
         result = self._execute(
             ["fport", f"tcp:{local_port}", f"tcp:{remote_port}"]
         )
-        # 成功输出形如 "Forwardport result:OK"。
-        if result.exit_code != 0 or "ok" not in result.output.lower():
+        # 成功输出形如 "Forwardport result:OK"；用完整标记匹配，避免
+        # 失败信息里碰巧包含 "ok" 被误判为成功。
+        if (
+            result.exit_code != 0
+            or "forwardport result:ok" not in result.output.lower()
+        ):
             logger.error(
                 f"端口转发失败 tcp:{local_port} -> tcp:{remote_port}: "
                 f"{result.output or result.error}"
@@ -996,6 +1087,55 @@ class HarmonyHdcWrapper:
         if state is not None:
             return state
         return not self.is_screen_on()
+
+    def interactive_state(self) -> Optional[int]:
+        """
+        查询交互状态（ScreenlockService interactiveState 字段）。
+
+        真机实测（Mate 60 Pro）：0 = 非交互（AOD 息屏时钟亮屏但合成
+        触摸被忽略），2 = 可交互（锁屏界面，触摸有效）。
+
+        Returns:
+            Optional[int]: 状态值，服务不可 dump 或字段缺失返回 None
+        """
+        result = self.shell("hidumper -s 3704 -a -all", timeout=10)
+        if result.exit_code != 0:
+            logger.warning(f"获取交互状态失败: {result.error or result.output}")
+            return None
+        return parse_harmony_interactive_state(result.output)
+
+    def is_interactive(self) -> bool:
+        """
+        设备是否处于可交互状态（合成触摸可生效）。
+
+        AOD 息屏时钟亮屏但 interactiveState=0，触摸会被静默忽略；
+        可交互状态实测为 2。状态未知时保守按可交互处理，避免误触发
+        suspend 打断正常设备。
+
+        Returns:
+            bool: True 表示可交互（或无法判定），False 表示非交互
+        """
+        state = self.interactive_state()
+        if state is None:
+            return True
+        if state == 2:
+            return True
+        if state != 0:
+            logger.warning(f"未知的交互状态值: {state}，按非交互处理")
+        return False
+
+    def suspend(self) -> bool:
+        """
+        熄屏休眠设备（power-shell suspend）。
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell("power-shell suspend")
+        if result.exit_code == 0 and "fail" not in (result.output or "").lower():
+            return True
+        logger.warning(f"power-shell suspend 失败: {result.output or result.error}")
+        return False
 
     # ========================================================================
     # 设备信息
