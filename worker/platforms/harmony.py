@@ -642,6 +642,19 @@ class HarmonyPlatformManager(PlatformManager):
             f"HDC 鼠标移动失败: ({x}, {y})",
         )
 
+    def wheel(self, udid: str, direction: str, x: int, y: int) -> None:
+        """按 udid 注入滚轮（hdc shell uinput 路径）。
+
+        供实时指针分发器调用：官方 SDK 滚轮在部分鸿蒙 PC 设备上无效，
+        统一走 uinput（官方 demo 兜底分支做法），且不依赖官方会话就绪。
+        """
+        client = self._device_clients.get(udid)
+        if client is None:
+            client = HarmonyHdcWrapper(udid, self._hdc_path)
+            self._device_clients[udid] = client
+        if not client.wheel(direction, x, y):
+            raise HarmonyError(f"uinput 滚轮注入失败: {direction} ({x}, {y})")
+
     def input_text(self, text: str, context=None) -> None:
         """
         输入文本。

@@ -175,6 +175,12 @@ class HarmonyPointerDispatcher:
         )
 
     def __call__(self, message: dict[str, Any]) -> None:
+        # 滚轮统一走 hdc shell uinput（官方 demo 兜底分支做法）：官方 SDK 滚轮
+        # 在部分鸿蒙 PC 设备上无效（点击/拖拽正常），且 uinput 不依赖官方会话
+        # 就绪，合帧回退模式下也能滚动。
+        if self._is_pc and message.get("action") == "wheel":
+            self._wheel_via_uinput(message)
+            return
         session = None
         try:
             session = self._manager.peek_official_session(self._device_id)
@@ -184,6 +190,24 @@ class HarmonyPointerDispatcher:
             self._realtime(session, message)
             return
         self._fallback.handle(message)
+
+    def _wheel_via_uinput(self, message: dict[str, Any]) -> None:
+        direction = str(message.get("direction") or "up").lower()
+        # stop 只服务于官方 SDK 的"Up/Down 后立即 Stop"协议，uinput 无此概念
+        if direction not in {"up", "down"}:
+            return
+        x, y = _event_coord(message)
+        try:
+            self._manager.wheel(self._device_id, direction, x, y)
+        except Exception as exc:  # noqa: BLE001 - 单次滚轮失败不影响后续事件
+            logger.warning(
+                "鸿蒙 uinput 滚轮注入失败: device=%s direction=%s (%s,%s) error=%s",
+                self._device_id,
+                direction,
+                x,
+                y,
+                exc,
+            )
 
     def _realtime(self, session: Any, message: dict[str, Any]) -> None:
         action = message.get("action")
@@ -197,14 +221,6 @@ class HarmonyPointerDispatcher:
                 session.move_mouse(x, y, button)
             elif action == "up":
                 session.mouse_up(button or "LEFT", x, y)
-            elif action == "wheel":
-                # 官方 demo（MainForm.onMouseWheelChange）在支持完整鼠标的设备上
-                # 每次 WheelUp/WheelDown 后立即跟一条 WheelStop，背靠背成对发送；
-                # 延迟补发的 stop 不会触发滚动。独立 STOP 消息直接忽略。
-                direction = (str(message.get("direction") or "up")).upper()
-                if direction in {"UP", "DOWN"}:
-                    session.wheel(direction, x, y)
-                    session.wheel("STOP", x, y)
             return
         # 移动端：触摸流
         if action == "down":
@@ -289,5 +305,10 @@ class WindowsPointerDispatcher:
             self._manager.mouse_up(x, y, button=button, monitor=self._monitor)
         elif action == "wheel":
             direction = str(message.get("direction") or "up").lower()
+            # stop 是前端为鸿蒙 SDK 协议补发的消息，Windows 无此概念；
+            # 此前 fallthrough 到"非 up 一律下滚"，导致每次滚动后 120ms 被
+            # 追加 3 齿格下滚（上滚被拉回、下滚过量）。
+            if direction == "stop":
+                return
             amount = int(message.get("amount") or 3)
             self._manager.scroll(x, y, direction=direction, amount=amount, monitor=self._monitor)

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import time
 
-from worker.screen.pointer_injector import HarmonyPointerDispatcher, PointerInjector
+from worker.screen.pointer_injector import (
+    HarmonyPointerDispatcher,
+    PointerInjector,
+    WindowsPointerDispatcher,
+)
 
 
 def test_move_coalesced_while_down_up_preserved_in_order() -> None:
@@ -78,32 +82,35 @@ def test_invalid_action_dropped_and_overflow_never_drops_down_up() -> None:
     assert "bogus" not in actions
 
 
-class _FakeOfficialSession:
-    """官方会话桩：记录 wheel 调用序列。"""
+class _FakeHdcManager:
+    """鸿蒙管理器桩：记录 wheel 调用（uinput 路径）。"""
 
-    def __init__(self) -> None:
-        self.wheel_calls: list[tuple[str, int, int]] = []
-
-    def input_ready(self) -> bool:
-        return True
-
-    def wheel(self, direction: str, x: int, y: int) -> None:
-        self.wheel_calls.append((direction, x, y))
-
-
-class _FakeManager:
-    def __init__(self, session: _FakeOfficialSession | None) -> None:
+    def __init__(self, session=None) -> None:
         self._session = session
+        self.wheel_calls: list[tuple[str, str, int, int]] = []
 
-    def peek_official_session(self, device_id: str) -> _FakeOfficialSession | None:
+    def peek_official_session(self, device_id: str):
         return self._session
 
+    def wheel(self, udid: str, direction: str, x: int, y: int) -> None:
+        self.wheel_calls.append((udid, direction, x, y))
 
-def test_harmony_wheel_down_up_paired_with_immediate_stop() -> None:
-    """对齐官方 demo：WheelUp/WheelDown 后立即补 WheelStop，独立 STOP 丢弃。"""
-    session = _FakeOfficialSession()
+
+class _RecordingWindowsManager:
+    """Windows 管理器桩：记录 scroll 调用。"""
+
+    def __init__(self) -> None:
+        self.scroll_calls: list[tuple[int, int, str, int]] = []
+
+    def scroll(self, x: int, y: int, direction: str = "up", amount: int = 3, monitor: int | None = None) -> None:
+        self.scroll_calls.append((x, y, direction, amount))
+
+
+def test_harmony_wheel_uses_uinput_and_ignores_stop() -> None:
+    """滚轮走 manager.wheel（uinput），独立 STOP 丢弃；无需官方会话就绪。"""
+    manager = _FakeHdcManager()
     dispatcher = HarmonyPointerDispatcher(
-        manager=_FakeManager(session),
+        manager=manager,
         device_id="dev",
         device_type="harmony_pc",
     )
@@ -112,9 +119,19 @@ def test_harmony_wheel_down_up_paired_with_immediate_stop() -> None:
     dispatcher({"action": "wheel", "direction": "up", "x": 100, "y": 200})
     dispatcher({"action": "wheel", "direction": "stop", "x": 100, "y": 200})
 
-    assert session.wheel_calls == [
-        ("DOWN", 100, 200),
-        ("STOP", 100, 200),
-        ("UP", 100, 200),
-        ("STOP", 100, 200),
+    assert manager.wheel_calls == [
+        ("dev", "down", 100, 200),
+        ("dev", "up", 100, 200),
     ]
+
+
+def test_windows_wheel_ignores_stop_and_keeps_direction() -> None:
+    """Windows 分发器忽略 stop（曾误注入 3 齿格下滚），up/down 透传。"""
+    manager = _RecordingWindowsManager()
+    dispatcher = WindowsPointerDispatcher(manager, monitor=1)
+
+    dispatcher({"action": "wheel", "direction": "up", "amount": 2, "x": 10, "y": 20})
+    dispatcher({"action": "wheel", "direction": "stop", "x": 10, "y": 20})
+    dispatcher({"action": "wheel", "direction": "down", "x": 30, "y": 40})
+
+    assert manager.scroll_calls == [(10, 20, "up", 2), (30, 40, "down", 3)]

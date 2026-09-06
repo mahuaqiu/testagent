@@ -888,6 +888,35 @@ class HarmonyHdcWrapper:
         result = self.shell(f"uitest uiInput longClick {x} {y}")
         return self._check_result(result, "长按")
 
+    def wheel(self, direction: str, x: int, y: int) -> bool:
+        """
+        在指定坐标注入滚轮（uinput 路径）。
+
+        官方 SDK 的 onMouseWheelUp/Down 在部分鸿蒙 PC 设备上不生效（点击/拖拽
+        正常），HOScrcpy 官方 demo 的兜底分支与 Python demo 的滚轮实现均使用
+        `uinput -M -m {x} {y} -s ±500`。
+
+        真机（MateBook Pro HAD-W32, uitest 5.x）实测约束：
+        - `-m` 与 `-s` 必须在同一条 uinput 命令里；拆成两条命令（先 -m 再 -s）
+          指针不移动、滚动不生效；
+        - 数值固定 ±500；±5000 等大值会被设备静默忽略，不要按滚轮格数放大；
+        - 正值向下（sliding backwards），负值向上（sliding forwards）。
+
+        Args:
+            direction: "up" / "down" / "stop"
+            x: X 坐标（设备原生分辨率像素）
+            y: Y 坐标（设备原生分辨率像素）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        value = {"up": -500, "down": 500, "stop": 0}.get(direction.lower())
+        if value is None:
+            logger.error(f"不支持的滚轮方向: {direction}")
+            return False
+        result = self.shell(f"uinput -M -m {int(x)} {int(y)} -s {value}")
+        return self._check_result(result, "滚轮")
+
     def swipe(
         self, x1: int, y1: int, x2: int, y2: int, speed: int = 1000
     ) -> bool:
