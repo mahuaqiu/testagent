@@ -1,10 +1,10 @@
-"""实时指针注入器单元测试：move 合并、down/up 保序、安全抬起、重复 down 保护。"""
+"""实时指针注入器单元测试：move 合并、down/up 保序、安全抬起、重复 down 保护、鸿蒙滚轮成对发送。"""
 
 from __future__ import annotations
 
 import time
 
-from worker.screen.pointer_injector import PointerInjector
+from worker.screen.pointer_injector import HarmonyPointerDispatcher, PointerInjector
 
 
 def test_move_coalesced_while_down_up_preserved_in_order() -> None:
@@ -76,3 +76,45 @@ def test_invalid_action_dropped_and_overflow_never_drops_down_up() -> None:
     actions = [m["action"] for m in received]
     assert actions[0] == "down" and actions[-1] == "up"
     assert "bogus" not in actions
+
+
+class _FakeOfficialSession:
+    """官方会话桩：记录 wheel 调用序列。"""
+
+    def __init__(self) -> None:
+        self.wheel_calls: list[tuple[str, int, int]] = []
+
+    def input_ready(self) -> bool:
+        return True
+
+    def wheel(self, direction: str, x: int, y: int) -> None:
+        self.wheel_calls.append((direction, x, y))
+
+
+class _FakeManager:
+    def __init__(self, session: _FakeOfficialSession | None) -> None:
+        self._session = session
+
+    def peek_official_session(self, device_id: str) -> _FakeOfficialSession | None:
+        return self._session
+
+
+def test_harmony_wheel_down_up_paired_with_immediate_stop() -> None:
+    """对齐官方 demo：WheelUp/WheelDown 后立即补 WheelStop，独立 STOP 丢弃。"""
+    session = _FakeOfficialSession()
+    dispatcher = HarmonyPointerDispatcher(
+        manager=_FakeManager(session),
+        device_id="dev",
+        device_type="harmony_pc",
+    )
+
+    dispatcher({"action": "wheel", "direction": "down", "x": 100, "y": 200})
+    dispatcher({"action": "wheel", "direction": "up", "x": 100, "y": 200})
+    dispatcher({"action": "wheel", "direction": "stop", "x": 100, "y": 200})
+
+    assert session.wheel_calls == [
+        ("DOWN", 100, 200),
+        ("STOP", 100, 200),
+        ("UP", 100, 200),
+        ("STOP", 100, 200),
+    ]

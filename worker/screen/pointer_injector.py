@@ -198,7 +198,13 @@ class HarmonyPointerDispatcher:
             elif action == "up":
                 session.mouse_up(button or "LEFT", x, y)
             elif action == "wheel":
-                session.wheel((str(message.get("direction") or "up")).upper(), x, y)
+                # 官方 demo（MainForm.onMouseWheelChange）在支持完整鼠标的设备上
+                # 每次 WheelUp/WheelDown 后立即跟一条 WheelStop，背靠背成对发送；
+                # 延迟补发的 stop 不会触发滚动。独立 STOP 消息直接忽略。
+                direction = (str(message.get("direction") or "up")).upper()
+                if direction in {"UP", "DOWN"}:
+                    session.wheel(direction, x, y)
+                    session.wheel("STOP", x, y)
             return
         # 移动端：触摸流
         if action == "down":

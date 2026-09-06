@@ -35,6 +35,9 @@ from worker.tools import get_tools_dir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# Windows 滚轮最小单位：120 wheel delta = 1 齿格
+_WHEEL_DELTA = 120
+
 # 设置 pyautogui 参数
 # 禁用 FAILSAFE：自动化测试场景中，鼠标可能因上次操作停留在角落，
 # 该机制会阻止后续操作，干扰正常执行
@@ -267,11 +270,19 @@ class WindowsPlatformManager(PlatformManager):
     def scroll(
         self, x: int, y: int, direction: str = "up", amount: int = 3, monitor: int | None = None, context: Any = None
     ) -> None:
-        """在指定坐标滚动滚轮。"""
+        """在指定坐标滚动滚轮。
+
+        amount 的单位是齿格（notch）；Windows 的 wheel delta 规定 120=1 齿格，
+        而 pyautogui 在 win32 上把 clicks 原样作为 dwData 传给 mouse_event，
+        不做 WHEEL_DELTA 换算，必须在这里乘上，否则肉眼不可见。
+        """
         global_x, global_y = self._convert_to_global_coords_with_monitor(x, y, monitor, context)
+        clicks = max(1, int(amount)) * _WHEEL_DELTA
         pyautogui.moveTo(global_x, global_y)
-        pyautogui.scroll(amount if direction.lower() == "up" else -abs(amount))
-        logger.debug(f"Scroll {direction} at ({x}, {y}) -> global ({global_x}, {global_y})")
+        pyautogui.scroll(clicks if direction.lower() == "up" else -clicks)
+        logger.debug(
+            f"Scroll {direction} x{amount} at ({x}, {y}) -> global ({global_x}, {global_y}), wheel delta {clicks if direction.lower() == 'up' else -clicks}"
+        )
 
     def _convert_to_global_coords_with_monitor(
         self, x: int, y: int, monitor: int | None, context: Any = None
