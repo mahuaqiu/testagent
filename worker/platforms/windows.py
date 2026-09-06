@@ -15,16 +15,23 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import pyautogui
-import pyperclip
-
 from common.utils import run_cmd
-from worker.actions import ActionRegistry
-from worker.actions.spec import ActionCancelled, ActionTimedOut
-from worker.config import PlatformConfig
-from worker.platforms.base import PlatformManager
-from worker.task import Action, ActionResult, ActionStatus
-from worker.tools import get_tools_dir
+from worker.screen.monitor_utils import ensure_process_dpi_awareness
+
+# DPI 感知必须在 import pyautogui 之前声明：mouseinfo/pyautogui 导入时会抢先
+# 调用系统级 SetProcessDPIAware()，之后 per-monitor v2 永远设置失败，
+# 非 100% 缩放/多屏混合 DPI 的被控机上注入坐标会系统性偏移。
+ensure_process_dpi_awareness()
+
+import pyautogui  # noqa: E402  (必须在 DPI 声明之后导入)
+import pyperclip  # noqa: E402
+
+from worker.actions import ActionRegistry  # noqa: E402
+from worker.actions.spec import ActionCancelled, ActionTimedOut  # noqa: E402
+from worker.config import PlatformConfig  # noqa: E402
+from worker.platforms.base import PlatformManager  # noqa: E402
+from worker.task import Action, ActionResult, ActionStatus  # noqa: E402
+from worker.tools import get_tools_dir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -218,15 +225,63 @@ class WindowsPlatformManager(PlatformManager):
         pyautogui.doubleClick(global_x, global_y)
         logger.debug(f"Double click at ({x}, {y}) -> global ({global_x}, {global_y})")
 
-    def move(self, x: int, y: int, context: Any = None) -> None:
+    def move(self, x: int, y: int, context: Any = None, monitor: int | None = None) -> None:
         """移动鼠标到指定坐标。
 
-        Note:
-            自动将窗口/截图相对坐标转换为全局坐标。
+        Args:
+            monitor: 目标显示器（None 时沿用实例当前显示器），实时指针流路径使用
         """
-        global_x, global_y = self._convert_to_global_coords(x, y, context)
+        if monitor is not None:
+            global_x, global_y = self._convert_to_global_coords_with_monitor(x, y, monitor, context)
+        else:
+            global_x, global_y = self._convert_to_global_coords(x, y, context)
         pyautogui.moveTo(global_x, global_y)
         logger.debug(f"Move to ({x}, {y}) -> global ({global_x}, {global_y})")
+
+    # ========== 实时指针流原语（浏览器 WS 逐事件调用） ==========
+
+    def mouse_down(
+        self, x: int, y: int, button: str = "left", monitor: int | None = None, context: Any = None
+    ) -> None:
+        """在指定坐标按下鼠标按键。
+
+        Args:
+            x, y: 截图相对坐标（与推流/meta 像素空间一致）
+            button: left / right / middle
+            monitor: 目标显示器（None 时沿用实例当前显示器）
+        """
+        global_x, global_y = self._convert_to_global_coords_with_monitor(x, y, monitor, context)
+        pyautogui.moveTo(global_x, global_y)
+        pyautogui.mouseDown(button=button.lower())
+        logger.debug(f"Mouse down {button} at ({x}, {y}) -> global ({global_x}, {global_y})")
+
+    def mouse_up(
+        self, x: int, y: int, button: str = "left", monitor: int | None = None, context: Any = None
+    ) -> None:
+        """在指定坐标抬起鼠标按键。"""
+        global_x, global_y = self._convert_to_global_coords_with_monitor(x, y, monitor, context)
+        pyautogui.moveTo(global_x, global_y)
+        pyautogui.mouseUp(button=button.lower())
+        logger.debug(f"Mouse up {button} at ({x}, {y}) -> global ({global_x}, {global_y})")
+
+    def scroll(
+        self, x: int, y: int, direction: str = "up", amount: int = 3, monitor: int | None = None, context: Any = None
+    ) -> None:
+        """在指定坐标滚动滚轮。"""
+        global_x, global_y = self._convert_to_global_coords_with_monitor(x, y, monitor, context)
+        pyautogui.moveTo(global_x, global_y)
+        pyautogui.scroll(amount if direction.lower() == "up" else -abs(amount))
+        logger.debug(f"Scroll {direction} at ({x}, {y}) -> global ({global_x}, {global_y})")
+
+    def _convert_to_global_coords_with_monitor(
+        self, x: int, y: int, monitor: int | None, context: Any = None
+    ) -> tuple[int, int]:
+        """窗口绑定优先；全屏模式允许调用方显式指定显示器（避免共享实例字段的并发竞态）。"""
+        window_handle, window_rect = self._resolve_window_binding(context)
+        if window_rect:
+            return x + window_rect[0], y + window_rect[1]
+        from worker.screen.monitor_utils import convert_to_global_coords
+        return convert_to_global_coords(x, y, monitor or self._current_monitor)
 
     def input_text(self, text: str, context: Any = None) -> None:
         """输入文本（使用剪贴板粘贴，支持特殊字符）。"""

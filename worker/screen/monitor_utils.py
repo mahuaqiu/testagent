@@ -38,6 +38,16 @@ def invalidate_monitors_cache() -> None:
     logger.info("Monitors cache invalidated")
 
 
+def ensure_process_dpi_awareness() -> None:
+    """公开入口：在进程早期（任何 pyautogui/GDI 使用前）声明 DPI 感知。
+
+    mouseinfo/pyautogui 导入时会抢先调用系统级 ``SetProcessDPIAware()``，
+    一旦生效，shcore 的 per-monitor v2 就再也设置不上——多屏混合 DPI 的
+    被控机上注入坐标会出错。因此必须在它们之前调用本函数。
+    """
+    _ensure_dpi_awareness()
+
+
 def _ensure_dpi_awareness() -> None:
     """让进程感知 DPI 缩放（仅需设置一次）。
 

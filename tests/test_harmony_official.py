@@ -184,7 +184,8 @@ def test_h264_websocket_packets_classify_p_frame() -> None:
     assert _h264_websocket_packets(payload) == [b"\x03" + payload]
 
 
-def test_h264_first_subscription_starts_from_a_fresh_keyframe() -> None:
+def test_h264_first_subscription_replays_retained_cache() -> None:
+    """空闲后首订：立即回放缓存出画面，同时唤醒+IDR 刷新，缓存保留供下次重订。"""
     sent_commands: list[bytes] = []
     session = HarmonyOfficialSession(
         serial="device-1",
@@ -202,11 +203,34 @@ def test_h264_first_subscription_starts_from_a_fresh_keyframe() -> None:
 
     queue = session.subscribe_h264("subscriber-1")
 
+    assert queue.get_nowait() == b"\x01\x00\x00\x01\x67"
+    assert queue.get_nowait() == b"\x02\x00\x00\x01\x65"
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
+    session.unsubscribe_h264("subscriber-1")
+    assert session._latest_h264_config is not None
+    assert session._latest_h264_keyframe is not None
+    session.stop()
+
+
+def test_h264_first_subscription_without_cache_waits_for_fresh_keyframe() -> None:
+    sent_commands: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+
+    queue = session.subscribe_h264("subscriber-1")
+
     with pytest.raises(Empty):
         queue.get_nowait()
     assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
-    assert session._latest_h264_config is None
-    assert session._latest_h264_keyframe is None
 
     # 新的参数集/关键帧到达后才允许后续 P 帧进入订阅队列。
     session._broadcast_h264(
@@ -443,17 +467,34 @@ def test_h264_subscription_retries_idr_for_static_screen(monkeypatch) -> None:
     session.stop()
 
 
-def test_h264_packets_are_dropped_without_subscribers() -> None:
+def test_h264_broadcast_without_subscribers_updates_startup_cache() -> None:
+    """无消费者（预热/空闲）时也必须维护起播缓存。
+
+    编码器启动后的首组 SPS/PPS+IDR 几乎必然落在首个订阅者之前，丢弃会导致
+    之后订阅者只能收 P 帧（has_config=False 全部跳过）的起播死锁。
+    """
     session = HarmonyOfficialSession(
         serial="device-1",
         device_type="mobile",
         hdc_path="hdc.exe",
         settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
     )
-    session._broadcast_h264(b"\x00\x00\x01\x67\x01\x00\x00\x01\x65\x02")
+    session._broadcast_h264(b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps")
+    session._broadcast_h264(b"\x00\x00\x00\x01\x65idrdata")
+    assert session._latest_h264_config == (
+        b"\x01\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps"
+    )
+    assert session._latest_h264_keyframe == b"\x02\x00\x00\x00\x01\x65idrdata"
 
-    assert session._latest_h264_config is None
+    # P 帧不进缓存
+    session._broadcast_h264(b"\x00\x00\x00\x01\x41pdata")
+    assert session._latest_h264_keyframe == b"\x02\x00\x00\x00\x01\x65idrdata"
+
+    # 跨参数集时旧 IDR 作废
+    session._broadcast_h264(b"\x00\x00\x00\x01\x67newsps")
+    assert session._latest_h264_config == b"\x01\x00\x00\x00\x01\x67newsps"
     assert session._latest_h264_keyframe is None
+    session.stop()
 
 
 def test_mjpeg_proxy_stops_when_websocket_stop_event_is_set() -> None:
@@ -496,7 +537,8 @@ def test_mjpeg_proxy_stops_when_websocket_stop_event_is_set() -> None:
     assert websocket.frames == [b"jpeg-frame"]
 
 
-def test_last_h264_unsubscribe_clears_startup_cache() -> None:
+def test_last_h264_unsubscribe_retains_startup_cache() -> None:
+    """退订保留起播缓存：关窗后快速重开立即回放，不依赖唤醒产出新帧。"""
     session = HarmonyOfficialSession(
         serial="device-1",
         device_type="mobile",
@@ -509,6 +551,10 @@ def test_last_h264_unsubscribe_clears_startup_cache() -> None:
 
     session.unsubscribe_h264("subscriber-1")
 
+    assert session._latest_h264_config == b"\x01config"
+    assert session._latest_h264_keyframe == b"\x02idr"
+    session.stop()
+    # stop() 清空缓存，防止跨桥接会话（新编码器）复用
     assert session._latest_h264_config is None
     assert session._latest_h264_keyframe is None
 

@@ -240,7 +240,12 @@ class HarmonyOfficialSession:
             cached_config = self._latest_h264_config
             cached_keyframe = self._latest_h264_keyframe
             queued_packets = 0
-            if has_existing_subscribers and cached_config is not None:
+            if cached_config is not None:
+                # 起播缓存对空闲后重开窗口同样回放：静态桌面下设备编码器可能
+                # 长时间不出帧，唤醒+IDR 不保证在首帧预算内产出，先回放最近
+                # 一组参数集/关键帧立即出画面（内容即断开前最后一帧），新帧
+                # 由后续唤醒+IDR 刷新。缓存只在桥接存活期间保留（stop/重建时
+                # 清空），编码器会话不变则旧 IDR 始终可解码。
                 self._enqueue_h264_packet(subscriber, cached_config)
                 subscriber.has_config = True
                 queued_packets += 1
@@ -248,13 +253,6 @@ class HarmonyOfficialSession:
                     self._enqueue_h264_packet(subscriber, cached_keyframe)
                     queued_packets += 1
                     subscriber.waiting_for_keyframe = False
-            elif not has_existing_subscribers:
-                # 预热或空闲保活期间不保留视频数据。首个订阅必须从本次播放
-                # 起点开始，避免把旧页面的参数集、关键帧或 P 帧带入解码链。
-                self._latest_h264_config = None
-                self._latest_h264_keyframe = None
-                cached_config = None
-                cached_keyframe = None
         logger.info(
             "鸿蒙 H.264 订阅建立: serial=%s, subscriber=%s, cached_config_bytes=%d, "
             "cached_idr_bytes=%d, had_existing_subscribers=%s, queued_packets=%d",
@@ -265,15 +263,16 @@ class HarmonyOfficialSession:
             has_existing_subscribers,
             queued_packets,
         )
-        # 首个订阅从空闲状态恢复时，先唤醒静止画面，再请求一次新的 IDR。
-        # 活动流已有完整起播缓存时，直接回放给新订阅者，不打断已有订阅者。
+        # 首个订阅从空闲状态恢复时，先唤醒静止画面，再请求一次新的 IDR（无论
+        # 是否已回放缓存：回放解决"出画"，唤醒+IDR 解决"画面新鲜度"）。
         if not has_existing_subscribers:
             self.wake_stream()
             self.request_idr(force=True)
             logger.info(
-                "鸿蒙 H.264 起播请求已发送: serial=%s, subscriber=%s, wake_stream=1, request_idr=1, 重试节奏=%s",
+                "鸿蒙 H.264 起播请求已发送: serial=%s, subscriber=%s, wake_stream=1, request_idr=1, 缓存回放=%d包, 重试节奏=%s",
                 self.serial,
                 subscriber_id,
+                queued_packets,
                 H264_IDR_RETRY_DELAYS_SECONDS,
             )
         elif cached_config is None or cached_keyframe is None:
@@ -296,10 +295,9 @@ class HarmonyOfficialSession:
             self._h264_subscribers.pop(subscriber_id, None)
             retry_timer = self._h264_idr_retry_timers.pop(subscriber_id, None)
             self._h264_idr_retry_counts.pop(subscriber_id, None)
-            if not self._h264_subscribers:
-                # 没有消费者时丢弃所有 H.264 数据，下一次订阅重新请求 IDR。
-                self._latest_h264_config = None
-                self._latest_h264_keyframe = None
+            # 保留最近一组参数集/关键帧作为起播缓存：关窗后快速重开时立即
+            # 回放出画面，避免静态桌面下唤醒+IDR 超时导致 H264→JPEG 回退。
+            # 缓存随桥接 stop()/会话重建清空，不会跨编码器会话复用。
         if retry_timer:
             retry_timer.cancel()
 
@@ -379,6 +377,54 @@ class HarmonyOfficialSession:
         self._require_pc()
         self._wait_input_ready()
         self._send(command_mouse_move(button, x, y))
+
+    def input_ready(self) -> bool:
+        """输入通道是否已就绪（含 READY 后的稳定窗口），非阻塞。
+
+        供实时指针注入逐事件快速判定；脚本式手势仍走阻塞的 _wait_input_ready。
+        """
+        return (
+            self.is_running
+            and self._ready_event.is_set()
+            and time.monotonic() >= self._input_ready_at
+        )
+
+    def mouse_down(self, button: str, x: int, y: int) -> None:
+        """按下鸿蒙 PC 鼠标按键（实时指针流原语，逐事件调用）。"""
+        self._require_pc()
+        self._wait_input_ready()
+        self._send(command_mouse_down(button, x, y))
+
+    def mouse_up(self, button: str, x: int, y: int) -> None:
+        """抬起鸿蒙 PC 鼠标按键。down 已送达后 up 失败按部分执行上报。"""
+        self._require_pc()
+        self._wait_input_ready()
+        try:
+            self._send(command_mouse_up(button, x, y))
+        except HarmonyOfficialError as exc:
+            raise HarmonyOfficialPartialActionError(
+                f"mouse_up 发送失败（mouse_down 已送达）: {exc}"
+            ) from exc
+
+    def touch_down(self, x: int, y: int) -> None:
+        """触摸按下（移动端实时触摸流原语）。"""
+        self._wait_input_ready()
+        self._send(command_touch_down(x, y))
+
+    def touch_move(self, x: int, y: int) -> None:
+        """触摸移动。"""
+        self._wait_input_ready()
+        self._send(command_touch_move(x, y))
+
+    def touch_up(self, x: int, y: int) -> None:
+        """触摸抬起。down 已送达后 up 失败按部分执行上报。"""
+        self._wait_input_ready()
+        try:
+            self._send(command_touch_up(x, y))
+        except HarmonyOfficialError as exc:
+            raise HarmonyOfficialPartialActionError(
+                f"touch_up 发送失败（touch_down 已送达）: {exc}"
+            ) from exc
 
     def swipe(
         self,
@@ -566,7 +612,11 @@ class HarmonyOfficialSession:
             self._h264_received_access_units += 1
             self._last_h264_access_unit_at = time.monotonic()
             if not self._h264_subscribers:
-                # 预热只保持 Java 和设备采集会话，不保存或解码无消费者的视频。
+                # 无消费者时仍必须维护起播缓存：编码器启动后的首组 SPS/PPS+IDR
+                # 几乎必然落在预热/空闲窗口（首个订阅者出现之前），若在此丢弃，
+                # 之后订阅者只能收到 P 帧——P 帧因 has_config=False 被全部跳过，
+                # 静态桌面下再也没有新 IDR，形成起播死锁（首帧超时→JPEG 回退）。
+                self._update_h264_startup_cache(payload)
                 return
         packets = _h264_websocket_packets(payload)
         if not packets:
@@ -652,6 +702,25 @@ class HarmonyOfficialSession:
             timer.cancel()
         if request_idr:
             self.request_idr()
+
+    def _update_h264_startup_cache(self, payload: bytes) -> None:
+        """从 access unit 维护起播缓存（参数集/关键帧），供订阅建立时回放。
+
+        仅存两组小包（SPS/PPS 与最近 IDR），不缓存 P 帧；跨参数集时旧 IDR
+        作废，与订阅路径的缓存语义一致。
+        """
+        packets = _h264_websocket_packets(payload)
+        if not packets:
+            return
+        with self._state_lock:
+            for packet in packets:
+                frame_type = packet[0]
+                if frame_type == 0x01:
+                    self._latest_h264_config = packet
+                    # 参数集变化后，旧 IDR 可能与新的 SPS/PPS 不匹配，不能跨参数集回放。
+                    self._latest_h264_keyframe = None
+                elif frame_type == 0x02:
+                    self._latest_h264_keyframe = packet
 
     def _enqueue_h264_packet(self, subscriber: _H264Subscriber, packet: bytes) -> None:
         """入队一个完整的 WebSocket H.264 包并更新监控统计。"""

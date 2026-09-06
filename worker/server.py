@@ -42,6 +42,11 @@ from worker.performance_monitor import (
     get_collector,
 )
 from worker.platforms.harmony_hdc import _find_hdc_path
+from worker.screen.pointer_injector import (
+    HarmonyPointerDispatcher,
+    PointerInjector,
+    WindowsPointerDispatcher,
+)
 from worker.screen.windows_sidecar import media_packet_to_websocket_frames
 from worker.tools import (
     get_script_version,
@@ -62,12 +67,12 @@ _ws_connections: dict[str, int] = {}
 DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
 DEFAULT_WS_IDLE_TIMEOUT = 900
-DEFAULT_WS_STREAMING_FPS = 10
+DEFAULT_WS_STREAMING_FPS = 15
 DEFAULT_WS_STREAMING_BITRATE = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
 DEFAULT_WS_STREAMING_PROFILE = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
 # 鸿蒙 JPEG 推流重编码默认参数（会被 worker.config 覆盖）
-DEFAULT_HARMONY_STREAMING_FPS = 10
+DEFAULT_HARMONY_STREAMING_FPS = 15
 DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
 # 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
 DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
@@ -1322,8 +1327,19 @@ async def screen_stream(
     last_activity_at = time.monotonic()
     stream_stop_event = asyncio.Event()
 
+    # 实时指针注入器：浏览器逐事件下发 down/move/up/wheel（替代 mouseup 才发
+    # 一条 REST 手势）。仅支持的平台创建；线程在连接关闭时补发安全抬起。
+    pointer_injector: PointerInjector | None = None
+    if _realtime_input_enabled():
+        pointer_injector = _create_pointer_injector(platform, device_id, monitor)
+        if pointer_injector is not None:
+            pointer_injector.start()
+            logger.info(
+                "实时指针注入已启用: platform=%s, device=%s", platform, log_device
+            )
+
     async def receive_activity() -> None:
-        """接收前端活动信号；推流帧本身不刷新空闲时间。"""
+        """接收前端活动信号与实时指针事件；推流帧本身不刷新空闲时间。"""
         nonlocal last_activity_at
         while not stream_stop_event.is_set():
             try:
@@ -1341,8 +1357,14 @@ async def screen_stream(
                 payload = json.loads(text)
             except (TypeError, json.JSONDecodeError):
                 continue
-            if isinstance(payload, dict) and payload.get("type") == "activity":
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "activity":
                 last_activity_at = time.monotonic()
+            elif payload.get("type") == "input" and pointer_injector is not None:
+                # 指针事件同样是用户活动：刷新空闲计时，避免操作中被空闲回收。
+                last_activity_at = time.monotonic()
+                pointer_injector.submit(payload)
 
     async def close_when_idle() -> None:
         """服务端空闲超时关闭 WebSocket，确保主循环进入 finally 清理资源。"""
@@ -1560,7 +1582,12 @@ async def screen_stream(
                 try:
                     await _send_websocket_message(
                         websocket,
-                        json.dumps({"type": "meta", "width": real_w, "height": real_h}),
+                        json.dumps({
+                            "type": "meta",
+                            "width": real_w,
+                            "height": real_h,
+                            "capabilities": _realtime_capabilities(platform),
+                        }),
                         stop_event=stream_stop_event,
                         timeout=send_timeout,
                     )
@@ -1576,6 +1603,25 @@ async def screen_stream(
         # Windows H.264 推流使用推模式
         if platform == "windows" and codec == "h264" and streamer.uses_binary_media:
             logger.info("screen_stream: 使用 Windows RSM1 二进制媒体通道, conn_key=%s", conn_key)
+            # P1 阶段 Windows 实时输入仅在 H.264 通道开放：DXGI 流与 sidecar
+            # 显示器几何同为物理像素，坐标基准自洽；JPEG 通道（GDI）在
+            # 非 100% 缩放机器上是逻辑像素，开放会导致系统性偏移（P2 修复后放开）。
+            try:
+                monitors = await asyncio.to_thread(_get_windows_monitor_size, monitor)
+                if monitors is not None:
+                    await _send_websocket_message(
+                        websocket,
+                        json.dumps({
+                            "type": "meta",
+                            "width": monitors[0],
+                            "height": monitors[1],
+                            "capabilities": _realtime_capabilities(platform),
+                        }),
+                        stop_event=stream_stop_event,
+                        timeout=send_timeout,
+                    )
+            except Exception as exc:
+                logger.debug("screen_stream: 下发 Windows meta 失败: %s", exc)
             import time as _stream_diag_time
             _diag_started = _stream_diag_time.monotonic()
             _diag_window_started = _diag_started
@@ -1820,7 +1866,12 @@ async def screen_stream(
                 if real_w > 0 and real_h > 0:
                     await _send_websocket_message(
                         websocket,
-                        json.dumps({"type": "meta", "width": real_w, "height": real_h}),
+                        json.dumps({
+                            "type": "meta",
+                            "width": real_w,
+                            "height": real_h,
+                            "capabilities": _realtime_capabilities(platform),
+                        }),
                         stop_event=stream_stop_event,
                     )
                     harmony_downscale = harmony_max_long_edge
@@ -1830,6 +1881,28 @@ async def screen_stream(
                     )
                 else:
                     logger.error("鸿蒙未取得真机分辨率，禁用降采样(坐标安全优先)，仅降质")
+
+            # Windows JPEG：下发显示器物理尺寸 meta 并放开实时输入。
+            # sidecar 声明 per-monitor v2 后，GDI 抓帧与显示器几何同为物理
+            # 像素，与 DXGI（H.264）及 pyautogui 注入空间一致，不再有 codec
+            # 间坐标基准漂移。
+            if platform == "windows":
+                try:
+                    win_size = await asyncio.to_thread(_get_windows_monitor_size, monitor)
+                    if win_size is not None:
+                        await _send_websocket_message(
+                            websocket,
+                            json.dumps({
+                                "type": "meta",
+                                "width": win_size[0],
+                                "height": win_size[1],
+                                "capabilities": _realtime_capabilities(platform),
+                            }),
+                            stop_event=stream_stop_event,
+                            timeout=send_timeout,
+                        )
+                except Exception as exc:
+                    logger.debug("screen_stream: 下发 Windows JPEG meta 失败: %s", exc)
             _logged_reencode = False
             while streamer.is_running() and not stream_stop_event.is_set():
                 # 先 sleep 控制帧率（发送完上一帧后不要立即请求下一帧）
@@ -1890,6 +1963,9 @@ async def screen_stream(
             if not background_task.done():
                 background_task.cancel()
         await asyncio.gather(activity_task, idle_watchdog_task, return_exceptions=True)
+        # 注入器关闭会排空队列并对按住的按键补发抬起，防止设备端按键卡死
+        if pointer_injector is not None:
+            pointer_injector.close()
         if h264_queue is not None:
             logger.info(
                 "鸿蒙 H.264 WebSocket 发送统计: conn_key=%s, packets=%d, bytes=%d, "
@@ -1939,6 +2015,60 @@ async def screen_stream(
 
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
+
+
+def _realtime_input_enabled() -> bool:
+    """实时指针注入总开关（config.realtime_input_enabled，默认开启）。"""
+    if worker is None:
+        return False
+    try:
+        return bool(getattr(worker.config, "realtime_input_enabled", True))
+    except Exception:  # noqa: BLE001 - 配置异常不阻断推流
+        return True
+
+
+def _realtime_capabilities(platform: str) -> dict:
+    """随 meta 帧下发的能力声明；前端据此决定启用实时输入还是回退 REST。"""
+    if platform == "harmony_pc":
+        return {"realtime_input": True, "pointer": "mouse", "wheel": True}
+    if platform == "harmony_mobile":
+        return {"realtime_input": True, "pointer": "touch", "wheel": False}
+    return {"realtime_input": True, "pointer": "mouse", "wheel": True}
+
+
+def _get_windows_monitor_size(monitor: int) -> tuple[int, int] | None:
+    """查询目标显示器的物理尺寸，供 Windows meta 帧做前端坐标基准。"""
+    from worker.screen.monitor_utils import get_mapped_monitor_index
+
+    _, config = get_mapped_monitor_index(monitor)
+    width, height = int(config.get("width") or 0), int(config.get("height") or 0)
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _create_pointer_injector(
+    platform: str, device_id: str, monitor: int
+) -> PointerInjector | None:
+    """按平台构建实时指针注入器；不支持的平台返回 None（前端回退 REST 手势）。"""
+    if worker is None:
+        return None
+    if platform in ("harmony_mobile", "harmony_pc"):
+        manager = _get_harmony_manager(platform)
+        if manager is None:
+            return None
+        dispatcher = HarmonyPointerDispatcher(
+            manager=manager,
+            device_id=device_id,
+            device_type=platform,
+            client=manager._device_clients.get(device_id),
+        )
+        return PointerInjector(dispatcher, label=f"{platform}/{device_id}")
+    if platform == "windows":
+        manager = worker.platform_managers.get("windows")
+        if manager is None:
+            return None
+        dispatcher = WindowsPointerDispatcher(manager, monitor=monitor)
+        return PointerInjector(dispatcher, label=f"windows/{device_id}/{monitor}")
+    return None
 
 
 def _get_harmony_manager(platform: str):

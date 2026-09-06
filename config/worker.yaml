@@ -14,7 +14,7 @@ worker:
   #   android/serial-001: meeting_gamma
   discover_android_devices: false   # Enable Android device discovery
   discover_ios_devices: false       # Enable iOS device discovery
-  discover_harmony_mobile_devices: false   # Enable HarmonyOS mobile device discovery
+  discover_harmony_mobile_devices: true   # Enable HarmonyOS mobile device discovery
   discover_harmony_pc_devices: false       # Enable HarmonyOS PC device discovery
   device_check_interval: 300        # Device check interval (seconds), 5 minutes
   service_retry_count: 3            # Service startup retry count
@@ -336,8 +336,9 @@ websocket_streaming:
   max_connections_per_device: 3  # Max connections per device
   send_timeout_seconds: 30       # Send timeout (seconds)
   idle_timeout_seconds: 900      # 无用户操作后自动断开推流（秒，15分钟）
-  streaming_fps: 10              # Streaming frame rate
-  harmony_streaming_fps: 10      # Harmony 推流帧率（官方 H.264/JPEG 统一不超过 10fps）
+  streaming_fps: 15              # Streaming frame rate (Windows)
+  harmony_streaming_fps: 15      # Harmony 推流帧率（官方 H.264/JPEG 统一不超过 15fps）
+  realtime_input_enabled: true   # 实时指针输入（WS 上行 down/move/up/wheel）
   streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). Keep jpeg by default.
                                   # server.py selects the actual codec from the WebSocket codec query parameter (for example, ?codec=h264).
                                   # This value is only the fallback when no query parameter is supplied and does not conflict with H.264 streaming optimizations.

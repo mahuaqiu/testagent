@@ -100,14 +100,18 @@ class WorkerConfig:
     websocket_max_connections_per_device: int = 3
     websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
     websocket_idle_timeout_seconds: int = 900  # 无用户操作后自动断开（秒）
-    websocket_streaming_fps: int = 10  # 推流帧率
+    websocket_streaming_fps: int = 15  # 推流帧率（Windows 侧）
     websocket_streaming_codec: str = "jpeg"  # 默认编码格式
     websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
     websocket_streaming_profile: int = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
 
+    # 实时指针输入（浏览器 WS 上行 down/move/up/wheel，替代 mouseup 才发一条
+    # REST 手势）。官方会话未就绪/不可用时 worker 自动退化为整手势合帧。
+    realtime_input_enabled: bool = True
+
     # 鸿蒙 JPEG 推流独立参数（仅作用于实时推流，不影响 Windows/iOS/Android/Mac，
     # 也不影响截图/录屏——截图走设备端 snapshot_display，画质保持高清）
-    harmony_streaming_fps: int = 10  # 鸿蒙推流帧率（官方 H.264/JPEG 统一不超过 10fps）
+    harmony_streaming_fps: int = 15  # 鸿蒙推流帧率（官方 H.264/JPEG 统一不超过 15fps）
     harmony_streaming_jpeg_quality: int = 60  # 鸿蒙推流重编码质量（0 表示不重编码，原样转发）
     # 鸿蒙推流长边上限，超过则等比缩小；<=0 表示不缩放。
     # 【默认 1600 降采样】WS 流开头已通过 meta 文本帧把真机原生分辨率
@@ -224,11 +228,12 @@ class WorkerConfig:
             websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
             websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
             websocket_idle_timeout_seconds=websocket_cfg.get("idle_timeout_seconds", 900),
-            websocket_streaming_fps=websocket_cfg.get("streaming_fps", 10),
+            websocket_streaming_fps=websocket_cfg.get("streaming_fps", 15),
             websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
             websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
             websocket_streaming_profile=websocket_cfg.get("streaming_profile", 66),
-            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 10),
+            realtime_input_enabled=websocket_cfg.get("realtime_input_enabled", True),
+            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 15),
             harmony_streaming_jpeg_quality=websocket_cfg.get("harmony_streaming_jpeg_quality", 60),
             harmony_streaming_max_long_edge=websocket_cfg.get("harmony_streaming_max_long_edge", 1600),
         )

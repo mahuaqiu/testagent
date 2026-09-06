@@ -326,7 +326,32 @@ fn handle_request(state: &Arc<Mutex<AppState>>, request: Request) -> Response {
     }
 }
 
+/// 声明 Per-Monitor v2 DPI 感知，必须在任何 GDI/DXGI 调用之前执行。
+///
+/// DPI 无感知进程拿到的显示器几何（EnumDisplayMonitors/GetMonitorInfo）与
+/// GDI BitBlt 画面都是被系统虚拟化后的逻辑值，而 DXGI Desktop Duplication
+/// 永远是物理像素——两者混用会让非 100% 缩放/多屏混合 DPI 机器上的点击
+/// 坐标系统性偏移（Python 侧 pyautogui 是物理坐标空间）。
+fn enable_per_monitor_dpi_awareness() {
+    unsafe {
+        // Per-Monitor v2（Win10 1703+）
+        if windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        )
+        .is_ok()
+        {
+            return;
+        }
+        // Win 8.1+：per-monitor v1；已设置过或系统不支持时静默忽略
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwareness(
+            windows::Win32::UI::HiDpi::PROCESS_PER_MONITOR_DPI_AWARE,
+        );
+    }
+}
+
 fn main() {
+    enable_per_monitor_dpi_awareness();
+
     // 将系统定时器精度提到 1ms：抓帧/录制节拍线程都依赖 thread::sleep，
     // 默认 ~15.6ms 精度会把 20fps 的 50ms 节拍拉长到 55~65ms，
     // 导致录制 tick 复用旧帧（水印冻结后跳变）。进程退出时系统自动恢复。

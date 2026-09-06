@@ -388,6 +388,10 @@ class HarmonyPlatformManager(PlatformManager):
         """获取或启动设备级官方会话，失败时由调用方继续走 HDC。"""
         return self._official_sessions.get_or_start(udid)
 
+    def peek_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
+        """只读获取已存在的官方会话，不触发启动（实时注入路径用）。"""
+        return self._official_sessions.get(udid)
+
     def acquire_official_session(
         self,
         udid: str,

@@ -14,6 +14,14 @@ import uvicorn
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Windows 下必须在任何 worker 模块（间接 import pyautogui）之前声明 DPI 感知：
+# mouseinfo/pyautogui 导入时会抢先设置系统级感知，per-monitor v2 此后永远失败，
+# 非 100% 缩放/多屏混合 DPI 的被控机上注入坐标会系统性偏移。
+if sys.platform.startswith("win"):
+    from worker.screen.monitor_utils import ensure_process_dpi_awareness
+
+    ensure_process_dpi_awareness()
+
 from common.packaging import is_packaged, get_app_dir
 
 # 过滤 websockets 弃用警告
