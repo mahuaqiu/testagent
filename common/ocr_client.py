@@ -54,9 +54,13 @@ def _prepare_ocr_source(
 
 
 def _prepare_ocr_reference(image_bytes: bytes, quality: int = 80) -> bytes:
-    """准备 OCR/图像匹配参考图，兼容接口传入的 PNG 等小图片。"""
-    # 参考图不直接透传，确保 PNG、P 模式和 RGBA 图片统一转换为 OCR 服务可用的 JPEG。
-    return compress_image_to_jpeg(image_bytes, quality=quality)
+    """准备 OCR/图像匹配参考图。
+
+    外部传入的模板图直接透传，不做 JPEG 质量压缩，避免重编码损失
+    模板细节影响匹配精度；PNG/JPEG 等格式原样交给 OCR 服务解码。
+    quality 参数仅为兼容旧签名保留，不再使用。
+    """
+    return image_bytes
 
 
 @dataclass
@@ -352,9 +356,9 @@ class OCRClient:
             source_image_quality,
             preserve_source_jpeg,
         )
-        template_compressed = _prepare_ocr_reference(template_bytes, reference_image_quality)
+        template_prepared = _prepare_ocr_reference(template_bytes, reference_image_quality)
         source_base64 = base64.b64encode(source_compressed).decode("utf-8")
-        template_base64 = base64.b64encode(template_compressed).decode("utf-8")
+        template_base64 = base64.b64encode(template_prepared).decode("utf-8")
 
         response = self._post("/image/match", {
             "source_image": source_base64,
@@ -456,12 +460,12 @@ class OCRClient:
             source_image_quality,
             preserve_source_jpeg,
         )
-        target_compressed = _prepare_ocr_reference(
+        target_prepared = _prepare_ocr_reference(
             target_image_bytes,
             reference_image_quality,
         )
         image_base64 = base64.b64encode(image_compressed).decode("utf-8")
-        target_image_base64 = base64.b64encode(target_compressed).decode("utf-8")
+        target_image_base64 = base64.b64encode(target_prepared).decode("utf-8")
 
         response = self._post("/image/match_near_text", {
             "image": image_base64,

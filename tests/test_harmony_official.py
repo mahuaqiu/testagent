@@ -60,38 +60,28 @@ def test_prepare_ocr_source_keeps_non_jpeg_conversion(monkeypatch) -> None:
     assert calls == [(b"png-data", 80)]
 
 
-def test_prepare_ocr_reference_converts_small_jpeg_to_quality_80(monkeypatch) -> None:
+def test_prepare_ocr_reference_passes_through_jpeg_without_recompression(monkeypatch) -> None:
     calls = []
 
-    def fake_compress(image_bytes: bytes, quality: int) -> bytes:
+    def spy_compress(image_bytes: bytes, quality: int) -> bytes:
         calls.append((image_bytes, quality))
         return b"converted-reference"
 
-    monkeypatch.setattr("common.ocr_client.compress_image_to_jpeg", fake_compress)
+    monkeypatch.setattr("common.ocr_client.compress_image_to_jpeg", spy_compress)
 
-    assert _prepare_ocr_reference(b"\xff\xd8\xff\xe0small-jpeg") == b"converted-reference"
-    assert calls == [(b"\xff\xd8\xff\xe0small-jpeg", 80)]
+    image = b"\xff\xd8\xff\xe0small-jpeg"
+
+    assert _prepare_ocr_reference(image) is image
+    assert calls == []
 
 
-def test_prepare_ocr_reference_accepts_small_png() -> None:
+def test_prepare_ocr_reference_passes_through_png() -> None:
     image = Image.new("RGBA", (3, 2), (20, 40, 60, 128))
     output = io.BytesIO()
     image.save(output, format="PNG")
+    png_bytes = output.getvalue()
 
-    converted = _prepare_ocr_reference(output.getvalue())
-
-    assert converted.startswith(b"\xff\xd8\xff")
-
-
-def test_prepare_ocr_reference_returns_original_when_conversion_fails(monkeypatch) -> None:
-    image = b"invalid-image"
-
-    monkeypatch.setattr(
-        "common.ocr_client.compress_image_to_jpeg",
-        lambda *_args, **_kwargs: image,
-    )
-
-    assert _prepare_ocr_reference(image) == image
+    assert _prepare_ocr_reference(png_bytes) == png_bytes
 
 
 def test_java_bridge_uses_hidden_window_process_launcher(tmp_path, monkeypatch) -> None:
