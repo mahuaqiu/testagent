@@ -230,7 +230,6 @@ $nuitkaArgs = @(
     "--include-package=playwright"
     "--include-package=pyautogui"
     "--include-package=mss"
-    "--include-package=cv2"
     "--include-package=PIL"
     "--include-package=numpy"
     "--include-package=pydantic"
@@ -265,7 +264,8 @@ $nuitkaArgs = @(
     "--nofollow-import-to=numpy.random.tests"
     "--nofollow-import-to=numpy.matrixlib.tests"
     "--nofollow-import-to=PIL.tests"
-    "--nofollow-import-to=cv2.tests"
+    # cv2 无任何代码引用（图像处理用 PIL+numpy），显式排除防止 venv 残留被连带打入
+    "--nofollow-import-to=cv2"
     "--nofollow-import-to=cryptography.tests"
     "--nofollow-import-to=jinja2.tests"
     "--nofollow-import-to=pydantic.v1.tests"
@@ -318,12 +318,39 @@ if ($JavaRuntimePath -ne "") {
         Write-Error "Java runtime not found: $JavaExe"
         exit 1
     }
-    Write-Host "Copying Java runtime for Harmony official bridge..."
+
     $JreTarget = "$PackageDir\tools\jre"
     if (Test-Path $JreTarget) { Remove-Item -Recurse -Force $JreTarget }
-    New-Item -ItemType Directory -Force -Path $JreTarget | Out-Null
-    Copy-Item -Path "$JavaRuntimePath\*" -Destination $JreTarget -Recurse -Force
-    Write-Host "  Java runtime copied to tools/jre"
+
+    # 优先用 jlink 生成精简运行时（约 60-80M），模块集来自 jdeps 对鸿蒙 jar+Bridge 的
+    # 实测结果，另加 java.management/jdk.crypto.* 兜底 jdeps 看不到的反射与 TLS 依赖。
+    $JlinkExe = Join-Path $JavaRuntimePath "bin\jlink.exe"
+    $JmodsDir = Join-Path $JavaRuntimePath "jmods"
+    $BridgeModules = "java.base,java.compiler,java.desktop,java.management,java.naming,java.sql,jdk.unsupported,jdk.crypto.ec,jdk.crypto.cryptoki"
+
+    if ((Test-Path $JlinkExe) -and (Test-Path $JmodsDir)) {
+        Write-Host "Building slim Java runtime with jlink..."
+        Write-Host "  modules: $BridgeModules"
+        & $JlinkExe --add-modules $BridgeModules --strip-debug --no-header-files --no-man-pages --compress=2 --output $JreTarget
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$JreTarget\bin\java.exe")) {
+            Write-Warning "jlink failed; falling back to full JDK copy"
+            if (Test-Path $JreTarget) { Remove-Item -Recurse -Force $JreTarget }
+        }
+    }
+
+    if (-not (Test-Path "$JreTarget\bin\java.exe")) {
+        Write-Host "Copying Java runtime for Harmony official bridge..."
+        New-Item -ItemType Directory -Force -Path $JreTarget | Out-Null
+        Copy-Item -Path "$JavaRuntimePath\*" -Destination $JreTarget -Recurse -Force
+    }
+
+    # 冒烟：确认打包进来的 Java 运行时可以启动
+    $JavaVersionOutput = & "$JreTarget\bin\java.exe" -version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Bundled Java runtime failed to start: $JavaVersionOutput"
+        exit 1
+    }
+    Write-Host "  Java runtime ready at tools/jre: $($JavaVersionOutput | Select-Object -First 1)"
 } else {
     Write-Warning "JavaRuntimePath is empty; the package requires an external JRE 17+ configured in harmony_official.java_path"
 }
@@ -399,6 +426,16 @@ Write-Host "Copying Playwright chromium..."
 $ChromiumDir = Get-ChildItem -Path "$env:LOCALAPPDATA\ms-playwright" -Filter "chromium-*" -Directory | Select-Object -First 1
 if ($ChromiumDir) {
     Copy-Item -Path $ChromiumDir.FullName -Destination "$PackageDir\playwright\$($ChromiumDir.Name)" -Recurse
+
+    # 语言包只保留中英文：这是浏览器界面翻译（各约 0.5M，共 220 个 42M），
+    # 缺失语言回退英文，不影响网页渲染、截图和 OCR。
+    $LocalesDir = "$PackageDir\playwright\$($ChromiumDir.Name)\chrome-win64\locales"
+    if (Test-Path $LocalesDir) {
+        Get-ChildItem -Path $LocalesDir -Filter "*.pak" |
+            Where-Object { $_.Name -notin @("en-US.pak", "zh-CN.pak") } |
+            Remove-Item -Force
+        Write-Host "  Chromium locales trimmed (kept en-US, zh-CN)"
+    }
 }
 
 Set-Content -Path "$PackageDir\start.bat" -Value "@echo off`nchcp 65001 >nul 2>&1`ncd /d `%~dp0`ntest-worker.exe`npause" -Encoding ASCII

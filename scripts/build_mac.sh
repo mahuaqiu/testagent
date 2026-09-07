@@ -45,6 +45,7 @@ echo "[4/6] Installing Playwright browsers..."
 playwright install chromium || echo "Warning: Playwright browser installation failed"
 
 # 打包 (Nuitka)
+# cv2 无代码引用，--nofollow 防止 venv 残留被连带打入
 echo "[5/6] Building executable with Nuitka..."
 
 python -m nuitka \
@@ -64,7 +65,6 @@ python -m nuitka \
     --include-package=playwright \
     --include-package=pyautogui \
     --include-package=mss \
-    --include-package=cv2 \
     --include-package=PIL \
     --include-package=numpy \
     --include-package=pydantic \
@@ -76,6 +76,7 @@ python -m nuitka \
     --nofollow-import-to=pytest \
     --nofollow-import-to=allure \
     --nofollow-import-to=faker \
+    --nofollow-import-to=cv2 \
     --output-dir=$PROJECT_ROOT/dist/nuitka_build \
     --show-progress
 

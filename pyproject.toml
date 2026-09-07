@@ -23,9 +23,6 @@ dependencies = [
     "Pillow>=10.0.0",
     "pywin32>=306",  # Windows 窗口查找和截图
 
-    # 图像匹配
-    "opencv-python-headless>=4.8.0",
-
     # 工具
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
