@@ -122,10 +122,6 @@ def command_wake_stream() -> bytes:
     return b"WAKE_STREAM\n"
 
 
-def command_stop() -> bytes:
-    return b"STOP\n"
-
-
 def _command(name: str, *parts: object) -> bytes:
     return (" ".join((name, *(str(part) for part in parts))) + "\n").encode("utf-8")
 

@@ -1,11 +1,10 @@
-"""Action 统一能力描述和可取消执行控制。"""
+"""Action 可取消执行控制。"""
 
 from __future__ import annotations
 
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
 
 
 class ActionCancelled(Exception):
@@ -54,18 +53,3 @@ class ExecutionControl:
             if self.cancel_event.wait(timeout):
                 raise ActionCancelled("Task cancelled by user")
         self.checkpoint()
-
-
-@dataclass(frozen=True)
-class ActionSpec:
-    """单个 Action 的能力描述。"""
-
-    name: str
-    executor: Any
-    supported_platforms: frozenset[str] = frozenset()
-    requires_context: bool = True
-    requires_device_service: bool = False
-    default_timeout_ms: int = 30000
-    interruptible: bool = True
-    security_level: str = "normal"
-    validator: Callable[[Any], None] | None = None

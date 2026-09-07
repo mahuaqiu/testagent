@@ -4,7 +4,6 @@ import threading
 
 import pytest
 
-from worker.screen import manager as screen_manager_module
 from worker.screen.frame_source import MJPEGFrameSource
 from worker.screen.manager import (
     close_all_screen_managers,

@@ -57,7 +57,6 @@ try:
 
     import uvicorn
     from PyQt5.QtWidgets import (
-        QMessageBox,
         QDialog,
         QVBoxLayout,
         QHBoxLayout,
@@ -67,7 +66,7 @@ try:
         QProgressBar,
     )
     from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer
-    from PyQt5.QtGui import QIcon, QFont
+    from PyQt5.QtGui import QIcon
 
     from worker.config import load_config, WorkerConfig
     from worker.logger import setup_logging
@@ -75,16 +74,16 @@ try:
     from worker.server import app, set_worker, set_gui_app
     from worker.single_instance import check_single_instance, release_instance_lock
     from worker.tray_manager import TrayManager
-    from worker.upgrade_manager import UpgradeManager, UpgradeInfo, DownloadError, InstallError
+    from worker.upgrade_manager import UpgradeManager, UpgradeInfo
     from worker.download_dialog import DownloadDialog
     from worker.settings_window import SettingsWindow
 
     logger = logging.getLogger(__name__)
 
-except Exception as e:
+except Exception:
     _early_error_log(f"Failed during initialization:\n{traceback.format_exc()}")
     sys.exit(1)
-except SystemExit as e:
+except SystemExit:
     raise
 except BaseException as e:
     _early_error_log(f"BaseException: {type(e).__name__}: {e}")

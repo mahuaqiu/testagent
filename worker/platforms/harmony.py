@@ -253,15 +253,6 @@ class HarmonyPlatformManager(PlatformManager):
             logger.error(f"获取在线设备列表失败: {e}")
             return []
 
-    def get_current_device(self) -> Optional[str]:
-        """
-        获取当前设备 ID。
-
-        Returns:
-            Optional[str]: 当前设备 ID
-        """
-        return self._current_device
-
     # ========== 执行上下文管理 ==========
 
     def create_context(self, device_id: Optional[str] = None, options: Optional[dict] = None) -> Any:
@@ -383,10 +374,6 @@ class HarmonyPlatformManager(PlatformManager):
         if not client:
             raise HarmonyError("No device context")
         return self.get_screenshot(client)
-
-    def get_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
-        """获取或启动设备级官方会话，失败时由调用方继续走 HDC。"""
-        return self._official_sessions.get_or_start(udid)
 
     def peek_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
         """只读获取已存在的官方会话，不触发启动（实时注入路径用）。"""

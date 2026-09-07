@@ -536,22 +536,6 @@ class UnlockScreenAction(ActionExecutor):
         except Exception as e:
             logger.warning(f"Harmony AOD suspend+wakeup cycle failed: {e}")
 
-    def _swipe_unlock(self, platform: "PlatformManager", context: object) -> None:
-        """滑动解锁界面（旧方法，保留兼容）。"""
-        platform_type = platform.platform
-
-        if platform_type == "ios":
-            client = context or platform._device_clients.get(platform._current_device)
-            if client and hasattr(client, "swipe_up_for_unlock"):
-                client.swipe_up_for_unlock()
-                logger.info("iOS swipe up for unlock")
-
-        elif platform_type == "android":
-            device = context or platform._device_clients.get(platform._current_device)
-            if device:
-                device.unlock()
-                logger.info("Android unlock via swipe")
-
     def _get_unlock_method(self, platform: "PlatformManager", resolution: tuple[int, int] | None) -> str:
         """获取解锁方式（home_key 或 swipe_up）。"""
         unlock_config = getattr(platform, "_unlock_config", {})

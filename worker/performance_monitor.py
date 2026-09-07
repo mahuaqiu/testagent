@@ -993,16 +993,3 @@ def get_collector(device_id: str) -> PerformanceCollector:
         if device_id not in _collectors:
             _collectors[device_id] = PerformanceCollector(device_id)
         return _collectors[device_id]
-
-
-def remove_collector(device_id: str) -> None:
-    """移除设备采集器。
-
-    Args:
-        device_id: 设备ID
-    """
-    with _collectors_lock:
-        if device_id in _collectors:
-            collector = _collectors[device_id]
-            collector.stop_collect()
-            del _collectors[device_id]

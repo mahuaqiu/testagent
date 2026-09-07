@@ -6,10 +6,8 @@
 
 import base64
 import logging
-import os
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Any
 
 from worker.config import PlatformConfig
@@ -500,32 +498,6 @@ class PlatformManager(ABC):
             x += offset.get("x", 0)
             y += offset.get("y", 0)
         return (x, y)
-
-    def _save_screenshot(self, image_bytes: bytes, name: str, screenshot_dir: str) -> str:
-        """
-        保存截图到文件。
-
-        Args:
-            image_bytes: 图像数据
-            name: 截图名称
-            screenshot_dir: 截图目录
-
-        Returns:
-            str: 文件路径
-        """
-        os.makedirs(screenshot_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{name}_{timestamp}.png"
-        filepath = os.path.join(screenshot_dir, filename)
-
-        with open(filepath, "wb") as f:
-            f.write(image_bytes)
-
-        return filepath
-
-    def _bytes_to_base64(self, data: bytes) -> str:
-        """将字节数据转换为 base64 字符串。"""
-        return base64.b64encode(data).decode("utf-8")
 
     def _base64_to_bytes(self, data: str) -> bytes:
         """将 base64 字符串转换为字节数据。"""

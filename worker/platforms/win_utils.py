@@ -207,35 +207,3 @@ def get_window_rect(hwnd: int) -> tuple[int, int, int, int]:
         Tuple[int, int, int, int]: (left, top, right, bottom)
     """
     return win32gui.GetWindowRect(hwnd)
-
-
-def get_window_title(hwnd: int) -> str:
-    """
-    获取窗口标题。
-
-    Args:
-        hwnd: 窗口句柄
-
-    Returns:
-        str: 窗口标题
-    """
-    try:
-        return win32gui.GetWindowText(hwnd) or ""
-    except Exception:
-        return ""
-
-
-def get_window_class(hwnd: int) -> str:
-    """
-    获取窗口类名。
-
-    Args:
-        hwnd: 窗口句柄
-
-    Returns:
-        str: 窗口类名
-    """
-    try:
-        return win32gui.GetClassName(hwnd) or ""
-    except Exception:
-        return ""

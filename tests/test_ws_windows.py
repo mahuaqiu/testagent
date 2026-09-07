@@ -1,7 +1,6 @@
 """测试 WebSocket 连接到 Windows screen"""
 import asyncio
 import websockets
-import json
 
 async def test_ws():
     try:

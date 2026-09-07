@@ -18,7 +18,6 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QFrame,
-    QWidget,
     QMessageBox,
 )
 from PyQt5.QtCore import Qt

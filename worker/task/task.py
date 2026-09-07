@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from worker.task.action import Action
-from worker.task.result import TaskResult, TaskStatus
 
 
 def request_fingerprint(task: "Task") -> str:

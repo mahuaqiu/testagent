@@ -5,17 +5,15 @@
 """
 
 import os
-import sys
 import logging
 import tempfile
 import subprocess
 import httpx
 from dataclasses import dataclass
 from typing import Optional
-from datetime import datetime
 
 from common.utils import SUBPROCESS_HIDE_WINDOW
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 
 logger = logging.getLogger(__name__)
 

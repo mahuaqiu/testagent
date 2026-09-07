@@ -5,7 +5,7 @@ Action 注册表。
 """
 
 import logging
-from typing import Dict, Optional, Set, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from worker.actions.base import ActionExecutor
@@ -65,16 +65,6 @@ class ActionRegistry:
             是否已注册
         """
         return action_type in cls._actions
-
-    @classmethod
-    def list_all(cls) -> Set[str]:
-        """
-        列出所有已注册的 Action。
-
-        Returns:
-            所有已注册的 Action 名称集合
-        """
-        return set(cls._actions.keys())
 
     @classmethod
     def clear(cls) -> None:

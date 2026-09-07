@@ -8,7 +8,6 @@ ocr_click_same_row_text, ocr_check_same_row_text。
 统一匹配策略：精确匹配 → 模糊匹配，reg_ 开头使用正则匹配。
 """
 
-import base64
 import io
 import json
 import logging

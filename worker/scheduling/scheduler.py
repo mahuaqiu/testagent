@@ -51,11 +51,6 @@ class ResourceScheduler:
         """检查资源是否忙碌。"""
         return self.get_busy_task_id(platform, device_id) is not None
 
-    def active_leases(self) -> list[ResourceLease]:
-        """返回活动租约快照。"""
-        with self._lock:
-            return list(self._leases.values())
-
     def active_count(self) -> int:
         """返回活动任务数。"""
         with self._lock:

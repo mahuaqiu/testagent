@@ -102,7 +102,7 @@ def test_windows_h264_stream_uses_sidecar_manager(monkeypatch):
     # 捕获异常后正常返回，不会发送 close 帧，读帧会无限阻塞。
     with client.websocket_connect(
         "/ws/screen/windows/windows_screen?monitor=1&codec=h264"
-    ) as websocket:
+    ):
         pass
 
     assert calls["sidecar"] == 1

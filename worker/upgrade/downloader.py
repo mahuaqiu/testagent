@@ -7,14 +7,13 @@
 import logging
 import os
 import shutil
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 
 logger = logging.getLogger(__name__)
 

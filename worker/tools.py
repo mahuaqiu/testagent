@@ -6,11 +6,10 @@
 
 import json
 import os
-import sys
 
 from typing import Optional
 
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 
 
 def get_tools_dir() -> str:

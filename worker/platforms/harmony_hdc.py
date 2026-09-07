@@ -7,17 +7,13 @@
 import logging
 import os
 import subprocess
-import tempfile
 import uuid
 import re
-import json
-import shutil
-import shlex
 import threading
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict, Union
+from typing import Optional, Tuple, List, Dict
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd, run_cmd

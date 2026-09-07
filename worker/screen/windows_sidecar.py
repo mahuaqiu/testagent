@@ -14,7 +14,6 @@ import subprocess
 import threading
 from urllib.parse import urlparse
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -37,13 +36,6 @@ def _candidate_paths() -> list[str]:
         base_dir / "rust" / "windows-screen-sidecar" / "target" / "debug" / "windows-screen-sidecar.exe",
     ]
     return [str(path) for path in candidates if path.exists()]
-
-
-@dataclass
-class _CommandResult:
-    ok: bool
-    data: dict[str, Any] | None = None
-    error: str | None = None
 
 
 class WindowsSidecarClient:
@@ -486,9 +478,6 @@ class WindowsSidecarStreamer:
 
     def is_running(self) -> bool:
         return self._running
-
-    def get_h264_info(self) -> dict[str, Any] | None:
-        return self._h264_info
 
     @property
     def uses_binary_media(self) -> bool:
@@ -954,11 +943,6 @@ class PushFrameReader:
         # 诊断测点2：记录推流启动时刻 + IDR 到达计数与时间戳
         self._push_start_time: float | None = None
         self._idr_count: int = 0
-
-    def set_fps(self, fps: int):
-        """动态配置帧率"""
-        self._fps = fps
-        self._client.write_command(f"@FPS={fps}")
 
     def is_running(self) -> bool:
         """检查推流是否仍在运行"""

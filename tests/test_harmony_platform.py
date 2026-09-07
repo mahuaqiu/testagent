@@ -24,7 +24,7 @@ from worker.platforms.harmony_hdc import (
 )
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.config import PlatformConfig, WorkerConfig
-from worker.task import Action, ActionStatus, Task, TaskStatus
+from worker.task import Action, ActionStatus, Task
 from worker.scheduling.scheduler import ResourceScheduler
 from worker.worker import Worker
 from worker.actions.unlock import UnlockScreenAction
@@ -968,7 +968,7 @@ def test_harmony_discovery_defaults_are_disabled() -> None:
 
 
 def test_harmony_monitor_keeps_mobile_and_pc_switches_independent() -> None:
-    from worker.device_monitor import DeviceMonitor
+    pass
 
 
 # ============================================================================

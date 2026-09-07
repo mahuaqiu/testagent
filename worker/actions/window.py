@@ -201,7 +201,6 @@ class ActivateWindowAction(BaseActionExecutor):
             窗口句柄（HWND），未找到返回 0
         """
         import win32gui
-        import win32process
         import pywintypes
 
         exact_match_hwnd = 0

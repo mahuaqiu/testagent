@@ -14,7 +14,7 @@ from typing import Any, Optional
 import httpx
 
 from common.utils import run_cmd, popen_cmd
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -104,25 +104,6 @@ class GoIOSClient:
         is_alive = process.poll() is None
         logger.info(f"Process alive check: PID={process.pid}, alive={is_alive}, exit_code={process.poll()}")
         return is_alive
-
-    def wait_process_alive(self, process: subprocess.Popen, timeout: int = 5) -> bool:
-        """等待进程稳定运行（用于判断 WDA 进程启动成功）。
-
-        Args:
-            process: 进程对象
-            timeout: 等待时间（秒）
-
-        Returns:
-            bool: True 表示进程存活，False 表示进程已退出
-        """
-        start = time.time()
-        while time.time() - start < timeout:
-            if not self.check_process_alive(process):
-                logger.warning(f"Process {process.pid} exited during wait period")
-                return False
-            time.sleep(0.5)
-        logger.info(f"Process {process.pid} is stable after {timeout}s wait")
-        return True
 
     def check_port_forward_ready(self, local_port: int, timeout: int = 2) -> bool:
         """检查端口转发是否就绪（通过检查本地端口是否被监听）。
@@ -230,23 +211,6 @@ class GoIOSClient:
         except Exception as e:
             logger.warning(f"Failed to get tunnel info for {udid}: {e}")
             return None
-
-    def list_tunnels(self) -> list[dict]:
-        """列出所有已建立的 tunnel。"""
-        try:
-            if not self._http_client:
-                self._http_client = httpx.Client(timeout=5, trust_env=False)
-            url = f"http://{self.agent_host}:{self.agent_port}/tunnels"
-            resp = self._http_client.get(url)
-            logger.info(f"List tunnels: status={resp.status_code}, url={url}")
-            if resp.status_code == 200:
-                tunnels = resp.json()
-                logger.info(f"Found {len(tunnels)} active tunnels")
-                return tunnels
-            return []
-        except Exception as e:
-            logger.warning(f"Failed to list tunnels: {e}")
-            return []
 
     def close(self) -> None:
         """关闭 HTTP 客户端。"""

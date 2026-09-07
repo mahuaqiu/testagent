@@ -75,9 +75,6 @@ class WorkerConfig:
     log_max_size: int = 52428800  # 50MB
     log_backup_count: int = 5
 
-    # 图像匹配配置
-    image_matching: dict[str, Any] = field(default_factory=dict)
-
     # 升级配置
     upgrade_check_url: str = ""       # 升级检查 URL（对应 YAML 的 upgrade.check_url）
     upgrade_check_timeout: int = 30   # 升级检查超时（秒）
@@ -185,7 +182,6 @@ class WorkerConfig:
         platforms = data.get("platforms", {})
         harmony_official_cfg = data.get("harmony_official", {})
         logging_cfg = data.get("logging", {})
-        image_matching = data.get("image_matching", {})
         upgrade_cfg = data.get("upgrade", {})
         unlock_cfg = data.get("unlock", {})
         recording_cfg = data.get("recording", {})
@@ -214,7 +210,6 @@ class WorkerConfig:
             log_file=logging_cfg.get("file"),
             log_max_size=logging_cfg.get("max_size", 52428800),
             log_backup_count=logging_cfg.get("backup_count", 5),
-            image_matching=image_matching,
             upgrade_check_url=upgrade_cfg.get("check_url", ""),
             upgrade_check_timeout=upgrade_cfg.get("check_timeout", 30),
             upgrade_download_timeout=upgrade_cfg.get("download_timeout", 300),
@@ -247,10 +242,6 @@ class WorkerConfig:
 class PlatformConfig:
     """平台通用配置。"""
 
-    enabled: bool = True
-    session_timeout: int = 300
-    screenshot_dir: str = "data/screenshots"
-
     # Web 专用
     headless: bool = True
     browser_type: str = "chromium"
@@ -280,16 +271,12 @@ class PlatformConfig:
 
     # iOS 专用
     wda_base_port: int = 8100
-    wda_ipa_path: str = "wda/WebDriverAgent.ipa"
     wda_bundle_id: str = "com.facebook.WebDriverAgentRunner"
     wda_testrunner_bundle_id: str = ""  # go-ios runwda 需要
     wda_xctest_config: str = "WebDriverAgentRunner.xctest"  # go-ios runwda 需要
     go_ios_path: str = "tools/go-ios/ios.exe"  # go-ios 可执行文件路径
     agent_port: int = 60105                    # go-ios agent HTTP API 端口（默认 60105）
     mjpeg_base_port: int = 9100               # MJPEG 基础端口
-
-    # Android 专用
-    u2_port: int = 7912
 
     # 鸿蒙专用
     hdc_path: str = "tools/hdc/hdc.exe"
@@ -298,9 +285,6 @@ class PlatformConfig:
     def from_dict(cls, data: dict[str, Any]) -> "PlatformConfig":
         """从字典创建配置。"""
         return cls(
-            enabled=data.get("enabled", True),
-            session_timeout=data.get("session_timeout", 300),
-            screenshot_dir=data.get("screenshot_dir", "data/screenshots"),
             headless=data.get("headless", True),
             browser_type=data.get("browser_type", "chromium"),
             timeout=data.get("timeout", 30000),
@@ -315,14 +299,12 @@ class PlatformConfig:
             cache_clear_interval_hours=data.get("cache_clear_interval_hours", 24),
             cache_clear_clear_on_idle=data.get("cache_clear_clear_on_idle", True),
             wda_base_port=data.get("wda_base_port", 8100),
-            wda_ipa_path=data.get("wda_ipa_path", "wda/WebDriverAgent.ipa"),
             wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),
             wda_testrunner_bundle_id=data.get("wda_testrunner_bundle_id", ""),
             wda_xctest_config=data.get("wda_xctest_config", "WebDriverAgentRunner.xctest"),
             go_ios_path=data.get("go_ios_path", "tools/go-ios/ios.exe"),
             agent_port=data.get("agent_port", 60105),
             mjpeg_base_port=data.get("mjpeg_base_port", 9100),
-            u2_port=data.get("u2_port", 7912),
             hdc_path=data.get("hdc_path", "tools/hdc/hdc.exe"),
         )
 
@@ -383,15 +365,6 @@ def _copy_default_to_user_config(src: str, dst: str) -> None:
         raise
 
 
-def get_default_config_path() -> str:
-    """获取配置文件路径（向后兼容别名）。
-
-    注意：此函数现在返回用户配置路径，而非默认模板路径。
-    若需要获取默认模板路径，请使用 get_default_template_path()。
-    """
-    return get_user_config_path()
-
-
 def _merge_missing_config(
     user_data: dict[str, Any],
     template_data: dict[str, Any]
@@ -420,15 +393,6 @@ def _merge_missing_config(
 
     # 以用户配置为基准，从模板补充缺失项
     return deep_merge(user_data, template_data)
-
-
-def _get_config_template_yaml() -> str:
-    """获取配置模板 YAML 内容。"""
-    template_path = get_default_template_path()
-    if os.path.exists(template_path):
-        with open(template_path, encoding="utf-8") as f:
-            return f.read()
-    return ""
 
 
 def load_config() -> WorkerConfig:
@@ -507,25 +471,6 @@ def load_config_version() -> str | None:
         with open(version_path, encoding="utf-8") as f:
             return f.read().strip()
     return None
-
-
-def save_config_version(version: str) -> None:
-    """
-    保存配置版本号到单独文件（原子写入）。
-
-    Args:
-        version: 版本号字符串，格式 YYYYMMDD-HHMMSS
-    """
-    version_path = get_config_version_path()
-    os.makedirs(os.path.dirname(version_path), exist_ok=True)
-
-    # 原子写入：先写临时文件，再重命名
-    temp_path = version_path + ".tmp"
-    with open(temp_path, "w", encoding="utf-8") as f:
-        f.write(version)
-
-    # 重命名（原子操作）
-    os.replace(temp_path, version_path)
 
 
 def merge_config_with_local_protection(

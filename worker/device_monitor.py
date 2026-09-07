@@ -600,10 +600,6 @@ class DeviceMonitor:
             return [d["udid"] for d in self._harmony_pc_devices]
         return []
 
-    def is_device_online(self, platform: str, udid: str) -> bool:
-        """检查设备是否在线。"""
-        return udid in self.get_online_devices(platform)
-
     def mark_device_online(self, platform: str, udid: str) -> None:
         """将设备标记为在线（从 faulty 列表移动到正常列表）。"""
         if platform == "android":

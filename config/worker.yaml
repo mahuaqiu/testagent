@@ -27,14 +27,12 @@ external_services:
   ocr_service: "http://192.168.0.102:9021"   # OCR service URL
 
 # Platform Settings
+# 平台是否启用由 worker.discover_*_devices 决定；桌面平台（web/windows/mac）随宿主系统自动启用。
 platforms:
   web:
-    enabled: null                   # Auto-detect based on system
     headless: false                 # Headless mode
     browser_type: Chromium          # Use system Chrome for screen sharing support
     timeout: 30000                  # Timeout (ms)
-    session_timeout: 300            # Session timeout (seconds)
-    screenshot_dir: data/screenshots
     ignore_https_errors: true       # Ignore HTTPS certificate errors
     user_data_dir: data/chrome_profile  # Browser user data directory
     permissions:                    # Web permissions (camera, microphone, etc.)
@@ -64,14 +62,7 @@ platforms:
     cache_clear_interval_hours: 24         # Cleanup interval (hours)
     cache_clear_clear_on_idle: true        # Only clean up while idle
 
-  android:
-    enabled: null                   # Only on Windows
-    u2_port: 7912                   # uiautomator2 port
-    session_timeout: 300
-    screenshot_dir: data/screenshots
-
   ios:
-    enabled: null                   # Only on Windows
     go_ios_path: tools/go-ios/ios.exe  # go-ios executable path
     agent_port: 60105               # go-ios agent HTTP API port
     wda_base_port: 8100             # WDA base port
@@ -79,30 +70,12 @@ platforms:
     wda_bundle_id: com.cloudlink.WebDriverAgentRunner.new.xctrunner
     wda_testrunner_bundle_id: com.cloudlink.WebDriverAgentRunner.new.xctrunner
     wda_xctest_config: WebDriverAgentRunner.xctest
-    session_timeout: 300
-    screenshot_dir: data/screenshots
-
-  windows:
-    enabled: null                   # Only on Windows
-    session_timeout: 300
-    screenshot_dir: data/screenshots
-
-  mac:
-    enabled: null                   # Only on macOS
-    session_timeout: 300
-    screenshot_dir: data/screenshots
 
   harmony_mobile:
-    enabled: null                   # Only on Windows
     hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
-    session_timeout: 300
-    screenshot_dir: data/screenshots
 
   harmony_pc:
-    enabled: null                   # Only on Windows
     hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
-    session_timeout: 300
-    screenshot_dir: data/screenshots
 
 # 鸿蒙官方 HOScrcpy Java SDK 配置。
 # Java Bridge 只用于官方 H.264 WebSocket 推流和鸿蒙官方输入控制。
@@ -123,13 +96,6 @@ harmony_official:
   image_scale_size: 720            # 仅影响 JPEG 图像采集（setImageScaleSize）；H.264 视频始终按原生分辨率推流，坐标请用原生分辨率
   frame_rate: 10                  # 官方 H.264 采集帧率，直通推流按此帧率输出
   bit_rate: 4000000
-
-# Image Matching Settings
-image_matching:
-  default_threshold: 0.9            # Default matching threshold
-  methods:                          # Supported matching methods
-    - template                      # Template matching
-    - sift                          # Feature point matching
 
 # Logging Settings
 logging:
@@ -323,7 +289,6 @@ recording:
   output_dir: data/recordings    # Output directory
   default_fps: 10                # Default frame rate
   max_timeout_ms: 7200000        # Max timeout (ms), 2 hours
-  audio_enabled: false           # Enable audio recording (windows-screen-sidecar only, default false)
 
 # 本地任务和附件清理设置
 storage:

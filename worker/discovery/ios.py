@@ -184,8 +184,3 @@ class iOSDiscoverer:
     def discover_device(cls, udid: str) -> Optional[iOSDeviceInfo]:
         """发现指定设备。"""
         return cls.get_device_info(udid)
-
-    @classmethod
-    def check_device_connected(cls, udid: str) -> bool:
-        """检查指定设备是否连接。"""
-        return udid in cls.list_devices()

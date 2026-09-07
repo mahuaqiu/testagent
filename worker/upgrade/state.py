@@ -8,11 +8,10 @@
 import json
 import logging
 import os
-import sys
 import threading
 from typing import Optional
 
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 from worker.upgrade.models import UpgradeState
 
 logger = logging.getLogger(__name__)

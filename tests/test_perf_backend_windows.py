@@ -1,7 +1,6 @@
 """PerfwinBackend 和 PerformanceCollector 的 mock 单测。"""
 
 import sys
-import threading
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -10,7 +9,6 @@ from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 from worker.performance_monitor import (
     CollectStartRequest,
-    CollectStopRequest,
     PerformanceCollector,
     TargetProcess,
 )

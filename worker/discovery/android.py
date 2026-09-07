@@ -4,7 +4,6 @@ Android 设备发现模块。
 通过 ADB 发现连接到本机的 Android 设备。
 """
 
-import os
 import platform
 import re
 from dataclasses import dataclass
@@ -338,15 +337,3 @@ class AndroidDiscoverer:
                 return cls.get_device_info(udid, status)
 
         return None
-
-    @staticmethod
-    def check_u2_service(udid: str) -> bool:
-        """检查 uiautomator2 服务是否可用。"""
-        try:
-            import uiautomator2 as u2
-            device = u2.connect(udid)
-            # uiautomator2 3.x 移除了 ping()，用 info 属性检查连接
-            device.info  # noqa: F841
-            return True
-        except Exception:
-            return False

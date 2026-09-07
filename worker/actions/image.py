@@ -6,7 +6,6 @@ image_move, image_double_click, image_exist,
 ocr_click_same_row_image, ocr_check_same_row_image。
 """
 
-import base64
 import io
 import logging
 import time

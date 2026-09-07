@@ -4,9 +4,9 @@ OCR 服务 HTTP 客户端。
 供各端测试框架调用，实现基于视觉感知的元素定位。
 
 Usage:
-    from common.ocr_client import get_ocr_client
+    from common.ocr_client import OCRClient
 
-    client = get_ocr_client()
+    client = OCRClient(base_url="http://127.0.0.1:8081")
 
     # 文字识别
     texts = client.recognize(screenshot_bytes)
@@ -33,7 +33,6 @@ from typing import Optional
 
 import httpx
 
-from common.config import Config
 from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
 
@@ -285,45 +284,6 @@ class OCRClient:
             image_quality=image_quality,
             preserve_jpeg=preserve_jpeg,
         )
-
-    def get_texts(
-        self,
-        image_bytes: bytes,
-        lang: Optional[str] = None,
-        separator: str = "\n",
-        confidence_threshold: float = 0.0,
-        image_quality: int = 80,
-        preserve_jpeg: bool = True,
-    ) -> str:
-        """
-        获取图片中的所有文本（拼接后的纯文本）。
-
-        Args:
-            image_bytes: 图像字节数据。
-            lang: 语言代码，默认使用客户端配置。
-            separator: 文本分隔符，默认换行。
-            confidence_threshold: 置信度阈值。
-
-        Returns:
-            str: 拼接后的文本字符串。
-        """
-        compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
-        image_base64 = base64.b64encode(compressed).decode("utf-8")
-
-        response = self._post("/ocr/get_ocr_texts", {
-            "image": image_base64,
-            "lang": lang or self.lang,
-            "separator": separator,
-            "confidence_threshold": confidence_threshold,
-        })
-
-        if response.get("status") != "success":
-            logger.warning(f"OCR获取文本失败: status={response.get('status')}, error={response.get('error')}")
-            return ""
-
-        text = response.get("text", "")
-        logger.info(f"OCR获取文本成功，长度={len(text)} 字符")
-        return text
 
     def match_image(
         self,
@@ -631,43 +591,3 @@ class OCRClient:
         if index < len(matches):
             return matches[index].center
         return None
-
-
-# 全局客户端实例
-_client: Optional[OCRClient] = None
-
-
-def get_ocr_client(config: Optional[Config] = None) -> OCRClient:
-    """
-    获取全局 OCR 客户端实例。
-
-    Args:
-        config: 配置对象，默认使用全局配置。
-
-    Returns:
-        OCRClient: 客户端实例。
-    """
-    global _client
-
-    if _client is None:
-        if config is None:
-            from common.config import Config
-            config = Config()
-
-        ocr_config = config.get("ocr_service", {})
-        _client = OCRClient(
-            base_url=ocr_config.get("base_url", "http://127.0.0.1:8081"),
-            timeout=ocr_config.get("timeout", 30000),
-            retry=ocr_config.get("retry", 2),
-            lang=ocr_config.get("lang", "ch"),
-        )
-
-    return _client
-
-
-def reset_ocr_client():
-    """重置全局客户端实例（用于测试）。"""
-    global _client
-    if _client:
-        _client.close()
-    _client = None

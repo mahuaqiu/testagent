@@ -7,22 +7,19 @@ Web 平台执行引擎。
 """
 
 import asyncio
-import base64
 import concurrent.futures
 import io
 import logging
 import os
 import shutil
 import sys
-import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional, Set
 
-from PIL import Image
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+from playwright.async_api import async_playwright, BrowserContext, Page, Playwright
 
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
 from worker.config import PlatformConfig
@@ -42,10 +39,6 @@ try:
 except ImportError:
     pass
 
-from worker.platforms.base import PlatformManager
-from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 
 logger = logging.getLogger(__name__)
 

@@ -33,7 +33,7 @@ from worker.platforms.ios import iOSPlatformManager
 from worker.platforms.mac import MacPlatformManager
 from worker.platforms.web import WebPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
-from worker.reporter import DesktopInfo, HarmonyDeviceInfo, Reporter, WorkerCapabilities, WorkerReport
+from worker.reporter import Reporter
 from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
 from worker.tools import get_all_script_versions
 from worker.runtime import WorkerRuntime
@@ -264,17 +264,6 @@ class Worker:
                 except Exception as e:
                     logger.warning(f"升级前关闭{platform}官方 Java Bridge 失败: {e}")
 
-    def _discover_environment(self) -> None:
-        """发现宿主机环境（不含设备发现）。"""
-        # 发现宿主机信息
-        self.host_info = HostDiscoverer.discover()
-
-        # 根据操作系统决定支持的平台
-        self.supported_platforms = HostDiscoverer.get_supported_platforms()
-
-        logger.info(f"Host: {self.host_info.hostname} ({self.host_info.os_type})")
-        logger.info(f"Supported platforms: {self.supported_platforms}")
-
     def _restart_harmony_hdc_server(self) -> None:
         """Worker 启动时重启一次 HDC server。"""
         from worker.platforms.harmony_hdc import restart_hdc_server
@@ -472,72 +461,6 @@ class Worker:
             self.reporter = Reporter(self.config)
             logger.info(f"Reporter initialized: {self.config.platform_api}")
 
-    def _report_full(self) -> None:
-        """全量上报。"""
-        if not self.reporter:
-            return
-
-        # 构建设备列表
-        devices = []
-
-        # 移动设备
-        for device in self.android_devices:
-            devices.append(device)
-        for device in self.ios_devices:
-            devices.append(device)
-
-        # 鸿蒙设备由 DeviceMonitor 维护，保留形态、连接信息和能力后再上报。
-        if self.device_monitor:
-            harmony_devices = self.device_monitor.get_all_devices()
-            for platform, category in (("harmony_mobile", "mobile"), ("harmony_pc", "pc")):
-                for device in harmony_devices.get(platform, []):
-                    devices.append(HarmonyDeviceInfo(
-                        udid=device.get("udid", ""),
-                        name=device.get("name", ""),
-                        model=device.get("model", ""),
-                        sys_version=device.get("sys_version", ""),
-                        sdk_version=device.get("sdk_version", ""),
-                        display_size=tuple(device.get("display_size", (0, 0))),
-                        status="online",
-                        device_category=device.get("device_category", category),
-                        connection_type=device.get("connection_type", "unknown"),
-                        connection_status=device.get("connection_status", "ready"),
-                        capabilities=list(device.get("capabilities", [])),
-                    ))
-
-        # 桌面信息
-        if self.host_info:
-            desktop = DesktopInfo(
-                platform=self.host_info.os_type,
-                resolution=self.host_info.display_resolution,
-                scale=self.host_info.display_scale,
-            )
-            devices.append(desktop)
-
-        # 构建能力
-        capabilities = WorkerCapabilities(
-            has_ocr=self.ocr_client is not None,
-            browsers=["chromium", "firefox", "webkit"] if "web" in self.supported_platforms else [],
-            max_sessions=5,
-            image_matching=True,
-        )
-
-        # 构建上报数据
-        report = WorkerReport(
-            worker_id=self.worker_id,
-            hostname=self.host_info.hostname if self.host_info else "unknown",
-            ip_addresses=self.host_info.ip_addresses if self.host_info else [],
-            os_type=self.host_info.os_type if self.host_info else "unknown",
-            os_version=self.host_info.os_version if self.host_info else "unknown",
-            supported_platforms=self.supported_platforms,
-            status=self.status,
-            port=self.port,
-            devices=devices,
-            capabilities=capabilities,
-        )
-
-        self.reporter.report_full(report)
-
     def _report_devices(self) -> None:
         """
         使用新格式上报设备信息。
@@ -613,63 +536,12 @@ class Worker:
 
         return payloads
 
-    def _start_device_monitor(self) -> None:
-        """启动设备监控（已由 DeviceMonitor 模块接管）。"""
-        # 设备监控已由 DeviceMonitor 模块接管
-        # 此方法保留用于兼容，实际初始化在 _init_platform_managers 中完成
-        pass
-
     def _stop_device_monitor(self) -> None:
         """停止设备监控线程。"""
         self._stop_event.set()
         if self._device_monitor_thread:
             self._device_monitor_thread.join(timeout=5)
         logger.info("Device monitor stopped")
-
-    def _device_monitor_loop(self) -> None:
-        """设备监控循环（已由 DeviceMonitor 模块接管）。"""
-        # 设备监控已由 DeviceMonitor 模块接管
-        pass
-
-    def _check_device_changes(self) -> None:
-        """检查设备变化。"""
-        changes = []
-
-        # 检查 Android 设备
-        if AndroidDiscoverer.check_adb_available():
-            new_devices = AndroidDiscoverer.discover()
-            changes.extend(self._compare_devices("android", self.android_devices, new_devices))
-            self.android_devices = new_devices
-
-        # 检查 iOS 设备
-        if iOSDiscoverer.check_go_ios_available():
-            new_devices = iOSDiscoverer.discover()
-            changes.extend(self._compare_devices("ios", self.ios_devices, new_devices))
-            self.ios_devices = new_devices
-
-        # 如果有变化，上报
-        if changes and self.reporter:
-            self._report_devices()
-            logger.info(f"Device changes detected: {len(changes)} changes")
-
-    def _compare_devices(self, platform: str, old_list: list, new_list: list) -> list[str]:
-        """比较设备列表变化。"""
-        changes = []
-
-        old_udids = {d.udid for d in old_list}
-        new_udids = {d.udid for d in new_list}
-
-        # 新增设备
-        added = new_udids - old_udids
-        if added:
-            changes.extend([f"+{platform}:{udid}" for udid in added])
-
-        # 移除设备
-        removed = old_udids - new_udids
-        if removed:
-            changes.extend([f"-{platform}:{udid}" for udid in removed])
-
-        return changes
 
     def _on_device_change(self, devices: dict) -> None:
         """设备状态变更回调。"""

@@ -6,12 +6,11 @@
 
 import logging
 import os
-import sys
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from common.request_context import get_request_id
-from common.packaging import is_packaged, get_app_dir
+from common.packaging import get_app_dir
 
 
 class RequestIdFormatter(logging.Formatter):

@@ -14,7 +14,7 @@ import pystray
 from PIL import Image
 from common.utils import popen_cmd
 
-from common.packaging import is_packaged, get_base_dir
+from common.packaging import get_base_dir
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,6 @@ class TrayManager:
 
     def _on_tools_class_finder_click(self):
         """工具 - class-finder 菜单点击。"""
-        import subprocess
 
         logger.info("Menu clicked: tools/class-finder")
         base_dir = get_base_dir()

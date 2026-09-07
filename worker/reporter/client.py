@@ -3,12 +3,11 @@
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, List
 
 import httpx
 
 from worker.config import WorkerConfig
-from worker.reporter.models import WorkerReport, HeartbeatReport, DeviceChangeEvent
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ class Reporter:
     """
     平台上报客户端。
 
-    负责向配置平台上报 Worker 状态、设备信息、心跳等。
+    负责向配置平台上报 Worker 状态和设备注册信息。
     """
 
     def __init__(self, config: WorkerConfig):
@@ -102,128 +101,6 @@ class Reporter:
 
         except Exception as e:
             logger.error(f"Failed to register env: {e}")
-            return False
-
-    def report_full(self, report: WorkerReport) -> bool:
-        """
-        全量上报 Worker 信息。
-
-        Args:
-            report: Worker 上报数据
-
-        Returns:
-            bool: 上报是否成功
-        """
-        if not self._enabled:
-            logger.debug("Reporting disabled, skipping full report")
-            return True
-
-        try:
-            url = f"{self.platform_api}/register"
-            response = self._client.post(
-                url,
-                json=report.to_dict(),
-            )
-            response.raise_for_status()
-
-            logger.info(f"Full report sent successfully to {url}")
-            return True
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to report (HTTP {e.response.status_code}): {e}")
-            return False
-
-        except Exception as e:
-            logger.error(f"Failed to report: {e}")
-            return False
-
-    def report_heartbeat(self, heartbeat: HeartbeatReport) -> bool:
-        """
-        心跳上报。
-
-        Args:
-            heartbeat: 心跳数据
-
-        Returns:
-            bool: 上报是否成功
-        """
-        if not self._enabled:
-            return True
-
-        try:
-            url = f"{self.platform_api}/heartbeat"
-            response = self._client.post(
-                url,
-                json=heartbeat.to_dict(),
-            )
-            response.raise_for_status()
-
-            logger.debug(f"Heartbeat sent to {url}")
-            return True
-
-        except Exception as e:
-            logger.warning(f"Heartbeat failed: {e}")
-            return False
-
-    def report_device_change(self, event: DeviceChangeEvent) -> bool:
-        """
-        设备变化上报。
-
-        Args:
-            event: 设备变化事件
-
-        Returns:
-            bool: 上报是否成功
-        """
-        if not self._enabled:
-            return True
-
-        try:
-            url = f"{self.platform_api}/device/change"
-            response = self._client.post(
-                url,
-                json=event.to_dict(),
-            )
-            response.raise_for_status()
-
-            logger.info(f"Device change reported: {event.event_type} {event.platform}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to report device change: {e}")
-            return False
-
-    def report_devices(self, data: dict) -> bool:
-        """
-        使用新格式上报设备信息。
-
-        Args:
-            data: 设备信息数据（包含 ip, port, devices）
-
-        Returns:
-            bool: 上报是否成功
-        """
-        if not self._enabled:
-            logger.debug("Reporting disabled, skipping devices report")
-            return True
-
-        try:
-            url = f"{self.platform_api}/devices"
-            response = self._client.post(
-                url,
-                json=data,
-            )
-            response.raise_for_status()
-
-            logger.info(f"Devices report sent successfully to {url}")
-            return True
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Failed to report devices (HTTP {e.response.status_code}): {e}")
-            return False
-
-        except Exception as e:
-            logger.error(f"Failed to report devices: {e}")
             return False
 
     def close(self):
