@@ -5,6 +5,8 @@ REM   build.bat                          (default)
 REM   build.bat -PythonPath "C:\python\python.exe"
 REM   build.bat -Clean                   (rebuild venv)
 REM   build.bat -BuildInstaller          (build installer directly)
+REM   build.bat -JavaRuntimePath "D:\Program Files\jdk" -JavaCompilerPath "D:\Program Files\jdk"
+REM                                      (Java paths default to D:\Program Files\jdk in build_windows.ps1)
 
 setlocal EnableDelayedExpansion
 

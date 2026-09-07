@@ -6,8 +6,8 @@ param(
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
     [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.2.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
-    [string]$JavaRuntimePath = "",  # JRE 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
-    [string]$JavaCompilerPath = "",  # 可选：JDK 中 javac.exe 的路径；未指定时从 PATH 查找
+    [string]$JavaRuntimePath = "D:\Program Files\jdk",  # JRE/JDK 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
+    [string]$JavaCompilerPath = "D:\Program Files\jdk",  # JDK 根目录或 javac.exe 路径；未指定时从 PATH 查找
     [switch]$Clean,
     [switch]$BuildInstaller
 )
