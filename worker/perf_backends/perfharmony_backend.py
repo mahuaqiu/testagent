@@ -188,3 +188,98 @@ class PerfharmonyBackend:
             return values
         keyword = search.lower()
         return [(pid, name) for pid, name in values if keyword in name.lower()]
+
+
+class HarmonyMultiBackend:
+    """多目标鸿蒙采集：每个包名/PID 一个 SP_daemon 实例（真机验证可并发），
+    按时间桶合并成单路样本流，对上层保持与单后端一致的方法面。
+
+    合并规则：以 floor(timestamp)/interval 为桶；system/hwinfo_raw 取桶内
+    首个子后端的值（同一设备系统指标一致），processes/aggregated 按子后端
+    顺序拼接，sequence 由本后端重新编号。
+    """
+
+    def __init__(self, backends: list[PerfharmonyBackend], interval: int) -> None:
+        if not backends:
+            raise ValueError("HarmonyMultiBackend 至少需要一个子后端")
+        self._backends = backends
+        self._interval = max(1, int(interval))
+        self._sequence = 0
+
+    def start(
+        self,
+        *,
+        interval: float,
+        duration: float | None,
+        packages: list[str | None],
+        match_mode: str = "fuzzy",
+    ) -> None:
+        """按 packages 顺序启动各子后端（一包一实例）。"""
+        if len(packages) != len(self._backends):
+            raise ValueError("packages 数量必须与子后端数量一致")
+        for backend, package in zip(self._backends, packages):
+            backend.start(
+                interval=interval, duration=duration, package=package, match_mode=match_mode
+            )
+
+    def heartbeat(self) -> None:
+        """扇出精准模式 PID 复核。"""
+        for backend in self._backends:
+            backend.heartbeat()
+
+    def stop(self) -> None:
+        for backend in self._backends:
+            backend.stop()
+
+    def is_running(self) -> bool:
+        return any(backend.is_running() for backend in self._backends)
+
+    def buffer_len(self) -> int:
+        return sum(backend.buffer_len() for backend in self._backends)
+
+    def get_result(self) -> Any:
+        """按时间桶合并各子后端样本，sequence 重新编号。"""
+        merged: dict[int, dict] = {}
+        order: list[int] = []
+        for backend in self._backends:
+            for sample in backend.get_result().samples:
+                ts = getattr(sample, "timestamp", None)
+                if ts is None:
+                    continue
+                bucket = int(ts.timestamp()) // self._interval
+                elapsed_ms = int(getattr(sample, "elapsed_ms", 0) or 0)
+                if bucket not in merged:
+                    order.append(bucket)
+                    merged[bucket] = {
+                        "sequence": 0,
+                        "elapsed_ms": elapsed_ms,
+                        "timestamp": ts,
+                        "system": getattr(sample, "system", None),
+                        "hwinfo_raw": getattr(sample, "hwinfo_raw", None),
+                        "processes": list(getattr(sample, "processes", None) or []),
+                        "aggregated": list(getattr(sample, "aggregated", None) or []),
+                        "top_n_cpu": None,
+                        "top_n_gpu": None,
+                    }
+                else:
+                    entry = merged[bucket]
+                    entry["elapsed_ms"] = min(entry["elapsed_ms"], elapsed_ms)
+                    entry["processes"].extend(getattr(sample, "processes", None) or [])
+                    entry["aggregated"].extend(getattr(sample, "aggregated", None) or [])
+        samples = []
+        for bucket in order:
+            self._sequence += 1
+            entry = merged[bucket]
+            entry["sequence"] = self._sequence
+            samples.append(entry)
+        return SimpleNamespace(samples=samples)
+
+    def last_error(self) -> str | None:
+        """任一子后端仍在运行时不返回错误；全部停止后返回首个非空错误。"""
+        if self.is_running():
+            return None
+        for backend in self._backends:
+            error = backend.last_error()
+            if error:
+                return error
+        return None
