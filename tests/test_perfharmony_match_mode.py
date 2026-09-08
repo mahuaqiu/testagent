@@ -12,7 +12,6 @@ import pytest
 from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.performance_monitor import CollectStartRequest, PerformanceCollector, TargetProcess
 
-
 # ---------------------------------------------------------------------------
 # CollectStartRequest.match_mode 协议契约
 # ---------------------------------------------------------------------------
