@@ -13,7 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from worker.perf_backends.base import CollectBackend
-from worker.perf_backends.perfharmony_backend import HarmonyMultiBackend, PerfharmonyBackend
+from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 
 logger = logging.getLogger(__name__)
@@ -293,49 +293,30 @@ class PerformanceCollector:
         if device_type is None:
             raise ValueError("性能采集内部请求缺少 device_type")
 
-        # 鸿蒙：SP_daemon 一次采集一个 -PKG 或一个 -PID；
-        # 多目标时每个目标起一个实例并发采集（真机验证可并发）。
+        # 鸿蒙：SP_daemon 设备单例，一次采集仅支持一个应用（真机实证：
+        # 新实例会把旧实例顶掉，多应用同时采集不可行）。
         if device_type in ("harmony_pc", "harmony_mobile"):
             if not request.device_sn:
                 raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
+            if len(request.target_processes) > 1:
+                raise ValueError("鸿蒙采集一次仅支持一个应用（SP_daemon 单应用限制）")
             match_mode = getattr(request, "match_mode", "fuzzy") or "fuzzy"
-            # 每个目标一个实例，包名归一取冒号前（SP_daemon -PKG 仅认包名）。
-            children: list[tuple[PerfharmonyBackend, str]] = []
-            for tp in request.target_processes:
-                package = self._harmony_bundle_base(tp.name.strip()) if tp.name.strip() else ""
-                if package:
-                    children.append(
-                        (
-                            PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path),
-                            package,
-                        )
-                    )
-            if not children:
-                # 未选应用：仅系统指标。
-                backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
-                backend.start(interval=float(request.interval), duration=float(request.timeout))
-                self._backend = backend
-                return
-            if len(children) == 1:
-                backend, package = children[0]
-                backend.start(
-                    interval=float(request.interval),
-                    duration=float(request.timeout),
-                    package=package,
-                    match_mode=match_mode,
-                )
-                self._backend = backend
-                return
-            multi = HarmonyMultiBackend(
-                [backend for backend, _ in children], interval=request.interval
+            package = (
+                request.target_processes[0].name.strip()
+                if request.target_processes
+                else None
             )
-            multi.start(
+            # 兜底归一：若传入「包名:子进程」则取包名，SP_daemon -PKG 仅认包名。
+            if package:
+                package = self._harmony_bundle_base(package)
+            backend = PerfharmonyBackend(udid=request.device_sn, hdc_path=self._hdc_path)
+            backend.start(
                 interval=float(request.interval),
                 duration=float(request.timeout),
-                packages=[package for _, package in children],
+                package=package or None,
                 match_mode=match_mode,
             )
-            self._backend = multi
+            self._backend = backend
             return
 
         if device_type != "windows":

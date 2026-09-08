@@ -26,7 +26,8 @@ class _EmptyResult:
 class PerfharmonyBackend:
     """通过 HDC UDID 采集 HarmonyOS 设备性能。
 
-    match_mode：
+    SP_daemon 为设备级单例（真机实证：新实例会把旧实例顶掉），一次采集
+    仅支持一个应用。match_mode：
     - fuzzy：设备端 SP_daemon -PKG 按包名采集（自动含主进程+子进程）；
     - exact：ps -ef 精确解析 PID 后 SP_daemon -PID 单进程采集；
       应用未启动时先仅采系统指标，heartbeat 每 30s 复核，
@@ -90,34 +91,42 @@ class PerfharmonyBackend:
         self._monitor.start()
 
     def heartbeat(self) -> None:
-        """精准模式下按 30s 节奏复核 PID；由采集循环在每轮排空前调用。"""
+        """精准模式下按 30s 节奏复核 PID；由采集循环在每轮排空前调用。
+
+        PID 出现/变化时：暂存旧样本 → 停旧流 → 以新 PID 重启
+        （新 Monitor 启动前的设备级 -stop 会顺带清掉旧实例）。
+        """
+        if self._check_pid_due_and_prepare():
+            self._start_monitor()
+            self._restarting = False
+
+    def _check_pid_due_and_prepare(self) -> bool:
+        """复核 PID 是否出现/变化；变化则做好准备（暂存+停旧+更新 PID）。
+
+        返回 True 表示需要（或已由调用方协调）重启采集流；
+        本方法只停旧流、不起新流，重启动作交给调用方。
+        """
         if self._match_mode != "exact" or not self._package:
-            return
+            return False
         if time.monotonic() - self._last_pid_check < PID_CHECK_INTERVAL_SECS:
-            return
+            return False
         self._last_pid_check = time.monotonic()
         try:
             pid = self._resolve_pid(self._package)
         except Exception as error:
             logger.warning("鸿蒙精准采集 PID 复核失败: %s", error)
-            return
+            return False
         if pid == self._pid:
-            return
+            return False
         logger.info("鸿蒙精准采集 PID 变更: %s -> %s，重启采集流", self._pid, pid)
         old = self._monitor
         # 重启窗口期视为运行中，避免外层采集循环误判终态。
         self._restarting = True
-        try:
-            if old is not None:
-                self._stash_pending(old)
-                old.stop()
-        finally:
-            self._pid = pid
-            self._last_pid_check = time.monotonic()
-            try:
-                self._start_monitor()
-            finally:
-                self._restarting = False
+        if old is not None:
+            self._stash_pending(old)
+            old.stop()
+        self._pid = pid
+        return True
 
     def _resolve_pid(self, package: str) -> int | None:
         """按包名精确解析主进程 PID：进程名恰为包名优先，其次首个「包名:子进程」。"""
@@ -188,98 +197,3 @@ class PerfharmonyBackend:
             return values
         keyword = search.lower()
         return [(pid, name) for pid, name in values if keyword in name.lower()]
-
-
-class HarmonyMultiBackend:
-    """多目标鸿蒙采集：每个包名/PID 一个 SP_daemon 实例（真机验证可并发），
-    按时间桶合并成单路样本流，对上层保持与单后端一致的方法面。
-
-    合并规则：以 floor(timestamp)/interval 为桶；system/hwinfo_raw 取桶内
-    首个子后端的值（同一设备系统指标一致），processes/aggregated 按子后端
-    顺序拼接，sequence 由本后端重新编号。
-    """
-
-    def __init__(self, backends: list[PerfharmonyBackend], interval: int) -> None:
-        if not backends:
-            raise ValueError("HarmonyMultiBackend 至少需要一个子后端")
-        self._backends = backends
-        self._interval = max(1, int(interval))
-        self._sequence = 0
-
-    def start(
-        self,
-        *,
-        interval: float,
-        duration: float | None,
-        packages: list[str | None],
-        match_mode: str = "fuzzy",
-    ) -> None:
-        """按 packages 顺序启动各子后端（一包一实例）。"""
-        if len(packages) != len(self._backends):
-            raise ValueError("packages 数量必须与子后端数量一致")
-        for backend, package in zip(self._backends, packages):
-            backend.start(
-                interval=interval, duration=duration, package=package, match_mode=match_mode
-            )
-
-    def heartbeat(self) -> None:
-        """扇出精准模式 PID 复核。"""
-        for backend in self._backends:
-            backend.heartbeat()
-
-    def stop(self) -> None:
-        for backend in self._backends:
-            backend.stop()
-
-    def is_running(self) -> bool:
-        return any(backend.is_running() for backend in self._backends)
-
-    def buffer_len(self) -> int:
-        return sum(backend.buffer_len() for backend in self._backends)
-
-    def get_result(self) -> Any:
-        """按时间桶合并各子后端样本，sequence 重新编号。"""
-        merged: dict[int, dict] = {}
-        order: list[int] = []
-        for backend in self._backends:
-            for sample in backend.get_result().samples:
-                ts = getattr(sample, "timestamp", None)
-                if ts is None:
-                    continue
-                bucket = int(ts.timestamp()) // self._interval
-                elapsed_ms = int(getattr(sample, "elapsed_ms", 0) or 0)
-                if bucket not in merged:
-                    order.append(bucket)
-                    merged[bucket] = {
-                        "sequence": 0,
-                        "elapsed_ms": elapsed_ms,
-                        "timestamp": ts,
-                        "system": getattr(sample, "system", None),
-                        "hwinfo_raw": getattr(sample, "hwinfo_raw", None),
-                        "processes": list(getattr(sample, "processes", None) or []),
-                        "aggregated": list(getattr(sample, "aggregated", None) or []),
-                        "top_n_cpu": None,
-                        "top_n_gpu": None,
-                    }
-                else:
-                    entry = merged[bucket]
-                    entry["elapsed_ms"] = min(entry["elapsed_ms"], elapsed_ms)
-                    entry["processes"].extend(getattr(sample, "processes", None) or [])
-                    entry["aggregated"].extend(getattr(sample, "aggregated", None) or [])
-        samples = []
-        for bucket in order:
-            self._sequence += 1
-            entry = merged[bucket]
-            entry["sequence"] = self._sequence
-            samples.append(entry)
-        return SimpleNamespace(samples=samples)
-
-    def last_error(self) -> str | None:
-        """任一子后端仍在运行时不返回错误；全部停止后返回首个非空错误。"""
-        if self.is_running():
-            return None
-        for backend in self._backends:
-            error = backend.last_error()
-            if error:
-                return error
-        return None

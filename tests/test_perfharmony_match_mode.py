@@ -70,8 +70,8 @@ class FakeMonitor:
     created = []
     next_samples = []
     ps_list = []
-
-    def __init__(self, *, udid, hdc_path=None, interval=1.0, duration=None, package=None, pid=None):
+    def __init__(self, *, udid, hdc_path=None, interval=1.0, duration=None,
+                 package=None, pid=None):
         self.kwargs = dict(
             udid=udid, hdc_path=hdc_path, interval=interval, duration=duration,
             package=package, pid=pid,
@@ -180,115 +180,3 @@ def test_fuzzy_mode_heartbeat_is_noop(fake_module):
     assert len(FakeMonitor.created) == 1
 
 
-# ---------------------------------------------------------------------------
-# HarmonyMultiBackend 多目标并发采集
-# ---------------------------------------------------------------------------
-
-
-def test_multi_backend_merges_samples_by_time_bucket(fake_module):
-    from worker.perf_backends.perfharmony_backend import HarmonyMultiBackend
-
-    backend_a = PerfharmonyBackend(udid="SN1")
-    backend_b = PerfharmonyBackend(udid="SN1")
-    multi = HarmonyMultiBackend([backend_a, backend_b], interval=5)
-    multi.start(
-        interval=5,
-        duration=3600,
-        packages=["com.app.a", "com.app.b"],
-        match_mode="fuzzy",
-    )
-    assert FakeMonitor.created[0].kwargs["package"] == "com.app.a"
-    assert FakeMonitor.created[1].kwargs["package"] == "com.app.b"
-
-    ts = datetime(2026, 9, 8, 0, 0, 2, tzinfo=timezone.utc)
-    sample_a = types.SimpleNamespace(
-        sequence=1, elapsed_ms=2000, timestamp=ts,
-        system={"cpu_percent": 1.0}, hwinfo_raw={"k": 1},
-        processes=[("p-a",)], aggregated=[{"name": "com.app.a"}],
-        top_n_cpu=None, top_n_gpu=None,
-    )
-    sample_b = types.SimpleNamespace(
-        sequence=1, elapsed_ms=2300, timestamp=ts,
-        system={"cpu_percent": 1.0}, hwinfo_raw={"k": 1},
-        processes=[("p-b",)], aggregated=[{"name": "com.app.b"}],
-        top_n_cpu=None, top_n_gpu=None,
-    )
-    backend_a._monitor.get_result = lambda: _FakeResult([sample_a])
-    backend_b._monitor.get_result = lambda: _FakeResult([sample_b])
-
-    merged = multi.get_result().samples
-    assert len(merged) == 1
-    assert merged[0]["sequence"] == 1
-    assert merged[0]["system"] == {"cpu_percent": 1.0}
-    assert merged[0]["elapsed_ms"] == 2000  # 同桶取更早的 elapsed
-    assert merged[0]["processes"] == [("p-a",), ("p-b",)]
-    assert [agg["name"] for agg in merged[0]["aggregated"]] == ["com.app.a", "com.app.b"]
-
-
-def test_multi_backend_renumbers_sequence_across_buckets(fake_module):
-    from worker.perf_backends.perfharmony_backend import HarmonyMultiBackend
-
-    backend_a = PerfharmonyBackend(udid="SN1")
-    backend_b = PerfharmonyBackend(udid="SN1")
-    multi = HarmonyMultiBackend([backend_a, backend_b], interval=5)
-    multi.start(interval=5, duration=3600, packages=["a", "b"])
-
-    ts1 = datetime(2026, 9, 8, 0, 0, 2, tzinfo=timezone.utc)
-    ts2 = datetime(2026, 9, 8, 0, 0, 9, tzinfo=timezone.utc)
-
-    def fake_get_result(backend, samples):
-        return lambda: _FakeResult(samples)
-
-    backend_a._monitor.get_result = fake_get_result(
-        backend_a, [
-            types.SimpleNamespace(sequence=1, elapsed_ms=2000, timestamp=ts1,
-                                  system={}, hwinfo_raw={}, processes=[("a1",)],
-                                  aggregated=[], top_n_cpu=None, top_n_gpu=None),
-            types.SimpleNamespace(sequence=2, elapsed_ms=7000, timestamp=ts2,
-                                  system={}, hwinfo_raw={}, processes=[("a2",)],
-                                  aggregated=[], top_n_cpu=None, top_n_gpu=None),
-        ]
-    )
-    backend_b._monitor.get_result = fake_get_result(
-        backend_b, [
-            types.SimpleNamespace(sequence=1, elapsed_ms=2100, timestamp=ts1,
-                                  system={}, hwinfo_raw={}, processes=[("b1",)],
-                                  aggregated=[], top_n_cpu=None, top_n_gpu=None),
-        ]
-    )
-
-    merged = multi.get_result().samples
-    assert [s["sequence"] for s in merged] == [1, 2]
-    assert merged[0]["processes"] == [("a1",), ("b1",)]
-    assert merged[1]["processes"] == [("a2",)]
-
-
-def test_multi_backend_is_running_and_last_error(fake_module):
-    from worker.perf_backends.perfharmony_backend import HarmonyMultiBackend
-
-    backend_a = PerfharmonyBackend(udid="SN1")
-    backend_b = PerfharmonyBackend(udid="SN1")
-    multi = HarmonyMultiBackend([backend_a, backend_b], interval=5)
-    multi.start(interval=5, duration=3600, packages=["a", "b"])
-
-    assert multi.is_running() is True
-    assert multi.last_error() is None
-
-    # 一个子后端出错停止、另一个仍在运行：整体视为运行中，不报错误。
-    backend_a._monitor.stopped = True
-    backend_a._monitor.last_error = lambda: "device error"
-    assert multi.is_running() is True
-    assert multi.last_error() is None
-
-    # 全部停止后暴露首个错误。
-    backend_b._monitor.stopped = True
-    assert multi.is_running() is False
-    assert multi.last_error() == "device error"
-
-
-def test_multi_backend_rejects_packages_count_mismatch(fake_module):
-    from worker.perf_backends.perfharmony_backend import HarmonyMultiBackend
-
-    multi = HarmonyMultiBackend([PerfharmonyBackend(udid="SN1")], interval=5)
-    with pytest.raises(ValueError):
-        multi.start(interval=5, duration=3600, packages=["a", "b"])
