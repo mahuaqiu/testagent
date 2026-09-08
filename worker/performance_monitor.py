@@ -8,7 +8,7 @@ import logging
 import threading
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,10 @@ class CollectStartRequest(BaseModel):
     )
     device_type: str | None = Field(None, description="设备类型，鸿蒙必须显式传入")
     device_sn: str | None = Field(None, description="设备物理标识，鸿蒙为 HDC UDID")
+    match_mode: Literal["fuzzy", "exact"] = Field(
+        "fuzzy",
+        description="鸿蒙匹配模式：fuzzy=设备端 -PKG 包名匹配；exact=ps -ef 定位 PID 后 -PID 精准采集",
+    )
 
 
 class CollectStopRequest(BaseModel):
@@ -93,6 +97,7 @@ class PerformanceCollector:
         self._interval: int = 5
         self._timeout: int = 43200  # 默认 12 小时
         self._target_processes: list[TargetProcess] = []
+        self._match_mode: str = "fuzzy"
         self._start_time: datetime | None = None
         self._collecting: bool = False
         self._stopping: bool = False
@@ -212,6 +217,7 @@ class PerformanceCollector:
             self._interval = request.interval
             self._timeout = request.timeout
             self._target_processes = list(request.target_processes)
+            self._match_mode = request.match_mode or "fuzzy"
             self._gpu_fallback_logged = False
             self._gpu_source_last = None
 
@@ -259,6 +265,8 @@ class PerformanceCollector:
         if request.device_type != self._device_type:
             return False
         if request.device_sn != self._device_sn:
+            return False
+        if (self._match_mode or "fuzzy") != (request.match_mode or "fuzzy"):
             return False
         # timeout 不同可以接受（不影响采集逻辑）
         if len(self._target_processes) != len(request.target_processes):
@@ -417,6 +425,7 @@ class PerformanceCollector:
         self._collect_id = None
         self._stopping = False
         self._target_processes = []
+        self._match_mode = "fuzzy"
         self._start_time = None
 
         logger.info(f"采集已停止: device_id={self.device_id}")
