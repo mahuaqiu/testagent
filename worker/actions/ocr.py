@@ -23,6 +23,7 @@ from worker.actions.base import (
     _parse_row_tolerance,
     _region_b64,
 )
+from worker.actions.spec import ActionTimedOut
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
@@ -249,7 +250,11 @@ class OcrWaitAction(BaseActionExecutor):
 
 
 class OcrAssertAction(BaseActionExecutor):
-    """OCR 文字断言。"""
+    """OCR 文字断言。
+
+    默认单次截图立即判定；显式传入 timeout 时以该值为轮询窗口（毫秒），
+    每隔 ASSERT_POLL_INTERVAL 复查一次，窗口结束仍未通过则判定失败。
+    """
 
     name = "ocr_assert"
     requires_ocr = True
@@ -273,58 +278,73 @@ class OcrAssertAction(BaseActionExecutor):
                 error="value is required",
             )
 
-        # 获取截图并 OCR 识别（只识别一次）
-        screenshot = platform.take_screenshot(context)
-        if action.region:
-            screenshot = self._crop_region(screenshot, action.region)
+        last_screenshot = None
+        found: list[str] = []
+        not_found: list[str] = []
+        try:
+            while True:
+                # 获取截图并 OCR 识别（每轮识别一次）
+                screenshot = platform.take_screenshot(context)
+                if action.region:
+                    screenshot = self._crop_region(screenshot, action.region)
+                last_screenshot = screenshot
 
-        # 调用一次 OCR，结果直接传递给批量检查（并发任务间不共享缓存）
-        ocr_results = platform.ocr_client.recognize(screenshot)
+                # 调用一次 OCR，结果直接传递给批量检查（并发任务间不共享缓存）
+                ocr_results = platform.ocr_client.recognize(screenshot)
 
-        # 在识别结果中批量检查
-        found, not_found = self._check_texts_in_ocr_result(
-            platform, texts, action.match_mode, ocr_results=ocr_results
-        )
+                # 在识别结果中批量检查
+                found, not_found = self._check_texts_in_ocr_result(
+                    platform, texts, action.match_mode, ocr_results=ocr_results
+                )
 
-        # 根据 negate 参数返回结果
+                if action.negate:
+                    # negate=true: 要求所有文字都不存在，发现即失败
+                    if found:
+                        return ActionResult(
+                            number=0,
+                            action_type=self.name,
+                            status=ActionStatus.FAILED,
+                            error=f"Texts found but expected not exist: {found}",
+                            ocr_info=self._get_last_ocr_info(platform),
+                            region_screenshot=_region_b64(screenshot, bool(action.region)),
+                        )
+                else:
+                    # negate=false: 要求所有文字都存在，全部存在即成功
+                    if not not_found:
+                        return ActionResult(
+                            number=0,
+                            action_type=self.name,
+                            status=ActionStatus.SUCCESS,
+                            output=f"All texts found: {texts}",
+                            ocr_info=self._get_last_ocr_info(platform),
+                        )
+
+                # 本轮未通过：显式传入 timeout 时按轮询窗口复查，否则结束轮询
+                wait_seconds = self._next_assert_poll_wait(action)
+                if wait_seconds is None:
+                    break
+                self._wait(action, wait_seconds)
+        except ActionTimedOut:
+            # 轮询窗口耗尽（含最后一轮检查超时），按断言失败返回而不是任务级 TIMEOUT
+            pass
+
+        # 窗口结束仍未通过，根据 negate 参数返回最终结果
         if action.negate:
-            # negate=true: 要求所有文字都不存在
-            if found:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error=f"Texts found but expected not exist: {found}",
-                    ocr_info=self._get_last_ocr_info(platform),
-                    region_screenshot=_region_b64(screenshot, bool(action.region)),
-                )
-            else:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output=f"All texts not found as expected: {texts}",
-                    ocr_info=self._get_last_ocr_info(platform),
-                )
-        else:
-            # negate=false: 要求所有文字都存在
-            if not_found:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error=f"Texts not found: {not_found}",
-                    ocr_info=self._get_last_ocr_info(platform),
-                    region_screenshot=_region_b64(screenshot, bool(action.region)),
-                )
-            else:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output=f"All texts found: {texts}",
-                    ocr_info=self._get_last_ocr_info(platform),
-                )
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output=f"All texts not found as expected: {texts}",
+                ocr_info=self._get_last_ocr_info(platform),
+            )
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.FAILED,
+            error=f"Texts not found: {not_found}",
+            ocr_info=self._get_last_ocr_info(platform),
+            region_screenshot=_region_b64(last_screenshot, bool(action.region)),
+        )
 
 
 class OcrGetTextAction(BaseActionExecutor):

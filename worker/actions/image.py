@@ -20,6 +20,7 @@ from worker.actions.base import (
     _parse_row_tolerance,
     _region_b64,
 )
+from worker.actions.spec import ActionTimedOut
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
@@ -189,7 +190,11 @@ class ImageWaitAction(BaseActionExecutor):
 
 
 class ImageAssertAction(BaseActionExecutor):
-    """图像断言。"""
+    """图像断言。
+
+    默认单次截图立即判定；显式传入 timeout 时以该值为轮询窗口（毫秒），
+    每隔 ASSERT_POLL_INTERVAL 复查一次，窗口结束仍未通过则判定失败。
+    """
 
     name = "image_assert"
     requires_ocr = True
@@ -211,48 +216,64 @@ class ImageAssertAction(BaseActionExecutor):
                 error="image_base64 is required",
             )
 
-        screenshot = platform.take_screenshot(context)
-        if action.region:
-            screenshot = self._crop_region(screenshot, action.region)
         threshold = action.threshold if action.threshold is not None else 0.9
         index = action.index if action.index is not None else 0
-        position = self._find_image_position(
-            platform, screenshot, action.image_base64, threshold, index
-        )
 
-        # 根据 negate 参数返回结果
+        last_screenshot = None
+        try:
+            while True:
+                screenshot = platform.take_screenshot(context)
+                if action.region:
+                    screenshot = self._crop_region(screenshot, action.region)
+                last_screenshot = screenshot
+                position = self._find_image_position(
+                    platform, screenshot, action.image_base64, threshold, index
+                )
+
+                if action.negate:
+                    # negate=true: 要求图像不存在，发现即失败
+                    if position:
+                        return ActionResult(
+                            number=0,
+                            action_type=self.name,
+                            status=ActionStatus.FAILED,
+                            error="Image found but expected not exist",
+                            region_screenshot=_region_b64(screenshot, bool(action.region)),
+                        )
+                else:
+                    # negate=false: 要求图像存在
+                    if position:
+                        return ActionResult(
+                            number=0,
+                            action_type=self.name,
+                            status=ActionStatus.SUCCESS,
+                            output="Image found",
+                        )
+
+                # 本轮未通过：显式传入 timeout 时按轮询窗口复查，否则结束轮询
+                wait_seconds = self._next_assert_poll_wait(action)
+                if wait_seconds is None:
+                    break
+                self._wait(action, wait_seconds)
+        except ActionTimedOut:
+            # 轮询窗口耗尽（含最后一轮检查超时），按断言失败返回而不是任务级 TIMEOUT
+            pass
+
+        # 窗口结束仍未通过，根据 negate 参数返回最终结果
         if action.negate:
-            if position:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error="Image found but expected not exist",
-                    region_screenshot=_region_b64(screenshot, bool(action.region)),
-                )
-            else:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output="Image not found as expected",
-                )
-        else:
-            if position:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.SUCCESS,
-                    output="Image found",
-                )
-            else:
-                return ActionResult(
-                    number=0,
-                    action_type=self.name,
-                    status=ActionStatus.FAILED,
-                    error="Image not found" + (f" at index {index}" if index > 0 else ""),
-                    region_screenshot=_region_b64(screenshot, bool(action.region)),
-                )
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output="Image not found as expected",
+            )
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.FAILED,
+            error="Image not found" + (f" at index {index}" if index > 0 else ""),
+            region_screenshot=_region_b64(last_screenshot, bool(action.region)),
+        )
 
 
 class ImageClickNearTextAction(BaseActionExecutor):

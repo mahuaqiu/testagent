@@ -230,6 +230,31 @@ class BaseActionExecutor(ActionExecutor):
             import time
             time.sleep(seconds)
 
+    # 断言轮询间隔（秒）：ocr_assert/image_assert 显式传入 timeout 时每隔该时间复查一次
+    ASSERT_POLL_INTERVAL = 1.0
+
+    def _next_assert_poll_wait(self, action: Action) -> float | None:
+        """
+        断言轮询调度：返回下一轮检查前的等待秒数，返回 None 表示结束轮询。
+
+        仅当请求显式传入 timeout 时启用轮询，timeout 即轮询窗口；
+        未显式传入时保持单次截图、立即判定的断言语义。
+        窗口以 Worker 注入的动作截止时间为准：剩余时间不足 2 个轮询间隔时
+        停止轮询，保证最后一轮检查带着至少一个间隔的预算在看门狗截止前完成，
+        断言以 FAILED 正常返回，而不是被任务调度层升级成整个任务的 TIMEOUT。
+
+        Raises:
+            ActionTimedOut: 动作截止时间已到（由调用方捕获并按断言失败返回）。
+        """
+        if not action.timeout_explicit or action.execution_control is None:
+            return None
+        remaining = action.execution_control.remaining_seconds()
+        if remaining is None:
+            return None
+        if remaining <= self.ASSERT_POLL_INTERVAL * 2:
+            return None
+        return min(self.ASSERT_POLL_INTERVAL, remaining - self.ASSERT_POLL_INTERVAL)
+
     def _get_last_ocr_info(self, platform: "PlatformManager") -> list | None:
         """
         获取最后一次 OCR 调用的 ocr_info。

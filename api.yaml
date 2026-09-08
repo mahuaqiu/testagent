@@ -1148,7 +1148,7 @@ components:
             - ocr_click: 点击屏幕上识别到的文字
             - ocr_input: 在识别到的文字附近输入文本
             - ocr_wait: 等待指定文字出现
-            - ocr_assert: 断言指定文字存在或不存在（negate: true 时断言不存在），支持 list 传参批量验证多个文字
+            - ocr_assert: 断言指定文字存在或不存在（negate: true 时断言不存在），支持 list 传参批量验证多个文字；显式传入 timeout 时在窗口内每秒复查一次，不传则单次截图立即判定
             - ocr_get_text: 获取屏幕上所有文字
             - ocr_move: 移动到识别到的文字位置（桌面端、鸿蒙 PC 和鸿蒙移动端）
             - ocr_double_click: 双击屏幕上识别到的文字
@@ -1162,7 +1162,7 @@ components:
             【图像识别动作】
             - image_click: 点击匹配到的图像位置
             - image_wait: 等待指定图像出现
-            - image_assert: 断言指定图像存在或不存在（negate: true 时断言不存在）
+            - image_assert: 断言指定图像存在或不存在（negate: true 时断言不存在）；显式传入 timeout 时在窗口内每秒复查一次，不传则单次截图立即判定
             - image_click_near_text: 点击文本附近最近的图像
             - image_move: 移动到匹配的图像位置（桌面端、鸿蒙 PC 和鸿蒙移动端）
             - image_double_click: 双击匹配到的图像位置
@@ -1517,10 +1517,14 @@ components:
             超时时间（毫秒），仅以下动作使用：
             - ocr_wait: 轮询等待文字出现的最大时间
             - image_wait: 轮询等待图像出现的最大时间
+            - ocr_assert: 显式传入时作为断言轮询窗口，每秒复查一次，窗口结束仍未通过则失败；
+              不传则单次截图立即判定
+            - image_assert: 显式传入时作为断言轮询窗口，每秒复查一次，窗口结束仍未通过则失败；
+              不传则单次截图立即判定
             - navigate: 页面加载超时（Web）
             - cmd_exec: 命令执行超时
 
-            其他动作（如 ocr_click、ocr_assert、image_click、image_assert 等）不使用此参数。
+            其他动作（如 ocr_click、image_click 等）不使用此参数。
         x:
           type: integer
           description: "X 坐标（像素），仅 click、right_click、move 和 input 动作必填；鸿蒙 PC move 将其传给 uinput -M -m"
@@ -1758,7 +1762,7 @@ components:
   # 示例: 等待"加载完成"出现，最多等 10 秒
   # {"action_type": "ocr_wait", "value": "加载完成", "timeout": 10000}
 
-  # ocr_assert - 断言文字存在或不存在（单次截图断言，不使用 timeout）
+  # ocr_assert - 断言文字存在或不存在（默认单次截图立即判定；显式传入 timeout 时按该窗口每秒复查一次，窗口结束仍未通过则失败）
   # 示例 1: 断言"操作成功"文字存在
   # {"action_type": "ocr_assert", "value": "操作成功"}
   # 示例 2: 断言"错误提示"文字不存在
@@ -1767,6 +1771,8 @@ components:
   # {"action_type": "ocr_assert", "value": ["用户名", "密码", "登录"]}
   # 示例 4: 批量断言多个文字都不存在
   # {"action_type": "ocr_assert", "value": ["错误提示", "警告"], "negate": true}
+  # 示例 5: 断言"加载完成"出现，10 秒内每秒复查一次
+  # {"action_type": "ocr_assert", "value": "加载完成", "timeout": 10000}
 
   # ocr_get_text - 获取屏幕所有文字
   # 示例: 获取当前屏幕文字内容
@@ -1842,13 +1848,15 @@ components:
   # 示例 2: 等待第二个匹配的图像出现
   # {"action_type": "image_wait", "image_base64": "<base64_encoded_image>", "index": 1}
 
-  # image_assert - 断言图像存在或不存在（单次截图断言，不使用 timeout）
+  # image_assert - 断言图像存在或不存在（默认单次截图立即判定；显式传入 timeout 时按该窗口每秒复查一次，窗口结束仍未通过则失败）
   # 示例 1: 断言图像存在
   # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "threshold": 0.9}
   # 示例 2: 断言第二个匹配的图像存在
   # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "index": 1}
   # 示例 3: 断言图像不存在
   # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "negate": true}
+  # 示例 4: 断言图像出现，8 秒内每秒复查一次
+  # {"action_type": "image_assert", "image_base64": "<base64_encoded_image>", "timeout": 8000}
 
   # image_click_near_text - 点击文本附近最近的图像
   # 示例: 点击"密码"文字附近 500 像素范围内的输入框图标
