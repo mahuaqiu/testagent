@@ -293,15 +293,12 @@ class PerformanceCollector:
         if device_type is None:
             raise ValueError("性能采集内部请求缺少 device_type")
 
-        # 鸿蒙 0.2.0：SP_daemon 唯一数据源，-PKG 单应用采集（含子进程），
-        # 不再支持 ProcessFilter/多应用/PID 筛选。
+        # 鸿蒙：SP_daemon 一次采集一个 -PKG 或一个 -PID；多目标由 B3 的
+        # HarmonyMultiBackend 每目标起一个实例并发采集。
         if device_type in ("harmony_pc", "harmony_mobile"):
             if not request.device_sn:
                 raise ValueError("鸿蒙性能采集必须提供 device_sn（HDC UDID）")
-            if len(request.target_processes) > 1:
-                raise ValueError("鸿蒙采集一次仅支持一个应用（SP_daemon 单应用限制）")
-            if any(tp.pids for tp in request.target_processes):
-                raise ValueError("鸿蒙采集不支持按 PID 筛选，请传应用包名")
+            match_mode = getattr(request, "match_mode", "fuzzy") or "fuzzy"
             package = (
                 request.target_processes[0].name.strip()
                 if request.target_processes
@@ -315,6 +312,7 @@ class PerformanceCollector:
                 interval=float(request.interval),
                 duration=float(request.timeout),
                 package=package or None,
+                match_mode=match_mode,
             )
             self._backend = backend
             return
@@ -440,6 +438,10 @@ class PerformanceCollector:
                 break
 
             try:
+                # 精准模式后端按 30s 节奏复核 PID（fuzzy 后端为 no-op）。
+                backend = self._backend
+                if backend is not None and hasattr(backend, "heartbeat"):
+                    backend.heartbeat()
                 # 先发送历史 spool，再读取本轮增量数据。
                 self._flush_spool()
                 self._drain_backend_buffer()
