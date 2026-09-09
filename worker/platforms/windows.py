@@ -68,7 +68,7 @@ class WindowsPlatformManager(PlatformManager):
     # Windows 平台特有动作
     SUPPORTED_ACTIONS: set[str] = {
         "start_app", "stop_app", "set_resolution", "set_volume", "audio_device",
-        "right_click", "move", "paste", "activate_window", "close_window",
+        "right_click", "move", "paste", "scroll", "activate_window", "close_window",
         "start_recording", "stop_recording",
     }
 

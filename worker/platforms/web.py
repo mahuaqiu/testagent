@@ -85,7 +85,7 @@ class WebPlatformManager(PlatformManager):
     # Web 平台特有动作
     SUPPORTED_ACTIONS: Set[str] = {
         "navigate", "start_app", "stop_app", "get_token", "new_page", "switched_page", "close_page",
-        "right_click", "move", "paste", "close_window",
+        "right_click", "move", "paste", "scroll", "close_window",
     }
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
@@ -854,6 +854,36 @@ class WebPlatformManager(PlatformManager):
         pyautogui.moveTo(global_start_x, global_start_y)
         pyautogui.drag(global_end_x - global_start_x, global_end_y - global_start_y, duration=duration_sec)
         logger.debug(f"System-level drag from ({start_x}, {start_y}) to ({end_x}, {end_y}) -> global ({global_start_x}, {global_start_y}) to ({global_end_x}, {global_end_y})")
+
+    # 每齿滚轮对应的滚动量：与 Windows 120 wheel delta 对齐
+    _SCROLL_DELTA_PER_NOTCH = 120
+
+    def scroll(self, x: int, y: int, direction: str = "down", amount: int = 3,
+               monitor: int | None = None, context: Any = None, level: str = None) -> None:
+        """在指定坐标滚动滚轮。
+
+        browser 层用 Playwright mouse.wheel（先移动鼠标到坐标），
+        system 层用 pyautogui（与 Windows 相同的 120 wheel delta 换算）。
+        """
+        total_delta = max(1, int(amount)) * self._SCROLL_DELTA_PER_NOTCH
+        # Playwright mouse.wheel 的 deltaY 正数向下，pyautogui.scroll 正数向上
+        delta = total_delta if direction.lower() == "down" else -total_delta
+        effective_level = level or self._current_level
+        if effective_level == "system":
+            if not SYSTEM_LEVEL_AVAILABLE:
+                raise RuntimeError("System-level operations not available")
+            from worker.screen.monitor_utils import convert_to_global_coords
+            global_x, global_y = convert_to_global_coords(x, y, monitor or self._current_monitor)
+            pyautogui.moveTo(global_x, global_y)
+            pyautogui.scroll(-delta)
+            logger.debug(f"System-level scroll {direction} x{amount} at ({x}, {y}) -> global ({global_x}, {global_y})")
+            return
+        page = context or self._current_page
+        if not page:
+            raise RuntimeError("No active page")
+        _run_async(page.mouse.move(x, y))
+        _run_async(page.mouse.wheel(0, delta))
+        logger.debug(f"Browser-level scroll {direction} x{amount} at ({x}, {y}) delta={delta}")
 
     def press(self, key: str, context: Any = None, level: str = None) -> None:
         """按键。"""

@@ -322,6 +322,42 @@ class SwipeAction(BaseActionExecutor):
         )
 
 
+class ScrollAction(BaseActionExecutor):
+    """滚轮滚动（Windows / Web / 鸿蒙 PC）。
+
+    value 复用为滚动齿格数（notch）：正数向下滚、负数向上滚，默认 3 齿。
+    Windows 1 齿 = 120 wheel delta，鸿蒙 1 齿 = 一条 uinput ±500 注入，
+    Web 1 齿 ≈ 120px。
+    """
+
+    name = "scroll"
+
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
+        # 设置执行层级（Web 平台专用）
+        self._set_level(platform, action)
+
+        if action.x is None or action.y is None:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="Coordinates are required",
+            )
+
+        ticks = int(action.value) if action.value is not None else 3
+        amount = max(1, abs(ticks))
+        direction = "down" if ticks >= 0 else "up"
+
+        platform.scroll(action.x, action.y, direction=direction, amount=amount, context=context)
+
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Scrolled {direction} x{amount} at ({action.x}, {action.y})",
+        )
+
+
 class PressAction(BaseActionExecutor):
     """按键。"""
 

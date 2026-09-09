@@ -107,7 +107,7 @@ PlatformManager (抽象基类)
 所有动作基于 OCR/图像识别或坐标定位。核心动作：
 - **OCR 动作**：`ocr_click`, `ocr_input`, `ocr_wait`, `ocr_assert`, `ocr_get_text`, `ocr_move`, `ocr_exist`
 - **图像动作**：`image_click`, `image_wait`, `image_assert`, `image_click_near_text`, `image_move`, `image_exist`
-- **坐标动作**：`click`, `right_click`, `move`, `swipe`, `drag`, `input`, `paste`, `press`
+- **坐标动作**：`click`, `right_click`, `move`, `swipe`, `drag`, `scroll`, `input`, `paste`, `press`
 - **其他**：`screenshot`, `wait`, `start_app`, `stop_app`
 - **Web 特有**：`navigate`, `new_page`, `switched_page`, `close_page`
 - **命令执行**：`cmd_exec` - 执行宿主机命令，支持 `@tools/脚本名` 占位符
@@ -127,13 +127,14 @@ PlatformManager (抽象基类)
 | `value` | 文字/URL/按键值/页面索引，`reg_` 前缀表示正则匹配 | 所有 OCR 动作、press、navigate、switched_page、cmd_exec |
 | `value` | 命令字符串，`@tools/脚本名` 自动替换为完整脚本路径 | cmd_exec |
 | `proxy` | 代理配置字符串（Web 平台 start_app 专用），格式 `"http://user:pass@proxy.example.com:8080"`，默认禁用代理不走系统代理 | start_app |
-| `x`, `y` | 目标坐标（或拖拽起点） | click, right_click, move, swipe, drag, input, paste |
+| `x`, `y` | 目标坐标（或拖拽起点） | click, right_click, move, swipe, drag, scroll, input, paste |
 | `image_base64` | 图像模板 base64 编码 | image_* 动作 |
 | `index` | 选择第几个匹配结果（默认 0） | ocr_click, ocr_input, ocr_move, ocr_exist, image_click, image_wait, image_assert, image_move, image_exist |
 | `offset` | 点击偏移 `{"x": 10, "y": 5}` | 所有点击类动作、move 类动作 |
 | `threshold` | 图像匹配阈值（默认 0.9） | image_* 动作 |
 | `timeout` | 超时时间（默认 30000ms） | wait 类动作 |
 | `end_x`, `end_y` | 拖拽终点坐标 | swipe, drag |
+| `value`（scroll） | 滚动齿格数（默认 3，最小 1）：正数向下滚、负数向上滚；Windows 1 齿=120 wheel delta，鸿蒙 PC 1 齿=一条 uinput 注入，Web browser 层 1 齿约 120px | scroll |
 | `region` | 操作区域 `[x1, y1, x2, y2]`，限制 OCR/图像识别在指定矩形区域内执行 | 所有 ocr_* 和 image_* 动作 |
 | `level` | 执行层级：`browser`（Playwright）或 `system`（pyautogui），仅 Web 平台支持 | 所有动作 |
 

@@ -117,6 +117,7 @@ autotest/
 | `image_assert` | 断言图像存在 | `{"action_type": "image_assert", "value": "logo.png", "threshold": 0.9}` |
 | `click` | 坐标点击 | `{"action_type": "click", "x": 500, "y": 300}` |
 | `swipe` | 滑动 | `{"action_type": "swipe", "from": {"x": 500, "y": 1000}, "to": {"x": 500, "y": 500}, "duration": 500}` |
+| `scroll` | 滚轮滚动（Windows/Web/鸿蒙 PC） | `{"action_type": "scroll", "x": 500, "y": 400, "value": -5}` （负数向上滚） |
 | `input` | 坐标输入 | `{"action_type": "input", "x": 500, "y": 300, "text": "hello"}` |
 | `press` | 按键 | `{"action_type": "press", "key": "Enter"}` |
 | `screenshot` | 截图 | `{"action_type": "screenshot", "value": "result"}` |
@@ -130,9 +131,10 @@ autotest/
 - `timeout`: 超时时间（毫秒），默认 5000，**可选**
 - `threshold`: 图像匹配阈值，默认 0.9，**可选**
 - `text`: 输入的文本内容，**必填**（用于 ocr_input、input）
-- `x`, `y`: 坐标位置，**必填**（用于 click、input）
+- `x`, `y`: 坐标位置，**必填**（用于 click、input、scroll）
 - `from`, `to`: 滑动起始和结束坐标，**必填**（用于 swipe）
 - `duration`: 滑动持续时间（毫秒），**可选**
+- `value`（scroll）: 滚动齿格数，正数向下滚、负数向上滚，默认 3，**可选**
 - `key`: 按键名称（如 Enter, Escape、ArrowDown 等），**必填**（用于 press）
 
 ### Web 特有动作

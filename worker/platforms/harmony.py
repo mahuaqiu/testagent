@@ -55,7 +55,7 @@ class HarmonyPlatformManager(PlatformManager):
         "ocr_check_same_row_text", "ocr_check_same_row_image",
     }
     PC_ACTIONS: set[str] = {
-        "click", "double_click", "right_click", "move", "swipe", "drag", "input", "press", "screenshot", "wait",
+        "click", "double_click", "right_click", "move", "swipe", "drag", "scroll", "input", "press", "screenshot", "wait",
         "start_app", "stop_app", "unlock_screen", "activate_window",
         "ocr_click", "ocr_input", "ocr_wait", "ocr_assert", "ocr_get_text", "ocr_move", "ocr_double_click",
         "ocr_exist", "ocr_get_position", "image_click", "image_wait", "image_assert",
@@ -641,6 +641,30 @@ class HarmonyPlatformManager(PlatformManager):
             self._device_clients[udid] = client
         if not client.wheel(direction, x, y):
             raise HarmonyError(f"uinput 滚轮注入失败: {direction} ({x}, {y})")
+
+    def scroll(self, x: int, y: int, direction: str = "down", amount: int = 3, context=None) -> None:
+        """鸿蒙 PC 滚轮滚动（scroll action 通道）。
+
+        与实时指针的 wheel() 一致走 uinput：官方 SDK 滚轮在部分鸿蒙 PC
+        设备上无效。amount 为齿格数，uinput 单次数值固定 ±500（大值会被
+        设备静默忽略），按齿数逐条注入。
+        """
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if self._device_type != "harmony_pc":
+            raise HarmonyError("鸿蒙移动端不支持滚轮滚动")
+
+        def _hdc_scroll(c: Any) -> bool:
+            for index in range(max(1, int(amount))):
+                if index:
+                    time.sleep(0.05)
+                if not c.wheel(direction, x, y):
+                    return False
+            return True
+
+        # 官方 SDK 滚轮无效机型问题，直接走 HDC uinput，不走官方会话。
+        self._execute_with_official_fallback(client, "滚轮", None, _hdc_scroll, "HDC 滚轮注入失败")
 
     def input_text(self, text: str, context=None) -> None:
         """
