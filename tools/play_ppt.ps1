@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     启动 PowerPoint 文件。
 

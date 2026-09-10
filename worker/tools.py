@@ -155,7 +155,11 @@ def save_script(name: str, content: str) -> str:
     os.makedirs(tools_dir, exist_ok=True)
     script_path = os.path.join(tools_dir, name)
 
-    with open(script_path, 'w', encoding='utf-8') as f:
+    # .ps1 必须带 UTF-8 BOM：Windows PowerShell 5.1 对无 BOM 文件按系统 ANSI（GBK）
+    # 解码，中文会被错误配对并吞掉引号/换行，导致解析报错。.sh 带 BOM 会破坏 shebang。
+    encoding = 'utf-8-sig' if name.lower().endswith('.ps1') else 'utf-8'
+
+    with open(script_path, 'w', encoding=encoding) as f:
         f.write(content)
 
     return script_path
