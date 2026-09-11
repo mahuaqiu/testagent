@@ -361,9 +361,12 @@ class TestHarmonyCollector:
         assert result["status"] == "error"
         assert "一个应用" in result["message"]
 
-    def test_harmony_rejects_pid_filter(self):
-        """0.2.0：鸿蒙不支持按 PID 筛选。"""
+    def test_harmony_ignores_pid_filter_and_uses_package(self):
+        """0.3.0：鸿蒙按 match_mode 决定 PKG/PID 模式（精准模式自动解析 PID），
+        target_processes 的 pids 字段不参与，仍按包名采集。"""
+        mock_monitor = _make_mock_monitor()
         mock_perfharmony = MagicMock()
+        mock_perfharmony.Monitor.return_value = mock_monitor
         request = CollectStartRequest(
             collect_id="harmony-pid-filter",
             interval=2,
@@ -375,8 +378,9 @@ class TestHarmonyCollector:
         collector = PerformanceCollector("env-machine-id")
         with patch.dict(sys.modules, {"perfharmony": mock_perfharmony}):
             result = collector.start_collect(request)
-        assert result["status"] == "error"
-        assert "PID" in result["message"]
+        assert result["status"] == "started"
+        assert mock_perfharmony.Monitor.call_args.kwargs["package"] == "com.example.app"
+        collector.stop_collect()
 
     def test_backend_error_is_reported_as_failed_not_timeout(self):
         """后端因设备错误自停时应上报 failed，而不是 timed_out。"""
