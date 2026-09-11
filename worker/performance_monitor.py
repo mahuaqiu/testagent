@@ -504,13 +504,21 @@ class PerformanceCollector:
                 break
 
     def _drain_backend_buffer(self, backend=None) -> None:
-        """读取并上报当前后端缓冲区中的增量样本。"""
+        """读取并上报当前后端缓冲区中的增量样本。
+
+        样本序号按采集任务单调续编：换 PID 重启后新 Monitor 的序号从头计数，
+        直接透传会与已上报样本的 sample_key 撞车而被平台幂等去重（丢样）。
+        """
         backend = backend or self._backend
         if not backend or backend.buffer_len() <= 0:
             return
         result = backend.get_result()
         samples = [self._convert_sample_to_report(sample) for sample in result.samples]
         if samples:
+            base = self._last_sequence or 0
+            for offset, sample in enumerate(samples, start=1):
+                sample["sequence"] = base + offset
+                sample["sample_key"] = f"{self._collect_id}:{base + offset}"
             self._last_sequence = samples[-1]["sequence"]
             self._last_elapsed_ms = samples[-1]["elapsed_ms"]
             self._report_samples(samples)

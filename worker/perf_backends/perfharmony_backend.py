@@ -44,7 +44,8 @@ class PerfharmonyBackend:
         self._pid: int | None = None
         self._match_mode: str = "fuzzy"
         self._interval: float = 1.0
-        self._duration: float | None = None
+        self._deadline: float | None = None
+        self._stopped: bool = False
         self._last_pid_check: float = 0.0
         self._restarting: bool = False
         self._pending: list = []
@@ -68,23 +69,41 @@ class PerfharmonyBackend:
     ) -> None:
         """创建并启动 Harmony Monitor。"""
         self._interval = interval
-        self._duration = duration
         self._package = package
         self._match_mode = match_mode if match_mode in ("fuzzy", "exact") else "fuzzy"
         self._pid = None
         if self._match_mode == "exact" and package:
             self._pid = self._resolve_pid(package)
+        self._stopped = False
+        self._deadline = time.monotonic() + duration if duration else None
         self._last_pid_check = time.monotonic()
         self._start_monitor()
 
+    def _remaining_duration(self) -> float | None:
+        """距采集 deadline 的剩余秒数；未设置 timeout 时为 None。"""
+        if self._deadline is None:
+            return None
+        return self._deadline - time.monotonic()
+
     def _start_monitor(self) -> None:
-        """按当前 package/pid 组合启动 Monitor；exact 未命中 PID 时仅采系统指标。"""
+        """按当前 package/pid 组合启动 Monitor；exact 未命中 PID 时仅采系统指标。
+
+        duration 取距离 deadline 的剩余时间：PID 跟随重启不再按全额 timeout
+        重新计时；已被 stop() 或已到 timeout 时不启动新 Monitor，避免竞态泄漏。
+        """
+        if self._stopped:
+            logger.info("鸿蒙采集已停止，跳过 Monitor 重启")
+            return
+        remaining = self._remaining_duration()
+        if remaining is not None and remaining <= 0:
+            logger.info("鸿蒙采集已到 timeout，跳过 Monitor 重启")
+            return
         perfharmony = self._module()
         self._monitor = perfharmony.Monitor(
             udid=self.udid,
             hdc_path=self.hdc_path,
             interval=self._interval,
-            duration=self._duration,
+            duration=remaining,
             package=self._package if self._match_mode == "fuzzy" else None,
             pid=self._pid,
         )
@@ -157,12 +176,15 @@ class PerfharmonyBackend:
             logger.warning("暂存旧 Monitor 样本失败: %s", error)
 
     def stop(self) -> None:
-        """停止 Harmony Monitor。"""
+        """停止 Harmony Monitor；并终止尚未执行的 PID 跟随重启。"""
+        self._stopped = True
         if self._monitor:
             self._monitor.stop()
 
     def is_running(self) -> bool:
-        """返回采集线程是否运行（重启窗口期内视为运行）。"""
+        """返回采集线程是否运行（重启窗口期内视为运行；stop 后恒为 False）。"""
+        if self._stopped:
+            return False
         return self._restarting or bool(self._monitor and self._monitor.is_running())
 
     def buffer_len(self) -> int:

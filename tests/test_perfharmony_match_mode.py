@@ -179,3 +179,92 @@ def test_fuzzy_mode_heartbeat_is_noop(fake_module):
     assert len(FakeMonitor.created) == 1
 
 
+
+
+# ---------------------------------------------------------------------------
+# 换 PID 重启的三个边界：剩余时长、stop 竞态、样本序号单调
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_clock(monkeypatch, start=1000.0):
+    """为 perfharmony_backend 注入可控单调时钟。"""
+    import worker.perf_backends.perfharmony_backend as backend_module
+
+    clock = {"now": start}
+    monkeypatch.setattr(
+        backend_module,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: clock["now"]),
+    )
+    return clock
+
+
+def test_exact_follow_restart_uses_remaining_duration(fake_module, monkeypatch):
+    """PID 跟随重启应使用剩余 timeout，而不是重新计时全额 duration。"""
+    clock = _install_fake_clock(monkeypatch)
+    FakeMonitor.ps_list = [(100, "com.app")]
+    backend = PerfharmonyBackend(udid="SN1")
+    backend.start(interval=5, duration=3600, package="com.app", match_mode="exact")
+    assert FakeMonitor.created[0].kwargs["duration"] == pytest.approx(3600, abs=1)
+
+    clock["now"] += 1800  # 采集半小时后应用重启、PID 变化
+    FakeMonitor.ps_list = [(200, "com.app")]
+    backend._last_pid_check = 0.0
+    backend.heartbeat()
+    assert FakeMonitor.created[1].kwargs["duration"] == pytest.approx(1800, abs=1)
+
+
+def test_exact_follow_skips_restart_after_timeout_exhausted(fake_module, monkeypatch):
+    """已到 timeout 时 PID 变化不再重启，采集按到期正常收尾。"""
+    clock = _install_fake_clock(monkeypatch)
+    FakeMonitor.ps_list = []
+    backend = PerfharmonyBackend(udid="SN1")
+    backend.start(interval=5, duration=60, package="com.app", match_mode="exact")
+
+    clock["now"] += 120
+    FakeMonitor.ps_list = [(100, "com.app")]
+    backend._last_pid_check = 0.0
+    backend.heartbeat()
+    assert len(FakeMonitor.created) == 1
+    assert backend.is_running() is False
+
+
+def test_stop_in_follow_window_does_not_start_new_monitor(fake_module):
+    """stop_collect 与 PID 跟随重启并发时，不得泄漏无人停止的新 Monitor。"""
+    FakeMonitor.ps_list = []
+    backend = PerfharmonyBackend(udid="SN1")
+    backend.start(interval=5, duration=3600, package="com.app", match_mode="exact")
+    backend._last_pid_check = 0.0
+    FakeMonitor.ps_list = [(100, "com.app")]
+    assert backend._check_pid_due_and_prepare() is True  # 旧流已停，重启动作待执行
+    backend.stop()  # 模拟 stop_collect 恰在此窗口进入
+    backend._start_monitor()  # 采集线程在竞态窗口中继续补上重启
+    assert len(FakeMonitor.created) == 1
+    assert backend.is_running() is False
+
+
+def test_collector_renumbers_samples_across_backend_restart(monkeypatch):
+    """换 PID 重启后新 Monitor 序号从头计数，必须单调续编避免 sample_key 撞车。"""
+    from types import SimpleNamespace as NS
+
+    collector = PerformanceCollector("dev1")
+    collector._collect_id = "c1"
+    batches: list = []
+    monkeypatch.setattr(collector, "_report_samples", lambda samples: batches.append(samples))
+    collector._backend = NS(
+        buffer_len=lambda: 2,
+        get_result=lambda: NS(samples=[_sample(1), _sample(2)]),
+    )
+    collector._drain_backend_buffer()
+    # 模拟换 PID 重启：新 Monitor 的序号又从 1 开始。
+    collector._backend = NS(
+        buffer_len=lambda: 2,
+        get_result=lambda: NS(samples=[_sample(1), _sample(2)]),
+    )
+    collector._drain_backend_buffer()
+
+    assert [s["sequence"] for s in batches[0]] == [1, 2]
+    assert [s["sequence"] for s in batches[1]] == [3, 4]
+    keys = [s["sample_key"] for batch in batches for s in batch]
+    assert keys == ["c1:1", "c1:2", "c1:3", "c1:4"]
+    assert collector._last_sequence == 4
