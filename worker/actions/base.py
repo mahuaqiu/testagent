@@ -239,9 +239,9 @@ class BaseActionExecutor(ActionExecutor):
 
         仅当请求显式传入 timeout 时启用轮询，timeout 即轮询窗口；
         未显式传入时保持单次截图、立即判定的断言语义。
-        窗口以 Worker 注入的动作截止时间为准：剩余时间不足 2 个轮询间隔时
-        停止轮询，保证最后一轮检查带着至少一个间隔的预算在看门狗截止前完成，
-        断言以 FAILED 正常返回，而不是被任务调度层升级成整个任务的 TIMEOUT。
+        窗口以 Worker 注入的动作截止时间为准：剩余时间不足 1 个轮询间隔时
+        停止轮询。最后一轮检查自身若超出预算越过截止时间，调度层会保留动作
+        已返回的 FAILED 结果而不升级为任务级 TIMEOUT（见 Worker._execute_actions）。
 
         Raises:
             ActionTimedOut: 动作截止时间已到（由调用方捕获并按断言失败返回）。
@@ -251,7 +251,7 @@ class BaseActionExecutor(ActionExecutor):
         remaining = action.execution_control.remaining_seconds()
         if remaining is None:
             return None
-        if remaining <= self.ASSERT_POLL_INTERVAL * 2:
+        if remaining <= self.ASSERT_POLL_INTERVAL:
             return None
         return min(self.ASSERT_POLL_INTERVAL, remaining - self.ASSERT_POLL_INTERVAL)
 

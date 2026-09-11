@@ -1162,6 +1162,7 @@ class Worker:
                 deadline_monotonic=action_deadline,
                 cancel_event=cancel_event or threading.Event(),
             )
+            result = None
             try:
                 result = manager.execute_action(context, action)
                 action.execution_control.checkpoint()
@@ -1173,21 +1174,25 @@ class Worker:
                     actions=actions_results, error=str(exc),
                 )
             except ActionTimedOut:
-                result = ActionResult(
-                    number=i,
-                    action_type=action.action_type,
-                    status=ActionStatus.FAILED,
-                    error=f"Action timeout after {action_timeout_ms}ms",
-                )
-                result.duration_ms = int((time.monotonic() - action_started) * 1000)
-                result.request_id = request_id
-                actions_results.append(result)
-                return TaskResult(
-                    task_id=task.task_id, request_id=request_id,
-                    status=TaskStatus.TIMEOUT, platform=task.platform,
-                    started_at=started_at, finished_at=datetime.now(),
-                    actions=actions_results, error=result.error,
-                )
+                if result is None:
+                    result = ActionResult(
+                        number=i,
+                        action_type=action.action_type,
+                        status=ActionStatus.FAILED,
+                        error=f"Action timeout after {action_timeout_ms}ms",
+                    )
+                    result.duration_ms = int((time.monotonic() - action_started) * 1000)
+                    result.request_id = request_id
+                    actions_results.append(result)
+                    return TaskResult(
+                        task_id=task.task_id, request_id=request_id,
+                        status=TaskStatus.TIMEOUT, platform=task.platform,
+                        started_at=started_at, finished_at=datetime.now(),
+                        actions=actions_results, error=result.error,
+                    )
+                # 动作已自行返回终态（如断言轮询最后一轮超出窗口后按 FAILED 收尾），
+                # 保留动作自身结果，不把单个动作超预算升级为整个任务 TIMEOUT；
+                # 任务整体超时由动作后的 deadline 检查兜底。
             finally:
                 action.execution_control = None
             if result.duration_ms <= 0:

@@ -212,3 +212,14 @@ def test_image_assert_fails_after_poll_window() -> None:
 
     assert result.status == ActionStatus.FAILED
     assert platform.check_count >= 2
+
+
+def test_ocr_assert_short_window_still_polls() -> None:
+    """窗口只剩约 2 个间隔时也不应退化为单次检查（契约：窗口内每秒复查一次）。"""
+    platform = _FakePlatform(found_after=99)
+    action = Action.from_dict({"action_type": "ocr_assert", "value": "操作成功", "timeout": 80})
+    action.execution_control = _control(0.08)
+
+    OcrAssertAction().execute(platform, action)
+
+    assert platform.ocr_client.recognize_count >= 2
