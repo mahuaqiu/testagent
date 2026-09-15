@@ -35,3 +35,24 @@ def test_save_script_content_roundtrip(tools_dir) -> None:
     content = '# 检查进程是否存在\nWrite-Output "窗口激活成功"\n'
     script_path = Path(tools.save_script('check.ps1', content))
     assert script_path.read_text(encoding='utf-8-sig') == content
+
+
+def test_save_script_uppercase_ps1_writes_utf8_bom(tools_dir) -> None:
+    """扩展名大小写不敏感：.PS1 同样按 .ps1 契约带 BOM 落盘。"""
+    script_path = Path(tools.save_script('PLAY.PS1', '# 中文注释\n'))
+    assert script_path.read_bytes().startswith(b'\xef\xbb\xbf')
+
+
+def test_save_script_strips_leading_bom_in_content(tools_dir) -> None:
+    """content 自带 U+FEFF（从带 BOM 的文件整段复制）时只落一个 BOM，不落双 BOM。"""
+    content = '\ufeff# 中文注释\nWrite-Output "记事本"\n'
+    script_path = Path(tools.save_script('play.ps1', content))
+    raw = script_path.read_bytes()
+    assert raw.startswith(b'\xef\xbb\xbf')
+    assert not raw.startswith(b'\xef\xbb\xbf\xef\xbb\xbf')
+
+
+def test_save_script_sh_writes_lf_line_endings(tools_dir) -> None:
+    """Windows 上 .sh 落盘必须保持 LF：CRLF 会让 bash 因 \\r 报错。"""
+    script_path = Path(tools.save_script('run.sh', '#!/bin/bash\necho ok\n'))
+    assert b'\r' not in script_path.read_bytes()

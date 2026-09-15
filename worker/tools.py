@@ -138,6 +138,9 @@ def save_script(name: str, content: str) -> str:
     """
     保存脚本到 tools 目录。
 
+    落盘编码契约：.ps1 一律 UTF-8 带 BOM（utf-8-sig），
+    .sh/.bat 等其它脚本一律 UTF-8 无 BOM。调用方无需感知编码。
+
     Args:
         name: 脚本名称
         content: 脚本内容
@@ -157,9 +160,18 @@ def save_script(name: str, content: str) -> str:
 
     # .ps1 必须带 UTF-8 BOM：Windows PowerShell 5.1 对无 BOM 文件按系统 ANSI（GBK）
     # 解码，中文会被错误配对并吞掉引号/换行，导致解析报错。.sh 带 BOM 会破坏 shebang。
-    encoding = 'utf-8-sig' if name.lower().endswith('.ps1') else 'utf-8'
+    is_ps1 = name.lower().endswith('.ps1')
+    encoding = 'utf-8-sig' if is_ps1 else 'utf-8'
 
-    with open(script_path, 'w', encoding=encoding) as f:
+    # utf-8-sig 编码器总是先写 BOM：平台下发的 content 若已以 U+FEFF 开头
+    # （如从带 BOM 的文件整段复制粘贴），会落成双 BOM，先剥掉再落盘。
+    if content.startswith('\ufeff'):
+        content = content.lstrip('\ufeff')
+
+    # .sh 用 LF 落盘：Windows 文本模式会把 \n 翻译成 CRLF，bash 遇 \r 报错
+    newline = None if is_ps1 else '\n'
+
+    with open(script_path, 'w', encoding=encoding, newline=newline) as f:
         f.write(content)
 
     return script_path
