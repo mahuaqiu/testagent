@@ -140,6 +140,7 @@ def save_script(name: str, content: str) -> str:
 
     落盘编码契约：.ps1 一律 UTF-8 带 BOM（utf-8-sig），
     .sh/.bat 等其它脚本一律 UTF-8 无 BOM。调用方无需感知编码。
+    注意：.bat 由 cmd.exe 按 OEM/ANSI 码页解析且 BOM 无效，不支持中文内容。
 
     Args:
         name: 脚本名称
