@@ -1606,6 +1606,19 @@ components:
             - 媒体键: Media_Play_Pause、Media_Stop、Media_Next、Media_Previous
             - 数字 KeyCode: 直接传入数字，如 "26" 表示电源键
 
+            【鸿蒙 mobile/PC】按键注入对齐官方 HOScrcpy DEMO（uinput -K 通道）：
+            - 系统/导航键: Home、Back、Power、Menu、Volume_Up、Volume_Down、Volume_Mute
+            - 功能键: Enter、Backspace、Delete、Escape、Tab、Space、Insert、
+              PageUp、PageDown、Home/End（End 为光标移到末尾）、CapsLock、F1-F12
+            - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight（等同 DPAD 方向键）
+            - 字母/数字: A-Z、0-9（或 Digit0-Digit9）
+            - 符号键: Grave(`)、Minus(-)、Equals(=)、LeftBracket([)、RightBracket(])、
+              Backslash(\\)、Semicolon(;)、Quote(')、Slash(/)、Comma(,)、Period(.)、At(@)、Plus(+)
+            - 修饰键: Shift、Ctrl、Alt、Meta（兼容 Control、Win、Cmd 等别名）
+            - 组合键（鸿蒙 PC）: 修饰键在前、功能键在最后，如 Ctrl+A、Ctrl+C、
+              Ctrl+V、Alt+F4、Ctrl+Alt+F4、Shift+Tab、Ctrl+Shift+T
+            - 数字 KeyCode: 直接传入数字（OpenHarmony KeyCode 键值，如 "2055" 为退格）
+
             【iOS 移动端】支持的按键（取决于设备型号）：
             - iPhone 8 (Touch ID): Home、Volume_Up、Volume_Down
             - iPhone X+ (Face ID): 可能支持更多按键
@@ -1946,20 +1959,28 @@ components:
   # 示例 4: Ctrl+A 全选（桌面端组合键）
   # {"action_type": "press", "key": "Control+A"}
 
-  # 移动端按键示例（Android）:
-  # 示例 5: 返回键
-  # {"action_type": "press", "key": "Back"}
-  # 示例 6: 主屏幕键
-  # {"action_type": "press", "key": "Home"}
-  # 示例 7: 音量增加
-  # {"action_type": "press", "key": "Volume_Up"}
-  # 示例 8: 电源键/锁屏
-  # {"action_type": "press", "key": "Power"}
+  # 鸿蒙按键示例:
+  # 示例 5: 退格键（鸿蒙 PC，uinput -K 通道）
+  # {"action_type": "press", "key": "Backspace", "platform": "harmony_pc"}
+  # 示例 6: Ctrl+C 复制（鸿蒙 PC 组合键）
+  # {"action_type": "press", "key": "Ctrl+C", "platform": "harmony_pc"}
+  # 示例 7: Ctrl+Shift+T 三键组合（鸿蒙 PC）
+  # {"action_type": "press", "key": "Ctrl+Shift+T", "platform": "harmony_pc"}
 
-  # 移动端按键示例（iOS）:
+  # 移动端按键示例（Android）:
+  # 示例 8: 返回键
+  # {"action_type": "press", "key": "Back"}
   # 示例 9: 主屏幕键
   # {"action_type": "press", "key": "Home"}
   # 示例 10: 音量增加
+  # {"action_type": "press", "key": "Volume_Up"}
+  # 示例 11: 电源键/锁屏
+  # {"action_type": "press", "key": "Power"}
+
+  # 移动端按键示例（iOS）:
+  # 示例 12: 主屏幕键
+  # {"action_type": "press", "key": "Home"}
+  # 示例 13: 音量增加
   # {"action_type": "press", "key": "Volume_Up"}
   # 注意: iOS 不支持 Back、Enter、Lock 等按键
 

@@ -24,7 +24,11 @@ from worker.platforms.harmony_hdc import (
     _find_hdc_path,
 )
 from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
-from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
+from worker.platforms.harmony_keycodes import (
+    HARMONY_KEY_MAP,
+    HARMONY_MODIFIER_KEY_MAP,
+    resolve_harmony_key,
+)
 from worker.platforms.harmony_official import (
     HarmonyOfficialError,
     HarmonyOfficialPartialActionError,
@@ -702,31 +706,59 @@ class HarmonyPlatformManager(PlatformManager):
 
     def press(self, key: str, context=None) -> None:
         """
-        按键操作。
+        按键操作，支持组合键（如 "ctrl+c"、"Control+Alt+F4"）。
+
+        键盘注入与官方 HOScrcpy DEMO 对齐：统一走 uinput -K 通道；
+        组合键在一条命令内按 "修饰键按下 -> 功能键按下并释放 ->
+        修饰键反序释放" 注入。
 
         Args:
-            key: 按键名称或数字键
+            key: 按键名称或组合键（"+" 分隔），也兼容数字原始键码
             context: 执行上下文（可选）
 
         Raises:
-            ValueError: 不支持的按键
+            ValueError: 不支持的按键或组合键中混有非修饰键
         """
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        key_upper = key.upper() if key else ""
-        key_code = self.KEY_MAP.get(key_upper)
-        if "+" in key:
-            raise NotImplementedError("Harmony HDC 暂不支持组合键")
-        if key_code:
-            if not client.send_key(key_code):
-                raise HarmonyError(f"HDC 按键失败: {key}")
-        elif key and key.isdigit():
-            if not client.send_key(int(key)):
-                raise HarmonyError(f"HDC 按键失败: {key}")
+        if not key or not key.strip():
+            raise ValueError("Key is required")
+
+        parts = [part.strip() for part in key.split("+") if part.strip()]
+        if not parts:
+            raise ValueError(f"Unsupported key '{key}'")
+
+        # 组合键语义与 Windows/mac 一致：除最后一个键外都必须是修饰键。
+        modifier_codes: list[int] = []
+        for part in parts[:-1]:
+            resolved = resolve_harmony_key(part)
+            if resolved is None or resolved[0] not in HARMONY_MODIFIER_KEY_MAP:
+                modifiers = ", ".join(sorted(HARMONY_MODIFIER_KEY_MAP))
+                raise ValueError(
+                    f"组合键 '{key}' 中的 '{part}' 不是修饰键。支持: {modifiers}"
+                )
+            modifier_codes.append(resolved[1])
+
+        last_part = parts[-1]
+        resolved = resolve_harmony_key(last_part)
+        if resolved is not None:
+            key_code = resolved[1]
+        elif last_part.isdigit():
+            # 纯数字按原始键码直传，保持既有行为
+            key_code = int(last_part)
         else:
-            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            supported = ", ".join(
+                sorted(set(HARMONY_KEY_MAP) | set(HARMONY_MODIFIER_KEY_MAP))
+            )
             raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
+
+        if modifier_codes:
+            ok = client.tap_key_combination(key_code, modifier_codes)
+        else:
+            ok = client.tap_key(key_code)
+        if not ok:
+            raise HarmonyError(f"HDC 按键失败: {key}")
 
     # ========== 动作执行 ==========
 

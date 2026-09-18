@@ -1032,6 +1032,69 @@ class HarmonyHdcWrapper:
         key_code = self.KEY_MAP[key_name_upper]
         return self.send_key(key_code)
 
+    # ---- uinput 键盘注入（对齐官方 HOScrcpy DEMO 通道）----
+    #
+    # uitest uiInput keyEvent 在鸿蒙 PC 上不支持修饰键组合，且部分键值
+    # 行为不可靠；官方 DEMO 的键盘注入统一走 uinput -K 命令。
+
+    def tap_key(self, key_code: int) -> bool:
+        """
+        按下并释放一个按键（uinput 通道，官方 DEMO 同款命令格式）。
+
+        Args:
+            key_code: 按键代码（OpenHarmony KeyCode）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uinput -K -d {key_code} -u {key_code}")
+        return self._check_result(result, "发送按键")
+
+    def tap_key_combination(self, key_code: int, modifier_codes: List[int]) -> bool:
+        """
+        按下并释放带修饰键的组合键。
+
+        与官方 DEMO 的 shift 组合格式一致：同一条 uinput 命令内先依次
+        按下修饰键，再按下并释放功能键，最后按相反顺序释放修饰键。
+
+        Args:
+            key_code: 功能键代码
+            modifier_codes: 修饰键代码列表（按下顺序）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        downs = "".join(f" -d {code}" for code in modifier_codes)
+        ups = "".join(f" -u {code}" for code in reversed(modifier_codes))
+        result = self.shell(f"uinput -K{downs} -d {key_code} -u {key_code}{ups}")
+        return self._check_result(result, "发送组合键")
+
+    def key_down(self, key_code: int) -> bool:
+        """
+        按下按键（保持按住，供自定义按住时序使用）。
+
+        Args:
+            key_code: 按键代码
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uinput -K -d {key_code}")
+        return self._check_result(result, "按下按键")
+
+    def key_up(self, key_code: int) -> bool:
+        """
+        释放按键。
+
+        Args:
+            key_code: 按键代码
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        result = self.shell(f"uinput -K -u {key_code}")
+        return self._check_result(result, "释放按键")
+
     # ========================================================================
     # 屏幕控制
     # ========================================================================

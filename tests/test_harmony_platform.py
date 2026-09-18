@@ -1210,3 +1210,185 @@ def test_display_size_falls_back_to_render_service_dump(
     # 数字服务 ID dump 无法解析时，回退按服务名 dump
     assert wrapper.display_size() == (1260, 2720)
 
+
+# ============================================================================
+# press 按键/组合键（对齐官方 HOScrcpy DEMO 的 uinput -K 注入通道）
+# ============================================================================
+
+
+def test_harmony_press_single_key_uses_uinput_demo_format() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    keys: list[int] = []
+    client = SimpleNamespace(
+        tap_key=lambda key_code: keys.append(key_code) or True,
+        tap_key_combination=lambda key_code, modifiers: (_ for _ in ()).throw(
+            AssertionError("单键不应走组合键通道")
+        ),
+    )
+
+    manager.press("Backspace", context=client)
+
+    assert keys == [2055]
+
+
+def test_harmony_press_combination_uses_modifier_sequence() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    combos: list[tuple[int, list[int]]] = []
+    client = SimpleNamespace(
+        tap_key=lambda key_code: (_ for _ in ()).throw(
+            AssertionError("组合键不应走单键通道")
+        ),
+        tap_key_combination=lambda key_code, modifiers: combos.append(
+            (key_code, list(modifiers))
+        ) or True,
+    )
+
+    manager.press("ctrl+c", context=client)
+
+    assert combos == [(2019, [2072])]
+
+
+def test_harmony_press_multi_modifier_keeps_press_order() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    combos: list[tuple[int, list[int]]] = []
+    client = SimpleNamespace(
+        tap_key_combination=lambda key_code, modifiers: combos.append(
+            (key_code, list(modifiers))
+        ) or True,
+    )
+
+    manager.press("Ctrl+Alt+F4", context=client)
+
+    assert combos == [(2093, [2072, 2045])]
+
+
+def test_harmony_press_supports_playwright_style_names() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    pressed: list[str] = []
+    combos: list[tuple[int, list[int]]] = []
+    client = SimpleNamespace(
+        tap_key=lambda key_code: pressed.append(str(key_code)) or True,
+        tap_key_combination=lambda key_code, modifiers: combos.append(
+            (key_code, list(modifiers))
+        ) or True,
+    )
+
+    for key, expected in (
+        ("Enter", "2054"),
+        ("Escape", "2070"),
+        ("Tab", "2049"),
+        ("ArrowDown", "2013"),
+        ("Home", "1"),
+        ("End", "2082"),
+        ("PageUp", "2068"),
+        ("Digit5", "2005"),
+        ("a", "2017"),
+        ("F4", "2093"),
+    ):
+        manager.press(key, context=client)
+    manager.press("Control+A", context=client)
+    manager.press("shift+tab", context=client)
+
+    assert pressed == ["2054", "2070", "2049", "2013", "1", "2082", "2068", "2005", "2017", "2093"]
+    assert combos == [(2017, [2072]), (2049, [2047])]
+
+
+def test_harmony_press_raw_digit_keycode_passthrough() -> None:
+    # 兼容既有行为：纯数字按原始键码直传
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    keys: list[int] = []
+    client = SimpleNamespace(tap_key=lambda key_code: keys.append(key_code) or True)
+
+    manager.press("26", context=client)
+
+    assert keys == [26]
+
+
+def test_harmony_press_rejects_non_modifier_combo_part() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+
+    with pytest.raises(ValueError, match="修饰键"):
+        manager.press("a+b", context=SimpleNamespace())
+
+    with pytest.raises(ValueError, match="Unsupported key"):
+        manager.press("ctrl+unknown_key", context=SimpleNamespace())
+
+
+def test_harmony_press_error_lists_supported_keys() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+
+    with pytest.raises(ValueError, match="BACKSPACE"):
+        manager.press("NotAKey", context=SimpleNamespace())
+
+
+def test_hdc_tap_key_builds_uinput_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.tap_key(2055) is True
+    assert wrapper.tap_key_combination(2019, [2072]) is True
+    assert wrapper.tap_key_combination(2036, [2072, 2047]) is True
+
+    assert commands == [
+        "uinput -K -d 2055 -u 2055",
+        "uinput -K -d 2072 -d 2019 -u 2019 -u 2072",
+        # 官方 DEMO 格式：修饰键按下顺序保持，释放顺序相反
+        "uinput -K -d 2072 -d 2047 -d 2036 -u 2036 -u 2047 -u 2072",
+    ]
+
+
+def test_hdc_key_down_up_primitives(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.key_down(2047) is True
+    assert wrapper.key_up(2047) is True
+
+    assert commands == ["uinput -K -d 2047", "uinput -K -u 2047"]
+
+
+def test_harmony_keycode_map_covers_official_codes() -> None:
+    from worker.platforms.harmony_keycodes import (
+        HARMONY_MODIFIER_KEY_MAP,
+        resolve_harmony_key,
+    )
+
+    # 既有移动端按键保持不变
+    assert HARMONY_KEY_MAP["HOME"] == 1
+    assert HARMONY_KEY_MAP["BACK"] == 2
+    assert HARMONY_KEY_MAP["POWER"] == 18
+    assert HARMONY_KEY_MAP["ENTER"] == 2054
+    # 官方 OpenHarmony KeyCode 表关键值
+    assert HARMONY_KEY_MAP["BACKSPACE"] == 2055
+    assert HARMONY_KEY_MAP["DELETE"] == 2071
+    assert HARMONY_KEY_MAP["SPACE"] == 2050
+    assert HARMONY_KEY_MAP["TAB"] == 2049
+    assert HARMONY_KEY_MAP["ESCAPE"] == 2070
+    assert HARMONY_KEY_MAP["A"] == 2017
+    assert HARMONY_KEY_MAP["Z"] == 2042
+    assert HARMONY_KEY_MAP["F4"] == 2093
+    assert HARMONY_MODIFIER_KEY_MAP["SHIFT"] == 2047
+    assert HARMONY_MODIFIER_KEY_MAP["CTRL"] == 2072
+    assert HARMONY_MODIFIER_KEY_MAP["ALT"] == 2045
+    assert HARMONY_MODIFIER_KEY_MAP["META"] == 2076
+
+    # 别名解析：修饰键与普通键统一入口
+    assert resolve_harmony_key("control") == ("CTRL", 2072)
+    assert resolve_harmony_key("Meta") == ("META", 2076)
+    assert resolve_harmony_key("back_space") == ("BACKSPACE", 2055)
+    assert resolve_harmony_key("ArrowUp") == ("DPAD_UP", 2012)
+    assert resolve_harmony_key("Del") == ("DELETE", 2071)
+    assert resolve_harmony_key("unknown") is None
+
