@@ -338,6 +338,9 @@ class TaskRequest(BaseModel):
     actions: list[dict[str, Any]] = Field(..., description="动作列表")
     device_id: str | None = Field(None, description="设备 ID（移动端必填）")
     window: WindowSpec | None = Field(None, description="窗口定位参数（Windows 平台）")
+    config: dict[str, Any] | None = Field(
+        None, description="任务配置（timeout 总超时 ms、action_timeout 单动作超时 ms 等）"
+    )
 
 
 class RemoteReleaseRequest(BaseModel):
@@ -511,7 +514,14 @@ async def execute_task(request: TaskRequest):
     try:
         logger.info(f"Sync task raw request: {_format_request_for_log(request)}")
         window_dict = request.window.model_dump(by_alias=True) if request.window else None
-        result = await asyncio.to_thread(worker.execute_sync, request.platform, request.actions, request.device_id, window_dict)
+        result = await asyncio.to_thread(
+            worker.execute_sync,
+            request.platform,
+            request.actions,
+            request.device_id,
+            window_dict,
+            config=request.config,
+        )
         result["request_id"] = request_id
         logger.info(f"Sync task response: {_format_result_for_log(result)}")
         return result
@@ -613,6 +623,7 @@ async def execute_task_async(request: TaskRequest, idempotency_key: str | None =
             device_id=request.device_id,
             window=request.window.model_dump(by_alias=True) if request.window else None,
             idempotency_key=idempotency_key,
+            config=request.config,
         )
         logger.info(f"Async task submitted: task_id={task_id}, status={status}")
         return {"task_id": task_id, "status": status, "request_id": task_request_id}

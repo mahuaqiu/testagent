@@ -7,6 +7,7 @@
 import subprocess  # 用于 TimeoutExpired 异常类型
 import logging
 import os
+import re
 from typing import Optional, TYPE_CHECKING
 
 from common.utils import SUBPROCESS_HIDE_WINDOW, run_cmd_with_process_tree_timeout
@@ -18,6 +19,78 @@ if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
 
 logger = logging.getLogger(__name__)
+
+# 显式调用 PowerShell 解释器的命令（大小写不敏感），不做 .ps1 改写
+_POWERSHELL_LAUNCHERS = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+
+
+def _resolve_tools_placeholder(cmd: str) -> str:
+    """将 @tools/ 或 @tools\\ 占位符统一替换为 tools 目录实际路径。
+
+    两种分隔符写法都支持，替换后用当前系统的路径分隔符拼接。
+    """
+    tools_dir = get_tools_dir()
+    # replacement 用 lambda：tools_dir 含反斜杠时直接作模板会被 re 当作转义序列
+    return re.sub(r"@tools[/\\]", lambda _: tools_dir + os.sep, cmd)
+
+
+def _unquote(token: str) -> str:
+    """去掉成对的单/双引号。"""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ('"', "'"):
+        return token[1:-1]
+    return token
+
+
+def _split_first_token(cmd: str) -> tuple[str, str]:
+    """按引号/空白切出第一个 token，返回 (token 原文含引号, 其余部分)。"""
+    cmd = cmd.strip()
+    if cmd[:1] in ('"', "'"):
+        end = cmd.find(cmd[0], 1)
+        if end == -1:
+            return cmd, ""
+        return cmd[: end + 1], cmd[end + 1 :].strip()
+    parts = cmd.split(None, 1)
+    if not parts:
+        return "", ""
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
+
+def _wrap_powershell_script(cmd: str) -> str:
+    """将"裸 .ps1 脚本调用"改写为 powershell -File 执行（仅 Windows）。
+
+    cmd.exe 无法直接执行 .ps1：会按文件关联用记事本打开脚本，命令本身
+    既不执行也没有输出，只能挂起到超时。这里识别首个 token 以 .ps1 结尾
+    的命令（可带参数，兼容引号路径与 PowerShell 的 & 调用符），统一改写
+    为 powershell -NoProfile -ExecutionPolicy Bypass -File；显式调用
+    powershell/pwsh 的命令不做改动。
+    """
+    if os.name != "nt":
+        return cmd
+
+    stripped = cmd.strip()
+    if stripped.startswith("&"):
+        stripped = stripped[1:].lstrip()
+
+    first, rest = _split_first_token(stripped)
+    if not first:
+        return cmd
+    path = _unquote(first)
+    if path.lower() in _POWERSHELL_LAUNCHERS:
+        return cmd
+    if not path.lower().endswith(".ps1"):
+        return cmd
+
+    return " ".join(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            f'"{path}"',
+        ]
+        + ([rest] if rest else [])
+    )
 
 
 class CmdExecAction(BaseActionExecutor):
@@ -37,9 +110,11 @@ class CmdExecAction(BaseActionExecutor):
                 error="command is required (use 'value' field)",
             )
 
-        # 替换 @tools/ 占位符为完整路径
-        tools_dir = get_tools_dir()
-        cmd = cmd.replace('@tools/', tools_dir + '/')
+        # 替换 @tools/ 或 @tools\ 占位符为完整路径
+        cmd = _resolve_tools_placeholder(cmd)
+
+        # Windows 下裸 .ps1 命令改写为 powershell -File 执行
+        cmd = _wrap_powershell_script(cmd)
 
         # 后台异步执行模式：不等待结果直接返回
         if action.background:

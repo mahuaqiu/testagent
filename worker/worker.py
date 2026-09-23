@@ -1334,6 +1334,7 @@ class Worker:
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
         execution_domain: str = "task",
+        config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         task = Task.create(
             platform=platform,
@@ -1342,6 +1343,7 @@ class Worker:
             metadata={"window": window} if window else None,
             execution_domain=execution_domain,
             generate_id=False,
+            config=config,
         )
         result = self.runtime.task_service.execute_sync(
             task,
@@ -1372,6 +1374,7 @@ class Worker:
         device_id: str | None = None,
         window: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
+        config: dict[str, Any] | None = None,
     ) -> tuple[str, str, str | None]:
         task = Task.create(
             platform=platform,
@@ -1379,6 +1382,7 @@ class Worker:
             device_id=device_id,
             metadata={"window": window} if window else None,
             generate_id=True,
+            config=config,
         )
         task_id, status = self.runtime.task_service.submit_async(
             task,
