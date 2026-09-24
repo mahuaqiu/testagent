@@ -41,6 +41,7 @@ from worker.performance_monitor import (
     CollectStopRequest,
     get_collector,
 )
+from worker.files_api import router as files_router, set_files_config
 from worker.platforms.harmony_hdc import _find_hdc_path
 from worker.screen.pointer_injector import (
     HarmonyPointerDispatcher,
@@ -417,6 +418,9 @@ def set_worker(w: Worker) -> None:
     """设置 Worker 实例。"""
     global worker
     worker = w
+    # 测试可传 None 或无 config 的替身;文件管理配置仅在真实 Worker 上初始化
+    if w is not None and getattr(w, "config", None) is not None:
+        set_files_config(w.config)
 
 
 def set_gui_app(app: Any) -> None:
@@ -492,6 +496,8 @@ def _prepare_performance_collector(
 
 
 # ========== API 端点 ==========
+
+app.include_router(files_router)
 
 
 @app.get("/worker_devices")

@@ -194,3 +194,20 @@ async def upload_file(
     tmp.replace(dest)
     rel_path = dest.relative_to(settings.root.resolve()).as_posix()
     return {"name": filename, "size": written, "rel_path": rel_path}
+
+
+@router.delete("")
+async def delete_file(path: str = Query(...)):
+    settings = get_files_settings()
+    target = resolve_under_root(path)
+    if target == settings.root.resolve():
+        raise HTTPException(status_code=400, detail="不能删除根目录")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="路径不存在")
+    if target.is_dir():
+        if any(target.iterdir()):
+            raise HTTPException(status_code=400, detail="目录非空,无法删除")
+        await asyncio.to_thread(target.rmdir)
+    else:
+        await asyncio.to_thread(target.unlink)
+    return {"deleted": path}
