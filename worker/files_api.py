@@ -157,3 +157,40 @@ async def download_file(path: str = Query(...)):
     return StreamingResponse(
         chunk_iter(), media_type="application/octet-stream", headers=headers
     )
+
+
+@router.post("/upload")
+async def upload_file(
+    request: Request,
+    path: str | None = Query(default=None),
+    name: str = Query(...),
+    overwrite: bool = Query(default=False),
+):
+    settings = get_files_settings()
+    target_dir = resolve_under_root(path)
+    if not target_dir.is_dir():
+        raise HTTPException(status_code=404, detail="目标目录不存在")
+    filename = _validate_filename(name)
+    dest = target_dir / filename
+    if dest.exists() and not overwrite:
+        raise HTTPException(status_code=409, detail="file_exists")
+
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    tmp = dest.with_name(dest.name + ".part")
+    written = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="文件超过大小限制")
+                await asyncio.to_thread(f.write, chunk)
+                delay = _pacing_delay(len(chunk), settings.upload_rate_limit_mb)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(dest)
+    rel_path = dest.relative_to(settings.root.resolve()).as_posix()
+    return {"name": filename, "size": written, "rel_path": rel_path}
