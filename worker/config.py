@@ -117,6 +117,13 @@ class WorkerConfig:
     # 拿到真机分辨率并下发 meta 后才实际启用缩放，否则自动回退为不缩放。
     harmony_streaming_max_long_edge: int = 1600
 
+    # ---- 文件管理(对应 YAML 的 files 段) ----
+    files_root: str | None = None                # 产物根目录,None = <base_dir>/data/collected
+    files_download_rate_limit_mb: float = 1.0    # 下载限速 MB/s,0 = 不限速
+    files_upload_rate_limit_mb: float = 1.0      # 上传限速 MB/s,0 = 不限速
+    files_max_concurrent_downloads: int = 2      # 最大并发下载数,超出排队
+    files_max_upload_size_mb: int = 1000         # 上传大小上限(1GB)
+
     # 配置版本号
     config_version: str | None = None
 
@@ -187,6 +194,7 @@ class WorkerConfig:
         recording_cfg = data.get("recording", {})
         websocket_cfg = data.get("websocket_streaming", {})
         storage_cfg = data.get("storage", {})
+        files_cfg = data.get("files", {})
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -231,6 +239,11 @@ class WorkerConfig:
             harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 15),
             harmony_streaming_jpeg_quality=websocket_cfg.get("harmony_streaming_jpeg_quality", 60),
             harmony_streaming_max_long_edge=websocket_cfg.get("harmony_streaming_max_long_edge", 1600),
+            files_root=files_cfg.get("root"),
+            files_download_rate_limit_mb=float(files_cfg.get("download_rate_limit_mb", 1.0)),
+            files_upload_rate_limit_mb=float(files_cfg.get("upload_rate_limit_mb", 1.0)),
+            files_max_concurrent_downloads=int(files_cfg.get("max_concurrent_downloads", 2)),
+            files_max_upload_size_mb=int(files_cfg.get("max_upload_size_mb", 1000)),
         )
 
     def get_platform_config(self, platform: str) -> dict[str, Any]:
