@@ -126,3 +126,34 @@ async def list_files(path: str | None = Query(default=None)) -> dict:
             }
         )
     return {"path": (path or "").replace("\\", "/").strip("/"), "entries": entries}
+
+
+@router.get("/download")
+async def download_file(path: str = Query(...)):
+    settings = get_files_settings()
+    target = resolve_under_root(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail="不是文件")
+
+    async def chunk_iter() -> AsyncIterator[bytes]:
+        # 并发槽在生成器内获取:响应头立即返回,排队者的 body 延迟产出(平台 read 无超时)
+        async with _download_slots():
+            with open(target, "rb") as f:
+                while True:
+                    chunk = await asyncio.to_thread(f.read, CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    yield chunk
+                    delay = _pacing_delay(len(chunk), settings.download_rate_limit_mb)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+    headers = {
+        "Content-Length": str(target.stat().st_size),
+        "Content-Disposition": _content_disposition(target.name),
+    }
+    return StreamingResponse(
+        chunk_iter(), media_type="application/octet-stream", headers=headers
+    )
