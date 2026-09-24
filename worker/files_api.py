@@ -1,0 +1,128 @@
+"""产物文件管理 API。
+
+平台经 /files/* 浏览、下载、上传、删除 Worker 上收集目录内的文件。
+浏览范围锁定在配置的根目录内,拒绝一切路径穿越;限速通过分块 + 异步 sleep
+实现,不阻塞事件循环,不影响测试任务执行。
+"""
+
+import asyncio
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import AsyncIterator
+from urllib.parse import quote
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+
+from common.packaging import get_base_dir
+from worker.config import WorkerConfig
+
+router = APIRouter(prefix="/files", tags=["files"])
+
+DEFAULT_ROOT_REL = os.path.join("data", "collected")
+CHUNK_SIZE = 256 * 1024
+
+
+@dataclass
+class FilesSettings:
+    """文件管理运行时设置(由 worker.yaml 的 files 段推导)。"""
+
+    root: Path
+    download_rate_limit_mb: float
+    upload_rate_limit_mb: float
+    max_concurrent_downloads: int
+    max_upload_size_mb: int
+
+
+_settings: FilesSettings | None = None
+_download_semaphore: asyncio.Semaphore | None = None
+
+
+def set_files_config(config: WorkerConfig) -> None:
+    """由 server 启动流程(worker.set_worker)注入配置;测试亦由此注入临时根目录。"""
+    global _settings, _download_semaphore
+    root = config.files_root or os.path.join(get_base_dir(), DEFAULT_ROOT_REL)
+    _settings = FilesSettings(
+        root=Path(root),
+        download_rate_limit_mb=config.files_download_rate_limit_mb,
+        upload_rate_limit_mb=config.files_upload_rate_limit_mb,
+        max_concurrent_downloads=max(1, config.files_max_concurrent_downloads),
+        max_upload_size_mb=config.files_max_upload_size_mb,
+    )
+    _download_semaphore = asyncio.Semaphore(_settings.max_concurrent_downloads)
+
+
+def get_files_settings() -> FilesSettings:
+    if _settings is None:
+        from worker.config import load_config
+
+        set_files_config(load_config())
+    assert _settings is not None
+    return _settings
+
+
+def _download_slots() -> asyncio.Semaphore:
+    get_files_settings()
+    assert _download_semaphore is not None
+    return _download_semaphore
+
+
+def _pacing_delay(size_bytes: int, rate_limit_mb: float) -> float:
+    """该块应耗时多少秒(限速 MB/s;0 或负数 = 不限速)。"""
+    if rate_limit_mb <= 0:
+        return 0.0
+    return size_bytes / (rate_limit_mb * 1024 * 1024)
+
+
+def _content_disposition(name: str) -> str:
+    return f"attachment; filename*=UTF-8''{quote(name)}"
+
+
+def _validate_filename(name: str) -> str:
+    name = (name or "").strip()
+    if not name or "/" in name or "\\" in name or ".." in name or ":" in name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return name
+
+
+def resolve_under_root(rel: str | None) -> Path:
+    """把相对路径解析到根目录内;拒绝绝对路径、盘符与 .. 穿越。"""
+    settings = get_files_settings()
+    rel_clean = (rel or "").strip().replace("\\", "/").strip("/")
+    if not rel_clean or rel_clean == ".":
+        return settings.root.resolve()
+    if (
+        rel_clean == ".."
+        or rel_clean.startswith("../")
+        or "/../" in rel_clean
+        or Path(rel_clean).is_absolute()
+        or ":" in rel_clean
+    ):
+        raise HTTPException(status_code=400, detail="非法路径")
+    root_resolved = settings.root.resolve()
+    target = (root_resolved / rel_clean).resolve()
+    if target != root_resolved and root_resolved not in target.parents:
+        raise HTTPException(status_code=400, detail="非法路径")
+    return target
+
+
+@router.get("/list")
+async def list_files(path: str | None = Query(default=None)) -> dict:
+    target = resolve_under_root(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="路径不存在")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="不是目录")
+    entries = []
+    for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        st = item.stat()
+        entries.append(
+            {
+                "name": item.name,
+                "is_dir": item.is_dir(),
+                "size": st.st_size if item.is_file() else 0,
+                "mtime": int(st.st_mtime),
+            }
+        )
+    return {"path": (path or "").replace("\\", "/").strip("/"), "entries": entries}
