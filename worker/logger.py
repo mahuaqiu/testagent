@@ -7,10 +7,9 @@
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from typing import Optional
 
-from common.request_context import get_request_id
 from common.packaging import get_app_dir
+from common.request_context import get_request_id
 
 
 class RequestIdFormatter(logging.Formatter):
@@ -51,7 +50,7 @@ def _clear_all_loggers() -> None:
 
 def setup_logging(
     level: str = "INFO",
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
     max_bytes: int = 52428800,  # 50MB
     backup_count: int = 5,
 ) -> str:

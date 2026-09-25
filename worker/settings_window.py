@@ -4,26 +4,26 @@
 PyQt5 实现的配置设置对话框，采用简洁现代的设计风格。
 """
 
+import logging
 import os
 import re
+
 import yaml
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDialog,
-    QVBoxLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QComboBox,
-    QPushButton,
-    QCheckBox,
-    QGridLayout,
-    QFrame,
     QMessageBox,
+    QPushButton,
+    QVBoxLayout,
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class SettingsWindow(QDialog):
         优先从根目录 config/worker.yaml 读取，
         若不存在则从 _internal/config/worker.yaml 复制一份。
         """
-        from worker.config import get_user_config_path, get_default_template_path
+        from worker.config import get_default_template_path, get_user_config_path
 
         config_path = get_user_config_path()
 
@@ -74,7 +74,7 @@ class SettingsWindow(QDialog):
 
         for encoding in encodings:
             try:
-                with open(self.config_path, "r", encoding=encoding) as f:
+                with open(self.config_path, encoding=encoding) as f:
                     data = yaml.safe_load(f) or {}
                 logger.info(f"Config loaded successfully with {encoding} encoding")
                 return data
@@ -468,7 +468,7 @@ class SettingsWindow(QDialog):
         try:
             if os.path.exists(self.config_path):
                 original_content = self._read_config_content()
-                logger.info(f"Config file read successfully")
+                logger.info("Config file read successfully")
         except Exception as e:
             logger.error(f"Failed to read config file: {e}")
 
@@ -570,7 +570,7 @@ class SettingsWindow(QDialog):
         last_error = None
         for encoding in encodings:
             try:
-                with open(self.config_path, "r", encoding=encoding) as f:
+                with open(self.config_path, encoding=encoding) as f:
                     return f.read()
             except UnicodeDecodeError as error:
                 last_error = error

@@ -11,11 +11,10 @@ import subprocess
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image
 
-from common.utils import run_cmd, popen_cmd
+from common.utils import popen_cmd, run_cmd
 from worker.discovery.android import get_adb_cmd
 
 logger = logging.getLogger(__name__)
@@ -40,13 +39,13 @@ class Minicap:
     def __init__(self, udid: str):
         self.udid = udid
         self._installed = False
-        self._abi: Optional[str] = None
-        self._sdk: Optional[int] = None
-        self._display_info: Optional[dict] = None
+        self._abi: str | None = None
+        self._sdk: int | None = None
+        self._display_info: dict | None = None
 
         # 流式截图相关
-        self._proc: Optional[subprocess.Popen] = None
-        self._socket: Optional[socket.socket] = None
+        self._proc: subprocess.Popen | None = None
+        self._socket: socket.socket | None = None
         self._local_port: int = 0
         self._quirk_flag: int = 0
         self._stream_rotation: int = 0
@@ -282,14 +281,14 @@ class Minicap:
 
         try:
             return self._read_frame()
-        except (MinicapError, OSError, socket.timeout):
+        except (TimeoutError, MinicapError, OSError):
             # 读失败（超时/断开/半帧）后重建连接再试一次；截图是幂等
             # 请求，重发不会产生副作用
             logger.warning("Minicap frame read failed, resyncing stream and retrying once")
             try:
                 self._resync_stream()
                 return self._read_frame()
-            except (MinicapError, OSError, socket.timeout) as e:
+            except (TimeoutError, MinicapError, OSError) as e:
                 # 重试仍失败：回收整条流，下次调用重新 setup
                 self.stop_stream()
                 if isinstance(e, MinicapError):

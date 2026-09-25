@@ -7,9 +7,10 @@ from worker.storage.database import Database
 def test_artifact_service_saves_and_reads_safe_path(tmp_path):
     service = ArtifactService(Database(tmp_path / "worker.db"), tmp_path / "artifacts")
     from datetime import datetime, timedelta
+
     from worker.task.result import TaskStatus
-    from worker.task.task import Task
     from worker.task.sqlite_repository import SQLiteTaskRepository
+    from worker.task.task import Task
     repository = SQLiteTaskRepository(service.database)
     task = Task.create(platform="web", actions=[], generate_id=False)
     task.task_id = "task-1"

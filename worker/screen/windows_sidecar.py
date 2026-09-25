@@ -9,13 +9,13 @@ import logging
 import shutil
 import socket
 import struct
-import time
 import subprocess
 import threading
-from urllib.parse import urlparse
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd

@@ -9,12 +9,12 @@ import logging
 import os
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
-from common.utils import run_cmd, popen_cmd
 from common.packaging import get_base_dir
+from common.utils import popen_cmd, run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class GoIOSClient:
         self.agent_port = agent_port
         self.agent_host = "127.0.0.1"
         self.timeout = timeout
-        self._http_client: Optional[httpx.Client] = None
+        self._http_client: httpx.Client | None = None
 
     def _resolve_path(self, path: str) -> str:
         """解析 go-ios 路径（支持相对路径和绝对路径）。"""
@@ -52,7 +52,7 @@ class GoIOSClient:
     def _run_cmd(
         self,
         args: list[str],
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
         check: bool = True,
     ) -> subprocess.CompletedProcess:
         """
@@ -77,7 +77,7 @@ class GoIOSClient:
         )
         return result
 
-    def _run_cmd_json(self, args: list[str], timeout: Optional[int] = None) -> Any:
+    def _run_cmd_json(self, args: list[str], timeout: int | None = None) -> Any:
         """执行 go-ios 命令并解析 JSON 输出。"""
         result = self._run_cmd(args, timeout=timeout, check=False)
         if result.returncode != 0:
@@ -187,7 +187,7 @@ class GoIOSClient:
         logger.warning(f"Agent not ready after {timeout}s timeout")
         return False
 
-    def get_tunnel_info(self, udid: str) -> Optional[dict]:
+    def get_tunnel_info(self, udid: str) -> dict | None:
         """
         获取 iOS 17+ 设备的 tunnel 信息。
 
@@ -248,7 +248,7 @@ class GoIOSClient:
         logger.info(f"go-ios list_devices found {len(result)} devices")
         return result
 
-    def get_device_info(self, udid: str) -> Optional[dict]:
+    def get_device_info(self, udid: str) -> dict | None:
         """
         获取设备详细信息。
 
@@ -282,8 +282,8 @@ class GoIOSClient:
         bundle_id: str,
         testrunner_bundle_id: str = "",
         xctest_config: str = "WebDriverAgentRunner.xctest",
-        address: Optional[str] = None,
-        rsd_port: Optional[int] = None,
+        address: str | None = None,
+        rsd_port: int | None = None,
     ) -> subprocess.Popen:
         """
         启动 WDA（后台进程）。
@@ -329,8 +329,8 @@ class GoIOSClient:
         udid: str,
         local_port: int,
         device_port: int,
-        address: Optional[str] = None,
-        rsd_port: Optional[int] = None,
+        address: str | None = None,
+        rsd_port: int | None = None,
     ) -> subprocess.Popen:
         """
         端口转发（后台进程）。

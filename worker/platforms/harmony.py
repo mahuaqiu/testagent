@@ -5,23 +5,24 @@
 设备发现、按键、文本、应用管理和故障回退通道。
 """
 
-import logging
-import time
-import tempfile
-import os
 import io
-from typing import Any, Callable, Optional
+import logging
+import os
+import tempfile
+import time
+from collections.abc import Callable
+from typing import Any
 
 from common.utils import compress_image_to_jpeg
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.platforms.harmony_hdc import (
-    HarmonyHdcWrapper,
-    HarmonyError,
     DeviceNotFoundError,
-    list_devices,
+    HarmonyError,
+    HarmonyHdcWrapper,
     _find_hdc_path,
+    list_devices,
 )
 from worker.platforms.harmony_hdc_process import stop_owned_hdc_processes
 from worker.platforms.harmony_keycodes import (
@@ -77,7 +78,7 @@ class HarmonyPlatformManager(PlatformManager):
         ocr_client=None,
         unlock_config=None,
         device_type: str = "harmony_mobile",
-        official_config: Optional[dict[str, Any]] = None,
+        official_config: dict[str, Any] | None = None,
     ):
         """
         初始化鸿蒙平台管理器。
@@ -89,8 +90,8 @@ class HarmonyPlatformManager(PlatformManager):
         """
         super().__init__(config, ocr_client)
         self._device_clients: dict[str, HarmonyHdcWrapper] = {}
-        self._hdc_path: Optional[str] = None
-        self._current_device: Optional[str] = None
+        self._hdc_path: str | None = None
+        self._current_device: str | None = None
         self._unlock_config = unlock_config or {}  # 解锁配置
         self._device_type = device_type
         self._official_sessions = HarmonyOfficialSessionManager(
@@ -105,7 +106,7 @@ class HarmonyPlatformManager(PlatformManager):
         return self._device_type
 
     @property
-    def hdc_path(self) -> Optional[str]:
+    def hdc_path(self) -> str | None:
         """当前平台使用的 HDC 工具路径。"""
         return self._hdc_path
 
@@ -259,7 +260,7 @@ class HarmonyPlatformManager(PlatformManager):
 
     # ========== 执行上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[dict] = None) -> Any:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
         """
         创建执行上下文。
 
@@ -379,7 +380,7 @@ class HarmonyPlatformManager(PlatformManager):
             raise HarmonyError("No device context")
         return self.get_screenshot(client)
 
-    def peek_official_session(self, udid: str) -> Optional[HarmonyOfficialSession]:
+    def peek_official_session(self, udid: str) -> HarmonyOfficialSession | None:
         """只读获取已存在的官方会话，不触发启动（实时注入路径用）。"""
         return self._official_sessions.get(udid)
 
@@ -387,7 +388,7 @@ class HarmonyPlatformManager(PlatformManager):
         self,
         udid: str,
         owner: str,
-    ) -> Optional[HarmonyOfficialSession]:
+    ) -> HarmonyOfficialSession | None:
         """获取一份带生命周期租约的官方会话。"""
         return self._official_sessions.acquire(
             udid,
@@ -473,7 +474,7 @@ class HarmonyPlatformManager(PlatformManager):
         self,
         client: Any,
         operation: str,
-        official_fn: Optional[Callable[[HarmonyOfficialSession], None]],
+        official_fn: Callable[[HarmonyOfficialSession], None] | None,
         hdc_fn: Callable[[Any], bool],
         hdc_error: str,
     ) -> None:
@@ -549,7 +550,7 @@ class HarmonyPlatformManager(PlatformManager):
             f"HDC 右键（长按）失败: ({x}, {y})",
         )
 
-    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
+    def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: int | None = None, context=None) -> None:
         """
         滑动操作。
 
@@ -587,7 +588,7 @@ class HarmonyPlatformManager(PlatformManager):
             "HDC 滑动失败",
         )
 
-    def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: Optional[int] = None, context=None) -> None:
+    def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: int | None = None, context=None) -> None:
         """鸿蒙 PC 拖拽优先使用官方鼠标按键保持轨迹。"""
         client = context or self._device_clients.get(self._current_device)
         if not client:

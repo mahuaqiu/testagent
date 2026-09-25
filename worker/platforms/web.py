@@ -15,15 +15,15 @@ import shutil
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-from playwright.async_api import async_playwright, BrowserContext, Page, Playwright
+from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
 
 from common.packaging import get_base_dir
+from worker.actions import ActionRegistry
+from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ except ImportError:
     SYSTEM_LEVEL_AVAILABLE = False
 
 try:
-    import mss  # type: ignore[import-not-found]
+    import mss  # type: ignore[import-not-found]  # noqa: F401 -- 可用性探测
 except ImportError:
     pass
 
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # 使用全局工作线程和事件循环
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-_event_loop: Optional[asyncio.AbstractEventLoop] = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 _event_loop_lock = threading.Lock()
 _event_loop_started = threading.Event()
 
@@ -83,7 +83,7 @@ class WebPlatformManager(PlatformManager):
     """
 
     # Web 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {
+    SUPPORTED_ACTIONS: set[str] = {
         "navigate", "start_app", "stop_app", "get_token", "new_page", "switched_page", "close_page",
         "right_click", "move", "paste", "scroll", "close_window",
     }
@@ -91,13 +91,13 @@ class WebPlatformManager(PlatformManager):
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
 
-        self._playwright: Optional[Playwright] = None
-        self._browser_context: Optional[BrowserContext] = None  # 持久化浏览器上下文
-        self._current_page: Optional[Page] = None  # 当前页面，用于基础能力操作
+        self._playwright: Playwright | None = None
+        self._browser_context: BrowserContext | None = None  # 持久化浏览器上下文
+        self._current_page: Page | None = None  # 当前页面，用于基础能力操作
         self._current_level: str = "browser"  # 当前执行层级："browser" 或 "system"
         self._current_monitor: int = 1  # 当前截取的显示器：1 或 2
         # 会话管理：key="default", value={"context", "page"}
-        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
         self.headless = config.headless
         self.browser_type = config.browser_type
         self.timeout = config.timeout
@@ -109,11 +109,11 @@ class WebPlatformManager(PlatformManager):
         self.browser_args = config.browser_args  # 用户配置的启动参数
 
         # 代理配置（由 start_app 动作参数传入）
-        self._proxy_config: Optional[Dict[str, str]] = None  # Playwright proxy 格式
+        self._proxy_config: dict[str, str] | None = None  # Playwright proxy 格式
 
         # Token 捕获
-        self._token_headers: List[str] = config.token_headers or []
-        self._captured_tokens: Dict[str, str] = {}  # 存储捕获的 token
+        self._token_headers: list[str] = config.token_headers or []
+        self._captured_tokens: dict[str, str] = {}  # 存储捕获的 token
 
     def _get_app_dir(self) -> str:
         """获取应用目录（打包后使用 EXE 目录）。"""
@@ -124,7 +124,7 @@ class WebPlatformManager(PlatformManager):
         app_dir = self._get_app_dir()
         return os.path.join(app_dir, self.user_data_dir)
 
-    def _parse_proxy_string(self, proxy_str: Optional[str]) -> Optional[Dict[str, str]]:
+    def _parse_proxy_string(self, proxy_str: str | None) -> dict[str, str] | None:
         """解析代理字符串为 Playwright proxy 格式。
 
         Args:
@@ -229,7 +229,7 @@ class WebPlatformManager(PlatformManager):
         preferences = {}
         if os.path.exists(preferences_file):
             try:
-                with open(preferences_file, "r", encoding="utf-8") as f:
+                with open(preferences_file, encoding="utf-8") as f:
                     preferences = json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to read Preferences file, will create new one: {e}")
@@ -250,7 +250,7 @@ class WebPlatformManager(PlatformManager):
         try:
             with open(preferences_file, "w", encoding="utf-8") as f:
                 json.dump(preferences, f, ensure_ascii=False, indent=2)
-            logger.info(f"Updated Preferences to clear crash state (no restore bubble)")
+            logger.info("Updated Preferences to clear crash state (no restore bubble)")
         except Exception as e:
             logger.warning(f"Failed to update Preferences file: {e}")
 
@@ -459,7 +459,7 @@ class WebPlatformManager(PlatformManager):
         self._browser_context.on("request", on_request)
         logger.info(f"Token capture enabled for headers: {self._token_headers}")
 
-    def get_captured_tokens(self) -> Dict[str, str]:
+    def get_captured_tokens(self) -> dict[str, str]:
         """返回捕获的 tokens dict 副本。"""
         return dict(self._captured_tokens)
 
@@ -550,7 +550,7 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 会话管理方法 ==========
 
-    def has_active_session(self, device_id: Optional[str] = None) -> bool:
+    def has_active_session(self, device_id: str | None = None) -> bool:
         """检查是否有活跃的会话（page 存在且未关闭）。"""
         if "default" not in self._sessions:
             return False
@@ -562,7 +562,7 @@ class WebPlatformManager(PlatformManager):
         except Exception:
             return False
 
-    def get_session_context(self, device_id: Optional[str] = None) -> Any:
+    def get_session_context(self, device_id: str | None = None) -> Any:
         """获取当前会话的上下文。"""
         session = self._sessions.get("default")
         if not session:
@@ -577,7 +577,7 @@ class WebPlatformManager(PlatformManager):
             return None
         return page
 
-    def close_session(self, device_id: Optional[str] = None) -> None:
+    def close_session(self, device_id: str | None = None) -> None:
         """关闭会话（由 stop_app 调用）。"""
         session = self._sessions.get("default")
         if session:
@@ -618,7 +618,7 @@ class WebPlatformManager(PlatformManager):
 
     # ========== 上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
         """创建浏览器页面（基于持久化上下文）。"""
         if not self.is_available():
             raise RuntimeError("Web platform not started")
@@ -808,7 +808,7 @@ class WebPlatformManager(PlatformManager):
         logger.debug(f"System-level input: {text}")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None, level: str = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None, level: str = None) -> None:
         """滑动/拖拽。
 
         Args:
@@ -1550,4 +1550,4 @@ def _web_take_system_screenshot_sidecar(self, monitor: int = None) -> bytes:
 
 WebPlatformManager._take_system_screenshot = _web_take_system_screenshot_sidecar
 
-    
+

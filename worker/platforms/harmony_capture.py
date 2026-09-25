@@ -19,7 +19,6 @@ import socket
 import threading
 import time
 from datetime import datetime
-from typing import List, Optional, Tuple
 
 from worker.platforms.harmony_hdc import HarmonyHdcWrapper
 
@@ -102,7 +101,7 @@ def _jpeg_frame_end(data: bytearray, soi: int) -> int:
     return -1
 
 
-def split_jpeg_frames(buffer: bytearray) -> Tuple[List[bytes], bytearray]:
+def split_jpeg_frames(buffer: bytearray) -> tuple[list[bytes], bytearray]:
     """
     从字节流缓冲区按 JPEG 段结构切出完整帧。
 
@@ -115,7 +114,7 @@ def split_jpeg_frames(buffer: bytearray) -> Tuple[List[bytes], bytearray]:
     Returns:
         Tuple[List[bytes], bytearray]: (完整 JPEG 帧列表, 剩余未完整的缓冲)
     """
-    frames: List[bytes] = []
+    frames: list[bytes] = []
     size = len(buffer)
     pos = 0
     while True:
@@ -150,17 +149,17 @@ class HarmonyScreenCapture:
         capture.stop()
     """
 
-    def __init__(self, hdc: HarmonyHdcWrapper, agent_path: Optional[str] = None):
+    def __init__(self, hdc: HarmonyHdcWrapper, agent_path: str | None = None):
         self.hdc = hdc
         # 显式指定 agent 路径时只用该版本，否则按 AGENT_CANDIDATES 依次尝试
         self.agent_path = agent_path
-        self.local_port: Optional[int] = None
-        self.sock: Optional[socket.socket] = None
+        self.local_port: int | None = None
+        self.sock: socket.socket | None = None
 
-        self._recv_thread: Optional[threading.Thread] = None
+        self._recv_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         # 只保留最新一帧，避免消费慢时积压导致画面延迟
-        self._latest_frame: Optional[bytes] = None
+        self._latest_frame: bytes | None = None
         self._latest_frame_at: float = 0.0
         self._stale_warned = False
         self._frame_cond = threading.Condition()
@@ -199,7 +198,7 @@ class HarmonyScreenCapture:
             # 复用实例重开流时丢弃上一轮残留的流前缀
             self._pending_stream_prefix = bytearray()
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for agent_path in agent_paths:
             try:
                 self._setup_device_agent(agent_path)
@@ -243,7 +242,7 @@ class HarmonyScreenCapture:
             try:
                 # 先关闭 socket，打断接收线程可能长达 20 秒的 recv 超时。
                 sock.shutdown(socket.SHUT_RDWR)
-            except (OSError, socket.error):
+            except OSError:
                 pass
             try:
                 sock.close()
@@ -261,7 +260,7 @@ class HarmonyScreenCapture:
             self._frame_cond.notify_all()
         logger.info(f"鸿蒙 uitest 帧流已停止: {self.hdc.serial}")
 
-    def get_frame(self, timeout: float = 2.0) -> Optional[bytes]:
+    def get_frame(self, timeout: float = 2.0) -> bytes | None:
         """
         获取最新 JPEG 帧。
 
@@ -284,7 +283,7 @@ class HarmonyScreenCapture:
             )
             return self._fresh_frame_or_none()
 
-    def _fresh_frame_or_none(self) -> Optional[bytes]:
+    def _fresh_frame_or_none(self) -> bytes | None:
         """仅当流仍活跃且帧未超龄时返回最新帧，否则返回 None（需持有 _frame_cond）。"""
         frame = self._latest_frame
         if frame is None or not self.is_running:
@@ -414,7 +413,7 @@ class HarmonyScreenCapture:
         while b"\n" not in chunks and time.monotonic() < deadline:
             try:
                 data = self.sock.recv(4096)
-            except socket.timeout as exc:
+            except TimeoutError as exc:
                 raise HarmonyCaptureError("startCaptureScreen 回复超时") from exc
             if not data:
                 raise HarmonyCaptureError("startCaptureScreen 连接被关闭，回复不完整")
@@ -443,7 +442,7 @@ class HarmonyScreenCapture:
         while not self._stop_event.is_set():
             try:
                 chunk = self.sock.recv(RECV_BUFF_SIZE)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except Exception as exc:
                 winerror = getattr(exc, "winerror", None)

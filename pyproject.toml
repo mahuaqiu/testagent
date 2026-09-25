@@ -66,6 +66,11 @@ target-version = "py310"
 select = ["E", "F", "W", "I", "N", "UP"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# worker/main.py 必须先插入项目根到 sys.path 并声明 Windows DPI 感知,
+# 之后才能导入 worker 模块(pyautogui 会抢先设置系统级 DPI),E402 属预期顺序
+"worker/main.py" = ["E402"]
+
 [tool.black]
 line-length = 120
 target-version = ["py310"]

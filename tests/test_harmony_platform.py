@@ -5,29 +5,28 @@ from types import SimpleNamespace
 
 import pytest
 
+from worker.actions.unlock import UnlockScreenAction
+from worker.config import PlatformConfig, WorkerConfig
 from worker.discovery.harmony import HarmonyDeviceInfo
-from worker.platforms import harmony_hdc
-from worker.platforms import harmony_capture
+from worker.platforms import harmony_capture, harmony_hdc
+from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.harmony_capture import (
     HarmonyCaptureError,
     HarmonyScreenCapture,
     split_jpeg_frames,
 )
-from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.harmony_hdc import (
     CommandResult,
-    HdcCommandError,
     HarmonyHdcWrapper,
+    HdcCommandError,
     classify_harmony_device,
     parse_harmony_display_size,
     parse_harmony_screen_state,
 )
 from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
-from worker.config import PlatformConfig, WorkerConfig
-from worker.task import Action, ActionStatus, Task
 from worker.scheduling.scheduler import ResourceScheduler
+from worker.task import Action, ActionStatus, Task
 from worker.worker import Worker
-from worker.actions.unlock import UnlockScreenAction
 
 
 def test_parse_target_lines_keeps_connection_metadata() -> None:
@@ -907,8 +906,8 @@ def test_harmony_unlock_check_locked_uses_hdc_is_locked() -> None:
 
 
 def test_harmony_device_monitor_preserves_metadata_when_marked_online() -> None:
-    from worker.device_monitor import DeviceMonitor
     from worker.config import WorkerConfig
+    from worker.device_monitor import DeviceMonitor
 
     monitor = DeviceMonitor(WorkerConfig(discover_harmony_pc_devices=True))
     monitor._faulty_harmony_pc_devices.append(
@@ -933,8 +932,8 @@ def test_harmony_device_monitor_preserves_metadata_when_marked_online() -> None:
 
 
 def test_harmony_device_monitor_refreshes_metadata_and_moves_category() -> None:
-    from worker.device_monitor import DeviceMonitor
     from worker.config import WorkerConfig
+    from worker.device_monitor import DeviceMonitor
 
     monitor = DeviceMonitor(WorkerConfig(discover_harmony_mobile_devices=True, discover_harmony_pc_devices=True))
     monitor._harmony_mobile_devices.append({

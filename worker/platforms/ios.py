@@ -16,7 +16,7 @@ from typing import Any
 from common.packaging import get_base_dir
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
-from worker.actions.spec import ActionCancelled, ActionTimedOut
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.platforms.go_ios_client import GoIOSClient
@@ -26,7 +26,7 @@ from worker.task import Action, ActionResult, ActionStatus
 logger = logging.getLogger(__name__)
 
 
-class iOSPlatformManager(PlatformManager):
+class iOSPlatformManager(PlatformManager):  # noqa: N801 -- iOS 为 Apple 品牌大小写
     """
     iOS 平台管理器。
 
@@ -1496,7 +1496,7 @@ class iOSPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
-        except (ActionCancelled, ActionTimedOut):
+        except (ActionCancelledError, ActionTimedOutError):
             # 取消和超时必须交回任务层处理（映射为 CANCELLED/TIMEOUT），
             # 吞成普通 FAILED 会把任务结果伪装成动作失败。
             raise

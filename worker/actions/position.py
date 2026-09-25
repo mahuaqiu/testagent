@@ -5,7 +5,7 @@
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from worker.actions.base import BaseActionExecutor
 from worker.task import Action, ActionResult, ActionStatus
@@ -22,7 +22,7 @@ class OcrGetPositionExecutor(BaseActionExecutor):
     name = "ocr_get_position"
     requires_ocr = True
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         """执行 OCR 文字坐标获取。
 
         Args:
@@ -79,7 +79,7 @@ class ImageGetPositionExecutor(BaseActionExecutor):
 
     name = "image_get_position"
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         """执行图像坐标获取。
 
         Args:

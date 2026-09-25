@@ -4,9 +4,9 @@
 支持 Nuitka 打包方式。
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 

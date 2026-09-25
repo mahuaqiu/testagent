@@ -29,6 +29,8 @@ from worker.config import (
     save_config_with_version,
 )
 from worker.errors import WorkerError
+from worker.files_api import router as files_router
+from worker.files_api import set_files_config
 from worker.log_query import (
     LogQueryError,
     query_by_lines,
@@ -41,7 +43,6 @@ from worker.performance_monitor import (
     CollectStopRequest,
     get_collector,
 )
-from worker.files_api import router as files_router, set_files_config
 from worker.platforms.harmony_hdc import _find_hdc_path
 from worker.screen.pointer_injector import (
     HarmonyPointerDispatcher,
@@ -83,7 +84,7 @@ DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT = 10.0
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
 
 
-class _WebSocketClosed(RuntimeError):
+class WebSocketClosedError(RuntimeError):
     """WebSocket 已关闭，当前推流应按正常断开处理。"""
 
 
@@ -156,7 +157,7 @@ async def _send_websocket_message(
 ) -> None:
     """安全发送 WebSocket 消息，将关闭竞态转换为正常断开。"""
     if stop_event is not None and stop_event.is_set():
-        raise _WebSocketClosed("WebSocket stop event is set")
+        raise WebSocketClosedError("WebSocket stop event is set")
 
     try:
         send = websocket.send_text(data) if isinstance(data, str) else websocket.send_bytes(data)
@@ -166,7 +167,7 @@ async def _send_websocket_message(
             await asyncio.wait_for(send, timeout=timeout)
     except Exception as exc:
         if _is_expected_websocket_close(exc):
-            raise _WebSocketClosed(str(exc)) from exc
+            raise WebSocketClosedError(str(exc)) from exc
         raise
 
 
@@ -1960,7 +1961,7 @@ async def screen_stream(
                     )
                     break
 
-    except _WebSocketClosed as exc:
+    except WebSocketClosedError as exc:
         log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
         logger.debug("WebSocket 已关闭，停止推流: platform=%s, device=%s, reason=%s", platform, log_device, exc)
     except WebSocketDisconnect:

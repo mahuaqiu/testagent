@@ -7,7 +7,6 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -202,12 +201,12 @@ class DownloadDialog(QDialog):
         self.timeout = timeout
 
         # 下载结果
-        self._downloaded_file: Optional[str] = None
+        self._downloaded_file: str | None = None
         self._was_cancelled = False
-        self._error_message: Optional[str] = None
+        self._error_message: str | None = None
 
         # 下载线程
-        self._download_thread: Optional[DownloadThread] = None
+        self._download_thread: DownloadThread | None = None
 
         self._setup_ui()
         self._start_download()
@@ -330,7 +329,7 @@ class DownloadDialog(QDialog):
         self.progress_label.setText("下载已取消")
         self.reject()
 
-    def get_downloaded_file(self) -> Optional[str]:
+    def get_downloaded_file(self) -> str | None:
         """
         获取下载文件路径。
 
@@ -348,7 +347,7 @@ class DownloadDialog(QDialog):
         """
         return self._was_cancelled
 
-    def get_error(self) -> Optional[str]:
+    def get_error(self) -> str | None:
         """
         获取错误信息。
 
@@ -357,7 +356,7 @@ class DownloadDialog(QDialog):
         """
         return self._error_message
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event) -> None:  # noqa: N802 -- Qt 框架回调固定命名
         """
         关闭事件处理。
 

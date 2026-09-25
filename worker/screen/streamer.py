@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from worker.screen.manager import ScreenManager
@@ -35,7 +35,7 @@ class WebSocketStreamer:
         self._running = False
         logger.info("WebSocket streamer stopped")
 
-    async def get_frame_async(self) -> Optional[bytes]:
+    async def get_frame_async(self) -> bytes | None:
         """异步获取帧（避免阻塞 WebSocket）。"""
         # 从队列获取 JPEG 帧
         return await asyncio.to_thread(self.screen_manager.get_frame)

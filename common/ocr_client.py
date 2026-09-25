@@ -29,7 +29,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
 
@@ -153,8 +152,8 @@ class OCRClient:
     def recognize(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        filter_text: Optional[str] = None,
+        lang: str | None = None,
+        filter_text: str | None = None,
         confidence_threshold: float = 0.0,
         image_quality: int = 80,
         preserve_jpeg: bool = True,
@@ -215,7 +214,7 @@ class OCRClient:
         confidence_threshold: float = 0.0,
         image_quality: int = 80,
         preserve_jpeg: bool = True,
-    ) -> Optional[TextBlock]:
+    ) -> TextBlock | None:
         """
         在图片中查找指定文字。
 
@@ -363,7 +362,7 @@ class OCRClient:
         source_image_quality: int = 80,
         preserve_source_jpeg: bool = True,
         reference_image_quality: int = 80,
-    ) -> Optional[MatchResult]:
+    ) -> MatchResult | None:
         """
         在源图像中查找模板图像（返回第一个匹配）。
 
@@ -398,7 +397,7 @@ class OCRClient:
         source_image_quality: int = 80,
         preserve_source_jpeg: bool = True,
         reference_image_quality: int = 80,
-    ) -> Optional[MatchResult]:
+    ) -> MatchResult | None:
         """
         查找文本附近最近的图片。
 

@@ -14,12 +14,13 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 from common.ocr_client import OCRClient
 from common.packaging import get_base_dir
 from common.request_context import get_request_id
 from common.utils import compress_image_to_jpeg
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError, ExecutionControl
 from worker.config import PlatformConfig, WorkerConfig
 from worker.device_monitor import DeviceMonitor
 from worker.devices.models import DeviceRecord
@@ -34,11 +35,10 @@ from worker.platforms.mac import MacPlatformManager
 from worker.platforms.web import WebPlatformManager
 from worker.platforms.windows import WindowsPlatformManager
 from worker.reporter import Reporter
-from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
-from worker.tools import get_all_script_versions
 from worker.runtime import WorkerRuntime
-from worker.actions.spec import ActionCancelled, ActionTimedOut, ExecutionControl
+from worker.task import ActionResult, ActionStatus, Task, TaskResult, TaskStatus
 from worker.task.service import REMOTE_EXECUTION_DOMAIN
+from worker.tools import get_all_script_versions
 
 logger = logging.getLogger(__name__)
 
@@ -813,7 +813,7 @@ class Worker:
 
         return True
 
-    def _get_cache_clear_status(self) -> Dict[str, Any]:
+    def _get_cache_clear_status(self) -> dict[str, Any]:
         """获取缓存清理状态。
 
         Returns:
@@ -823,12 +823,12 @@ class Worker:
             return {"last_clear_timestamp": 0}
 
         try:
-            with open(self._cache_clear_status_file, "r", encoding="utf-8") as f:
+            with open(self._cache_clear_status_file, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {"last_clear_timestamp": 0}
 
-    def _save_cache_clear_status(self, status: Dict[str, Any]) -> None:
+    def _save_cache_clear_status(self, status: dict[str, Any]) -> None:
         """保存缓存清理状态。"""
         try:
             os.makedirs(os.path.dirname(self._cache_clear_status_file), exist_ok=True)
@@ -1166,14 +1166,14 @@ class Worker:
             try:
                 result = manager.execute_action(context, action)
                 action.execution_control.checkpoint()
-            except ActionCancelled as exc:
+            except ActionCancelledError as exc:
                 return TaskResult(
                     task_id=task.task_id, request_id=request_id,
                     status=TaskStatus.CANCELLED, platform=task.platform,
                     started_at=started_at, finished_at=datetime.now(),
                     actions=actions_results, error=str(exc),
                 )
-            except ActionTimedOut:
+            except ActionTimedOutError:
                 if result is None:
                     result = ActionResult(
                         number=i,

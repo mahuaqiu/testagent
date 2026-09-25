@@ -7,7 +7,7 @@ import pytest
 
 from worker.actions.image import ImageAssertAction
 from worker.actions.ocr import OcrAssertAction
-from worker.actions.spec import ActionTimedOut, ExecutionControl
+from worker.actions.spec import ActionTimedOutError, ExecutionControl
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionStatus
@@ -170,7 +170,7 @@ def test_ocr_assert_deadline_expiry_returns_failed_not_raised() -> None:
             return 0.5
 
         def wait(self, seconds: float) -> None:
-            raise ActionTimedOut("Task timeout")
+            raise ActionTimedOutError("Task timeout")
 
     platform = _FakePlatform(found_after=99)
     action = Action.from_dict({"action_type": "ocr_assert", "value": "操作成功", "timeout": 500})

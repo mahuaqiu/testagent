@@ -7,8 +7,6 @@
 import json
 import os
 
-from typing import Optional
-
 from common.packaging import get_base_dir
 
 
@@ -83,7 +81,7 @@ def get_versions_file() -> str:
     return os.path.join(get_tools_dir(), '.versions.json')
 
 
-def get_script_version(name: str) -> Optional[str]:
+def get_script_version(name: str) -> str | None:
     """
     获取脚本版本号。
 
@@ -98,10 +96,10 @@ def get_script_version(name: str) -> Optional[str]:
         return None
 
     try:
-        with open(versions_file, 'r', encoding='utf-8') as f:
+        with open(versions_file, encoding='utf-8') as f:
             versions = json.load(f)
         return versions.get(name)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -121,9 +119,9 @@ def update_script_version(name: str, version: str) -> None:
     versions = {}
     if os.path.exists(versions_file):
         try:
-            with open(versions_file, 'r', encoding='utf-8') as f:
+            with open(versions_file, encoding='utf-8') as f:
                 versions = json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             versions = {}
 
     # 更新版本
@@ -204,7 +202,7 @@ def get_all_script_versions() -> dict[str, str]:
         return {}
 
     try:
-        with open(versions_file, 'r', encoding='utf-8') as f:
+        with open(versions_file, encoding='utf-8') as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}

@@ -703,8 +703,9 @@ class PerformanceCollector:
 
     def _spool_path(self, collect_id: str | None = None) -> str | None:
         """返回当前采集任务的可靠本地队列路径。"""
-        from worker.config import get_base_dir
         import os
+
+        from worker.config import get_base_dir
 
         collect_id = collect_id or self._collect_id
         if not collect_id:
@@ -781,12 +782,13 @@ class PerformanceCollector:
         import glob
         import json
         import os
+
         from worker.config import get_base_dir
 
         perf_dir = os.path.join(get_base_dir(), "data", "performance")
         for path in sorted(glob.glob(os.path.join(perf_dir, "*.spool.terminal"))):
             try:
-                with open(path, "r", encoding="utf-8") as file:
+                with open(path, encoding="utf-8") as file:
                     payload = json.load(file)
                 if self._post_terminal_payload(payload):
                     os.remove(path)
@@ -827,12 +829,13 @@ class PerformanceCollector:
         import glob
         import json
         import os
+
         from worker.config import get_base_dir
 
         perf_dir = os.path.join(get_base_dir(), "data", "performance")
         paths = sorted(glob.glob(os.path.join(perf_dir, "*.spool")))
         for path in paths:
-            with open(path, "r", encoding="utf-8") as file:
+            with open(path, encoding="utf-8") as file:
                 lines = file.readlines()
 
             remaining: list[str] = []

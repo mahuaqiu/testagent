@@ -2,6 +2,7 @@
 
 import sys
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from worker.perf_backends.base import CollectBackend

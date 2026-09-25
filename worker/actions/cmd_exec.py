@@ -4,16 +4,16 @@
 在宿主机执行 shell/cmd 命令，所有平台均支持。
 """
 
-import subprocess  # 用于 TimeoutExpired 异常类型
 import logging
 import os
 import re
-from typing import Optional, TYPE_CHECKING
+import subprocess  # 用于 TimeoutExpired 异常类型
+from typing import TYPE_CHECKING
 
 from common.utils import SUBPROCESS_HIDE_WINDOW, run_cmd_with_process_tree_timeout
-from worker.tools import get_tools_dir
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
+from worker.tools import get_tools_dir
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -100,7 +100,7 @@ class CmdExecAction(BaseActionExecutor):
     requires_context = False  # 不需要浏览器/设备上下文
     requires_ocr = False
 
-    def execute(self, platform: "PlatformManager", action: Action, context: Optional[object] = None) -> ActionResult:
+    def execute(self, platform: "PlatformManager", action: Action, context: object | None = None) -> ActionResult:
         cmd = action.value
         if not cmd:
             return ActionResult(

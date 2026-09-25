@@ -7,13 +7,13 @@ Android 平台执行引擎。
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 import uiautomator2 as u2
 
 from common.utils import run_cmd
 from worker.actions import ActionRegistry
-from worker.actions.spec import ActionCancelled, ActionTimedOut
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError
 from worker.config import PlatformConfig
 from worker.discovery.android import get_adb_cmd
 from worker.platforms.base import PlatformManager
@@ -258,7 +258,7 @@ class AndroidPlatformManager(PlatformManager):
         device.send_keys(text)
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None) -> None:
         """滑动，默认使用 steps=5 平滑滑动。
 
         Args:
@@ -413,7 +413,7 @@ class AndroidPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
-        except (ActionCancelled, ActionTimedOut):
+        except (ActionCancelledError, ActionTimedOutError):
             # 取消和超时必须交回任务层处理（映射为 CANCELLED/TIMEOUT），
             # 吞成普通 FAILED 会把任务结果伪装成动作失败。
             raise

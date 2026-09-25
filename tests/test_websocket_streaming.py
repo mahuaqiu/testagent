@@ -5,11 +5,10 @@ import asyncio
 import pytest
 
 from worker.server import (
-    _WebSocketClosed,
+    WebSocketClosedError,
     _is_expected_websocket_close,
     _send_websocket_message,
 )
-
 
 ASGI_CLOSE_RACE = (
     "Unexpected ASGI message 'websocket.send', after sending "
@@ -33,7 +32,7 @@ def test_safe_websocket_send_converts_close_race() -> None:
         async def send_text(self, _data: str) -> None:
             raise AssertionError("send_text should not be called")
 
-    with pytest.raises(_WebSocketClosed):
+    with pytest.raises(WebSocketClosedError):
         asyncio.run(_send_websocket_message(FakeWebSocket(), b"frame"))
 
 
@@ -52,7 +51,7 @@ def test_safe_websocket_send_stops_before_sending() -> None:
         websocket = FakeWebSocket()
         stop_event = asyncio.Event()
         stop_event.set()
-        with pytest.raises(_WebSocketClosed):
+        with pytest.raises(WebSocketClosedError):
             await _send_websocket_message(
                 websocket,
                 b"frame",

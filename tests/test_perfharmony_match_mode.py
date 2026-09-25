@@ -245,21 +245,21 @@ def test_stop_in_follow_window_does_not_start_new_monitor(fake_module):
 
 def test_collector_renumbers_samples_across_backend_restart(monkeypatch):
     """换 PID 重启后新 Monitor 序号从头计数，必须单调续编避免 sample_key 撞车。"""
-    from types import SimpleNamespace as NS
+    from types import SimpleNamespace
 
     collector = PerformanceCollector("dev1")
     collector._collect_id = "c1"
     batches: list = []
     monkeypatch.setattr(collector, "_report_samples", lambda samples: batches.append(samples))
-    collector._backend = NS(
+    collector._backend = SimpleNamespace(
         buffer_len=lambda: 2,
-        get_result=lambda: NS(samples=[_sample(1), _sample(2)]),
+        get_result=lambda: SimpleNamespace(samples=[_sample(1), _sample(2)]),
     )
     collector._drain_backend_buffer()
     # 模拟换 PID 重启：新 Monitor 的序号又从 1 开始。
-    collector._backend = NS(
+    collector._backend = SimpleNamespace(
         buffer_len=lambda: 2,
-        get_result=lambda: NS(samples=[_sample(1), _sample(2)]),
+        get_result=lambda: SimpleNamespace(samples=[_sample(1), _sample(2)]),
     )
     collector._drain_backend_buffer()
 

@@ -4,7 +4,6 @@ from worker.errors import IdempotencyConflictError
 from worker.task.service import TaskService
 from worker.task.task import Task, request_fingerprint
 
-
 __all__ = ["IdempotentTaskService", "request_fingerprint"]
 
 

@@ -6,13 +6,12 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Dict
 
 from worker.platforms.harmony_hdc import (
-    HdcTarget,
-    list_target_info,
-    _find_hdc_path,
     HarmonyHdcWrapper,
+    HdcTarget,
+    _find_hdc_path,
+    list_target_info,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ class HarmonyDeviceInfo:
     connection_status: str = "ready"
     capabilities: tuple[str, ...] = ()
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """转换为字典。"""
         platform = (
             "harmony_mobile"
@@ -63,12 +62,12 @@ class HarmonyDiscoverer:
     """鸿蒙设备发现器。"""
 
     @staticmethod
-    def check_hdc_available(configured_path: Optional[str] = None) -> bool:
+    def check_hdc_available(configured_path: str | None = None) -> bool:
         """检查 HDC 是否可用。"""
         return _find_hdc_path(configured_path) is not None
 
     @staticmethod
-    def list_devices(configured_path: Optional[str] = None) -> List[str]:
+    def list_devices(configured_path: str | None = None) -> list[str]:
         """
         获取已连接的设备 UDID 列表。
 
@@ -84,9 +83,9 @@ class HarmonyDiscoverer:
     @staticmethod
     def get_device_info(
         udid: str,
-        configured_path: Optional[str] = None,
-        target: Optional[HdcTarget] = None,
-    ) -> Optional[HarmonyDeviceInfo]:
+        configured_path: str | None = None,
+        target: HdcTarget | None = None,
+    ) -> HarmonyDeviceInfo | None:
         """
         获取设备详细信息。
 
@@ -124,7 +123,7 @@ class HarmonyDiscoverer:
             return None
 
     @classmethod
-    def discover(cls, configured_path: Optional[str] = None) -> List[HarmonyDeviceInfo]:
+    def discover(cls, configured_path: str | None = None) -> list[HarmonyDeviceInfo]:
         """
         发现所有鸿蒙设备。
 
@@ -146,8 +145,8 @@ class HarmonyDiscoverer:
 
     @classmethod
     def discover_device(
-        cls, udid: str, configured_path: Optional[str] = None
-    ) -> Optional[HarmonyDeviceInfo]:
+        cls, udid: str, configured_path: str | None = None
+    ) -> HarmonyDeviceInfo | None:
         """
         发现指定设备。
 

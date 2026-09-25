@@ -6,7 +6,7 @@ import time
 import pytest
 
 from worker.actions.coordinate import WaitAction
-from worker.actions.spec import ActionCancelled, ActionTimedOut, ExecutionControl
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError, ExecutionControl
 from worker.task import Action
 from worker.task.task import Task
 
@@ -17,7 +17,7 @@ def test_wait_action_obeys_action_deadline() -> None:
         deadline_monotonic=time.monotonic() + 0.02,
     )
 
-    with pytest.raises(ActionTimedOut):
+    with pytest.raises(ActionTimedOutError):
         WaitAction().execute(None, action)
 
 
@@ -27,7 +27,7 @@ def test_wait_action_obeys_task_cancellation() -> None:
     action = Action(action_type="wait", value=1000)
     action.execution_control = ExecutionControl(cancel_event=cancel_event)
 
-    with pytest.raises(ActionCancelled):
+    with pytest.raises(ActionCancelledError):
         WaitAction().execute(None, action)
 
 

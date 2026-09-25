@@ -5,10 +5,10 @@ Web Token 捕获 Action 执行器。
 """
 
 import json
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -25,7 +25,7 @@ class GetTokenAction(BaseActionExecutor):
         self,
         platform: "PlatformManager",
         action: Action,
-        context: Optional[object] = None
+        context: object | None = None
     ) -> ActionResult:
         """
         执行 get_token action。

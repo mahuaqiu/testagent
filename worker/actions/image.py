@@ -20,7 +20,7 @@ from worker.actions.base import (
     _parse_row_tolerance,
     _region_b64,
 )
-from worker.actions.spec import ActionTimedOut
+from worker.actions.spec import ActionTimedOutError
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
@@ -255,7 +255,7 @@ class ImageAssertAction(BaseActionExecutor):
                 if wait_seconds is None:
                     break
                 self._wait(action, wait_seconds)
-        except ActionTimedOut:
+        except ActionTimedOutError:
             # 轮询窗口耗尽（含最后一轮检查超时），按断言失败返回而不是任务级 TIMEOUT
             pass
 

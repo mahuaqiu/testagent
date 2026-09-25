@@ -15,8 +15,8 @@ from worker.actions.coordinate import (
     PasteAction,
     PressAction,
     RightClickAction,
-    ScrollAction,
     ScreenshotAction,
+    ScrollAction,
     SwipeAction,
     WaitAction,
 )

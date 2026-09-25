@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 
 class TaskStatus(str, Enum):
@@ -39,24 +39,24 @@ class ActionResult:
     status: ActionStatus
     request_id: str | None = None  # request-id
     duration_ms: int = 0
-    output: Optional[str] = None
-    error: Optional[str] = None
-    screenshot: Optional[str] = None  # base64 或文件路径
+    output: str | None = None
+    error: str | None = None
+    screenshot: str | None = None  # base64 或文件路径
     context: Any = None  # 执行后更新的 context（如 start_app 后返回新 page）
     # cmd_exec 专用字段
-    exit_code: Optional[int] = None  # 命令退出码
-    stdout: Optional[str] = None     # 标准输出
-    stderr: Optional[str] = None     # 标准错误
+    exit_code: int | None = None  # 命令退出码
+    stdout: str | None = None     # 标准输出
+    stderr: str | None = None     # 标准错误
     # OCR 失败时的信息
-    ocr_info: Optional[list[dict[str, Any]]] = None  # OCR 识别信息列表
+    ocr_info: list[dict[str, Any]] | None = None  # OCR 识别信息列表
     # 区域截图（same_row 等使用裁剪区域时，附带裁剪后的小图）
-    region_screenshot: Optional[str] = None  # base64，失败时的裁剪区域截图
+    region_screenshot: str | None = None  # base64，失败时的裁剪区域截图
     # 点击类动作时间戳
-    timestamp: Optional[int] = None  # 点击动作执行时的时间戳（毫秒级）
-    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    timestamp: int | None = None  # 点击动作执行时的时间戳（毫秒级）
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ActionResult":
+    def from_dict(cls, data: dict[str, Any]) -> "ActionResult":
         """从字典创建。"""
         return cls(
             number=data.get("number", 0),
@@ -77,7 +77,7 @@ class ActionResult:
             artifacts=data.get("artifacts", []),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典。"""
         result = {
             "number": self.number,
@@ -115,21 +115,21 @@ class ActionResult:
 class TaskResult:
     """任务执行结果。"""
 
-    task_id: Optional[str] = None  # 可选，同步执行不生成 task_id
+    task_id: str | None = None  # 可选，同步执行不生成 task_id
     request_id: str | None = None  # request-id
     status: TaskStatus = TaskStatus.PENDING
     platform: str = ""
 
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     duration_ms: int = 0
 
-    actions: List[ActionResult] = field(default_factory=list)
+    actions: list[ActionResult] = field(default_factory=list)
 
-    error: Optional[str] = None
-    error_screenshot: Optional[str] = None  # 失败截图（base64 编码）
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
+    error_screenshot: str | None = None  # 失败截图（base64 编码）
+    metadata: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -137,7 +137,7 @@ class TaskResult:
         return self.status == TaskStatus.SUCCESS
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TaskResult":
+    def from_dict(cls, data: dict[str, Any]) -> "TaskResult":
         """从字典创建。"""
         return cls(
             task_id=data.get("task_id", ""),
@@ -154,7 +154,7 @@ class TaskResult:
             artifacts=data.get("artifacts", []),
         )
 
-    def to_dict(self, include_task_id: bool = True) -> Dict[str, Any]:
+    def to_dict(self, include_task_id: bool = True) -> dict[str, Any]:
         """转换为字典。
 
         Args:

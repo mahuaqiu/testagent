@@ -6,7 +6,10 @@ iOS 设备发现模块。
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from worker.platforms.go_ios_client import GoIOSClient
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ IOS_RESOLUTION_MAP = {
 
 
 @dataclass
-class iOSDeviceInfo:
+class iOSDeviceInfo:  # noqa: N801 -- iOS 为 Apple 品牌大小写
     """iOS 设备信息。"""
     udid: str
     name: str
@@ -68,7 +71,7 @@ class iOSDeviceInfo:
     resolution: str
     status: str
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """转换为字典。"""
         return {
             "platform": "ios",
@@ -83,7 +86,7 @@ class iOSDeviceInfo:
         }
 
 
-class iOSDiscoverer:
+class iOSDiscoverer:  # noqa: N801 -- iOS 为 Apple 品牌大小写
     """iOS 设备发现器。"""
 
     _go_ios_client: Optional["GoIOSClient"] = None
@@ -97,13 +100,13 @@ class iOSDiscoverer:
     def check_go_ios_available() -> bool:
         """检查 go-ios 是否可用。"""
         try:
-            from worker.platforms.go_ios_client import GoIOSClient
+            from worker.platforms.go_ios_client import GoIOSClient  # noqa: F401 -- 可用性探测
             return True
         except ImportError:
             return False
 
     @staticmethod
-    def list_devices() -> List[str]:
+    def list_devices() -> list[str]:
         """获取设备 UDID 列表。"""
         if not iOSDiscoverer._go_ios_client:
             logger.warning("GoIOSClient not initialized")
@@ -121,7 +124,7 @@ class iOSDiscoverer:
         return IOS_RESOLUTION_MAP.get(product_type, "Unknown")
 
     @staticmethod
-    def get_device_info(udid: str, status: str = "online") -> Optional[iOSDeviceInfo]:
+    def get_device_info(udid: str, status: str = "online") -> iOSDeviceInfo | None:
         """获取设备详细信息。"""
         if status == "offline":
             return iOSDeviceInfo(
@@ -158,7 +161,7 @@ class iOSDiscoverer:
             return None
 
     @classmethod
-    def discover(cls) -> List[iOSDeviceInfo]:
+    def discover(cls) -> list[iOSDeviceInfo]:
         """发现所有 iOS 设备。"""
         if not cls._go_ios_client:
             logger.warning("GoIOSClient not initialized, skipping iOS discovery")
@@ -181,6 +184,6 @@ class iOSDiscoverer:
             return []
 
     @classmethod
-    def discover_device(cls, udid: str) -> Optional[iOSDeviceInfo]:
+    def discover_device(cls, udid: str) -> iOSDeviceInfo | None:
         """发现指定设备。"""
         return cls.get_device_info(udid)

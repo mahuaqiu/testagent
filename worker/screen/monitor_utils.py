@@ -13,12 +13,11 @@ import ctypes
 import logging
 import sys
 import threading
-from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 # 缓存显示器信息
-_monitors_cache: List[Dict] | None = None
+_monitors_cache: list[dict] | None = None
 _monitors_cache_lock = threading.Lock()
 
 # 进程 DPI 感知设置状态
@@ -76,7 +75,7 @@ def _ensure_dpi_awareness() -> None:
             _dpi_awareness_done = True
 
 
-def get_monitors() -> List[Dict]:
+def get_monitors() -> list[dict]:
     """获取所有显示器配置列表。
 
     使用 Rust sidecar 获取显示器配置。
@@ -121,7 +120,7 @@ def get_monitors() -> List[Dict]:
         return default_monitors
 
 
-def get_mapped_monitor_index(monitor: int) -> Tuple[int, Dict]:
+def get_mapped_monitor_index(monitor: int) -> tuple[int, dict]:
     """将用户显示器编号映射到实际显示器索引。
 
     显示器编号规则（与用户直觉一致）：
@@ -160,13 +159,13 @@ def get_mapped_monitor_index(monitor: int) -> Tuple[int, Dict]:
     return target_index + 1, monitors[target_index]
 
 
-def get_monitor_offset(monitor: int) -> Tuple[int, int]:
+def get_monitor_offset(monitor: int) -> tuple[int, int]:
     """获取指定显示器相对于虚拟屏幕的偏移量。"""
     _, monitor_config = get_mapped_monitor_index(monitor)
     return monitor_config['left'], monitor_config['top']
 
 
-def convert_to_global_coords(x: int, y: int, monitor: int) -> Tuple[int, int]:
+def convert_to_global_coords(x: int, y: int, monitor: int) -> tuple[int, int]:
     """将截图相对坐标转换为 pyautogui 全局坐标。"""
     offset_x, offset_y = get_monitor_offset(monitor)
     global_x = x + offset_x

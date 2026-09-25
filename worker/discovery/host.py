@@ -6,7 +6,6 @@ import logging
 import platform
 import socket
 from dataclasses import dataclass
-from typing import List, Optional
 
 import psutil
 
@@ -55,7 +54,7 @@ class HostInfo:
     os_type: str  # windows / macos
     os_version: str
     hostname: str
-    ip_addresses: List[str]
+    ip_addresses: list[str]
     cpu_info: str
     memory_gb: float
     display_resolution: str
@@ -128,7 +127,7 @@ class HostDiscoverer:
         return socket.gethostname()
 
     @staticmethod
-    def get_ip_addresses() -> List[str]:
+    def get_ip_addresses() -> list[str]:
         """
         获取所有 IP 地址（按优先级排序）。
 
@@ -140,7 +139,7 @@ class HostDiscoverer:
         Returns:
             List[str]: IP 地址列表，按优先级排序
         """
-        addresses: List[str] = []
+        addresses: list[str] = []
         seen: set = set()
 
         # 方式 1：psutil 遍历网卡（最可靠）
@@ -153,7 +152,7 @@ class HostDiscoverer:
             virtual_keywords = ['virtual', 'vmware', 'vbox', 'hyper-v', 'loopback', 'bluetooth', 'tunnel', 'vpn', 'vethernet', '虚拟']
 
             # 收集网卡信息并按 IP 地址段优先级排序
-            interface_ips: List[tuple[int, str]] = []  # (priority, ip)
+            interface_ips: list[tuple[int, str]] = []  # (priority, ip)
 
             for interface, addrs in net_if_addrs.items():
                 # 检查网卡状态
@@ -219,7 +218,7 @@ class HostDiscoverer:
         return ["127.0.0.1"]
 
     @staticmethod
-    def get_preferred_ip(configured_ip: Optional[str] = None) -> str:
+    def get_preferred_ip(configured_ip: str | None = None) -> str:
         """
         获取优先使用的 IP 地址。
 
@@ -301,7 +300,7 @@ class HostDiscoverer:
                     import ctypes
                     user32 = ctypes.windll.user32
                     hdc = user32.GetDC(0)
-                    LOGPIXELSX = 88
+                    LOGPIXELSX = 88  # noqa: N806 -- Win32 API 常量名
                     scale = ctypes.windll.gdi32.GetDeviceCaps(hdc, LOGPIXELSX) / 96.0
                 except Exception:
                     pass
@@ -410,7 +409,7 @@ class HostDiscoverer:
         return ""
 
     @classmethod
-    def get_supported_platforms(cls) -> List[str]:
+    def get_supported_platforms(cls) -> list[str]:
         """
         根据操作系统类型返回支持的平台列表。
 

@@ -1,8 +1,9 @@
 """推流功能测试"""
-import pytest
 import asyncio
 import struct
 from unittest.mock import Mock, patch
+
+import pytest
 
 
 class TestPushFrameReader:
@@ -17,7 +18,7 @@ class TestPushFrameReader:
 
         reader = PushFrameReader(mock_client)
         assert reader._fps == 20
-        assert reader._running == False
+        assert reader._running is False
 
     def test_is_running(self):
         """测试运行状态检查"""
@@ -32,7 +33,7 @@ class TestPushFrameReader:
         reader = PushFrameReader(mock_client)
         reader._running = True
 
-        assert reader.is_running() == True
+        assert reader.is_running() is True
 
     def test_is_running_false_when_not_running(self):
         """测试运行状态检查 - 未运行"""
@@ -45,7 +46,7 @@ class TestPushFrameReader:
         reader = PushFrameReader(mock_client)
         reader._running = False
 
-        assert reader.is_running() == False
+        assert reader.is_running() is False
 
     def test_handle_line_sps(self):
         """测试处理 SPS 帧"""

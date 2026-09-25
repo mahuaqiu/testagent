@@ -13,13 +13,13 @@ if sys.platform.startswith("win"):
 
     ensure_process_dpi_awareness()
 
-from worker.platforms.base import PlatformManager
-from worker.platforms.web import WebPlatformManager
 from worker.platforms.android import AndroidPlatformManager
-from worker.platforms.ios import iOSPlatformManager
-from worker.platforms.windows import WindowsPlatformManager
-from worker.platforms.mac import MacPlatformManager
+from worker.platforms.base import PlatformManager
 from worker.platforms.harmony import HarmonyPlatformManager
+from worker.platforms.ios import iOSPlatformManager
+from worker.platforms.mac import MacPlatformManager
+from worker.platforms.web import WebPlatformManager
+from worker.platforms.windows import WindowsPlatformManager
 
 __all__ = [
     "PlatformManager",

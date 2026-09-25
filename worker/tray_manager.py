@@ -8,13 +8,13 @@ import logging
 import os
 import sys
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import pystray
 from PIL import Image
-from common.utils import popen_cmd
 
 from common.packaging import get_base_dir
+from common.utils import popen_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,11 @@ class TrayManager:
     def __init__(
         self,
         icon_path: str,
-        status_callback: Optional[Callable[[], str]] = None,
-        on_upgrade: Optional[Callable[[], None]] = None,
-        on_restart: Optional[Callable[[], None]] = None,
-        on_settings: Optional[Callable[[], None]] = None,
-        on_exit: Optional[Callable[[], None]] = None,
+        status_callback: Callable[[], str] | None = None,
+        on_upgrade: Callable[[], None] | None = None,
+        on_restart: Callable[[], None] | None = None,
+        on_settings: Callable[[], None] | None = None,
+        on_exit: Callable[[], None] | None = None,
     ):
         """
         初始化托盘管理器。
@@ -58,7 +58,7 @@ class TrayManager:
         self.on_settings = on_settings
         self.on_exit = on_exit
 
-        self._icon: Optional[pystray.Icon] = None
+        self._icon: pystray.Icon | None = None
         self._running = False
         self._stop_event = threading.Event()
 
@@ -104,7 +104,7 @@ class TrayManager:
             pystray.MenuItem("退出", self._on_exit_click),
         )
 
-    def _safe_callback(self, name: str, callback: Optional[Callable]) -> None:
+    def _safe_callback(self, name: str, callback: Callable | None) -> None:
         """安全执行回调，确保快速返回并捕获异常。
 
         使用 threading.Thread 执行回调，避免阻塞 pystray 线程。

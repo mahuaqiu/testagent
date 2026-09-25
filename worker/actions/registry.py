@@ -5,7 +5,7 @@ Action 注册表。
 """
 
 import logging
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from worker.actions.base import ActionExecutor
@@ -21,7 +21,7 @@ class ActionRegistry:
     支持动态注册和查找。
     """
 
-    _actions: Dict[str, "ActionExecutor"] = {}
+    _actions: dict[str, "ActionExecutor"] = {}
 
     @classmethod
     def register(cls, action: "ActionExecutor") -> None:

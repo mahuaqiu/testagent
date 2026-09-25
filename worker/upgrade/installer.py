@@ -9,8 +9,8 @@ import logging
 import os
 import subprocess
 
-from common.utils import SUBPROCESS_HIDE_WINDOW
 from common.packaging import get_base_dir
+from common.utils import SUBPROCESS_HIDE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def run_silent_install(installer_path: str, install_dir: str | None = None) -> N
         # 启动安装进程（后台运行，不等待，独立进程）
         # 使用 CREATE_BREAKAWAY_FROM_JOB 标志确保进程独立
         # Windows 服务或进程组可能限制子进程，此标志允许子进程脱离父进程组
-        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000  # noqa: N806 -- Win32 API 常量名
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,

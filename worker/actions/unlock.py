@@ -319,6 +319,7 @@ class UnlockScreenAction(ActionExecutor):
                     screenshot_bytes = platform.take_screenshot(context)
                     if screenshot_bytes:
                         import io
+
                         from PIL import Image
                         img = Image.open(io.BytesIO(screenshot_bytes))
                         return img.size
@@ -434,6 +435,7 @@ class UnlockScreenAction(ActionExecutor):
                     return False
 
                 import io
+
                 from PIL import Image
 
                 img = Image.open(io.BytesIO(screenshot_bytes))
@@ -461,6 +463,7 @@ class UnlockScreenAction(ActionExecutor):
                 return False
 
             import io
+
             from PIL import Image
 
             img = Image.open(io.BytesIO(screenshot_bytes))

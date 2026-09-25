@@ -4,10 +4,10 @@
 
 from worker.task.action import Action, ActionType, MatchMode, SwipeDirection
 from worker.task.result import (
-    TaskResult,
-    TaskStatus,
     ActionResult,
     ActionStatus,
+    TaskResult,
+    TaskStatus,
 )
 from worker.task.task import Task, TaskConfig
 

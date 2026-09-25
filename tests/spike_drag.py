@@ -15,7 +15,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from worker.platforms.harmony_official.protocol import (  # noqa: E402
-    command_mouse_down, command_mouse_move, command_mouse_up,
+    command_mouse_down,
+    command_mouse_move,
+    command_mouse_up,
 )
 from worker.platforms.harmony_official.session import HarmonyOfficialSession  # noqa: E402
 
@@ -34,8 +36,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--serial", default="3QC0124A10000066")
     ap.add_argument("--hdc", default="tools/hdc/hdc.exe")
-    ap.add_argument("--x", type=int, default=150); ap.add_argument("--y", type=int, default=939)
-    ap.add_argument("--end-x", type=int, default=1250); ap.add_argument("--end-y", type=int, default=939)
+    ap.add_argument("--x", type=int, default=150)
+    ap.add_argument("--y", type=int, default=939)
+    ap.add_argument("--end-x", type=int, default=1250)
+    ap.add_argument("--end-y", type=int, default=939)
     ap.add_argument("--duration", type=int, default=2000, help="按下后移动总时长 ms")
     ap.add_argument("--hold", type=int, default=300, help="down 后停留 ms（验证长按起拖）")
     ap.add_argument("--steps", type=int, default=30)

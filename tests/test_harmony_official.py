@@ -11,21 +11,24 @@ import time
 from queue import Empty, Queue
 from types import SimpleNamespace
 
-from PIL import Image
 import pytest
+from PIL import Image
 
 import common.utils as common_utils
 from common.ocr_client import _prepare_ocr_reference, _prepare_ocr_source
+from worker.config import PlatformConfig
+from worker.platforms.harmony import HarmonyPlatformManager
+from worker.platforms.harmony_capture import HarmonyScreenCapture
 from worker.platforms.harmony_official.bridge import JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
     BridgeMessageType,
     BridgeProtocolError,
+    command_mouse_down,
     command_mouse_move,
+    command_mouse_up,
     command_touch_down,
     command_touch_move,
     command_touch_up,
-    command_mouse_down,
-    command_mouse_up,
     encode_message,
     iter_messages,
 )
@@ -34,9 +37,6 @@ from worker.platforms.harmony_official.session import (
     HarmonyOfficialSessionManager,
     _h264_websocket_packets,
 )
-from worker.platforms.harmony import HarmonyPlatformManager
-from worker.platforms.harmony_capture import HarmonyScreenCapture
-from worker.config import PlatformConfig
 from worker.screen.frame_source import HarmonyOfficialFrameSource
 from worker.screen.mjpeg_proxy import MJPEGProxy
 

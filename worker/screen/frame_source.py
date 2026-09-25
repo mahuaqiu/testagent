@@ -8,15 +8,15 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy
 from PIL import Image
 
 if TYPE_CHECKING:
-    from worker.platforms.minicap.minicap import Minicap
-    from worker.platforms.harmony_hdc import HarmonyHdcWrapper
     from worker.platforms.harmony import HarmonyPlatformManager
+    from worker.platforms.harmony_hdc import HarmonyHdcWrapper
+    from worker.platforms.minicap.minicap import Minicap
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class MinicapFrameSource(FrameSource):
     def __init__(self, device_id: str, minicap_instance: "Minicap"):
         self.device_id = device_id
         self.minicap = minicap_instance
-        self._screen_size: Optional[tuple[int, int]] = None
+        self._screen_size: tuple[int, int] | None = None
 
     def get_frame(self) -> bytes:
         """从 minicap 流获取帧（JPEG 格式）。"""
@@ -127,7 +127,7 @@ class MJPEGFrameSource(FrameSource):
         self.device_id = device_id
         self.wda_client = wda_client
         self.mjpeg_port = int(mjpeg_port) if mjpeg_port else self.DEFAULT_MJPEG_PORT
-        self._screen_size: Optional[tuple[int, int]] = None
+        self._screen_size: tuple[int, int] | None = None
         self._stream_response = None
         self._stream_iterator = None
         self._stream_buffer = b""
@@ -140,6 +140,7 @@ class MJPEGFrameSource(FrameSource):
     def get_frame(self) -> bytes:
         """从 WDA MJPEG 流获取帧（流式读取 multipart 格式）。"""
         import re
+
         import requests
 
         mjpeg_url = self._mjpeg_url()
@@ -246,7 +247,7 @@ class MacFrameSource(FrameSource):
         self.fps = fps
         self.monitor = monitor
         self._pyautogui = pyautogui
-        self._screen_size: Optional[tuple[int, int]] = None
+        self._screen_size: tuple[int, int] | None = None
         self._stopped = False
 
     def get_frame(self) -> bytes:
@@ -328,9 +329,9 @@ class HarmonyFrameSource(FrameSource):
         self.hdc = hdc_wrapper
         self._capture = None  # HarmonyScreenCapture 实例（帧流模式）
         self._polling = False
-        self._screen_size: Optional[tuple[int, int]] = None
+        self._screen_size: tuple[int, int] | None = None
         self._last_poll_ts = 0.0
-        self._last_poll_frame: Optional[bytes] = None
+        self._last_poll_frame: bytes | None = None
 
     def start(self) -> None:
         """尝试建立 uitest 帧流，失败则降级为轮询模式。"""

@@ -2,10 +2,10 @@
 设备发现模块。
 """
 
+from worker.discovery.android import AndroidDeviceInfo, AndroidDiscoverer
+from worker.discovery.harmony import HarmonyDeviceInfo, HarmonyDiscoverer
 from worker.discovery.host import HostDiscoverer, HostInfo
-from worker.discovery.android import AndroidDiscoverer, AndroidDeviceInfo
-from worker.discovery.ios import iOSDiscoverer, iOSDeviceInfo
-from worker.discovery.harmony import HarmonyDiscoverer, HarmonyDeviceInfo
+from worker.discovery.ios import iOSDeviceInfo, iOSDiscoverer
 
 __all__ = [
     "HostDiscoverer",

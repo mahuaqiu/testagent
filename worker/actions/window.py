@@ -14,8 +14,8 @@ import time
 from random import randint
 from typing import TYPE_CHECKING
 
-from worker.task import Action, ActionResult, ActionStatus
 from worker.actions.base import BaseActionExecutor
+from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -106,8 +106,8 @@ class ActivateWindowAction(BaseActionExecutor):
             match_by: 定位方式，"title" 或 "class"
             exe_name: 进程 exe 名称过滤（可选），如 "chrome.exe"
         """
-        import pygetwindow as gw
         import pyautogui
+        import pygetwindow as gw
 
         # 1. 查找窗口句柄
         hwnd = self._find_hwnd(value, match_by, exe_name)
@@ -200,8 +200,8 @@ class ActivateWindowAction(BaseActionExecutor):
         Returns:
             窗口句柄（HWND），未找到返回 0
         """
-        import win32gui
         import pywintypes
+        import win32gui
 
         exact_match_hwnd = 0
         partial_match_hwnd = 0
@@ -261,8 +261,8 @@ class ActivateWindowAction(BaseActionExecutor):
             进程 exe 名称（如 "chrome.exe"），获取失败返回 None
         """
         try:
-            import win32process
             import psutil
+            import win32process
 
             _, process_id = win32process.GetWindowThreadProcessId(hwnd)
             process = psutil.Process(process_id)

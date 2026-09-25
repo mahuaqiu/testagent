@@ -5,16 +5,17 @@ Usage:
     from common.utils import retry, timestamp, wait_until, run_cmd, popen_cmd
 """
 
-import platform
-import os
-import signal
-import subprocess
-import time
 import functools
 import io
 import locale
 import logging
-from typing import Callable, Optional, Union, List, Any
+import os
+import platform
+import signal
+import subprocess
+import time
+from collections.abc import Callable
+from typing import Any
 
 from PIL import Image
 
@@ -58,11 +59,11 @@ def _decode_output(raw: bytes) -> str:
 
 
 def run_cmd(
-    cmd: Union[str, List[str]],
+    cmd: str | list[str],
     shell: bool = False,
     capture_output: bool = True,
     text: bool = True,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
     check: bool = False,
     **kwargs: Any,
 ) -> subprocess.CompletedProcess:
@@ -114,9 +115,9 @@ def run_cmd(
     return result
 
 def run_cmd_with_process_tree_timeout(
-    cmd: Union[str, List[str]],
+    cmd: str | list[str],
     shell: bool = False,
-    timeout: Optional[float] = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
     """执行命令，并在超时后终止整个子进程树。"""
     popen_kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
@@ -190,11 +191,11 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
         pass
 
 def popen_cmd(
-    cmd: Union[str, List[str]],
+    cmd: str | list[str],
     shell: bool = False,
-    stdout: Optional[Any] = None,
-    stderr: Optional[Any] = None,
-    stdin: Optional[Any] = None,
+    stdout: Any | None = None,
+    stderr: Any | None = None,
+    stdin: Any | None = None,
     **kwargs: Any,
 ) -> subprocess.Popen:
     """

@@ -8,16 +8,14 @@ import platform
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict
 
 from common.utils import run_cmd
 
-
 # 缓存找到的 ADB 路径
-_ADB_PATH: Optional[str] = None
+_ADB_PATH: str | None = None
 
 
-def _find_adb_path() -> Optional[str]:
+def _find_adb_path() -> str | None:
     """
     查找 ADB 可执行文件路径。
 
@@ -64,7 +62,7 @@ def _find_adb_path() -> Optional[str]:
     return None
 
 
-def get_adb_cmd(*args: str) -> List[str]:
+def get_adb_cmd(*args: str) -> list[str]:
     """
     构造 ADB 命令列表。
 
@@ -97,7 +95,7 @@ class AndroidDeviceInfo:
     cpu_abi: str
     status: str  # online / offline / unauthorized
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """转换为字典。"""
         return {
             "platform": "android",
@@ -124,7 +122,7 @@ class AndroidDiscoverer:
         return _find_adb_path() is not None
 
     @staticmethod
-    def list_devices() -> List[str]:
+    def list_devices() -> list[str]:
         """
         获取已连接的设备 UDID 列表。
 
@@ -157,7 +155,7 @@ class AndroidDiscoverer:
             return []
 
     @staticmethod
-    def list_all_devices() -> List[tuple[str, str]]:
+    def list_all_devices() -> list[tuple[str, str]]:
         """
         获取所有设备及其状态。
 
@@ -210,7 +208,7 @@ class AndroidDiscoverer:
             return ""
 
     @staticmethod
-    def get_device_info(udid: str, status: str = "online") -> Optional[AndroidDeviceInfo]:
+    def get_device_info(udid: str, status: str = "online") -> AndroidDeviceInfo | None:
         """
         获取设备详细信息。
 
@@ -299,7 +297,7 @@ class AndroidDiscoverer:
         return "Unknown"
 
     @classmethod
-    def discover(cls) -> List[AndroidDeviceInfo]:
+    def discover(cls) -> list[AndroidDeviceInfo]:
         """
         发现所有 Android 设备。
 
@@ -320,7 +318,7 @@ class AndroidDiscoverer:
         return devices
 
     @classmethod
-    def discover_device(cls, udid: str) -> Optional[AndroidDeviceInfo]:
+    def discover_device(cls, udid: str) -> AndroidDeviceInfo | None:
         """
         发现指定设备。
 

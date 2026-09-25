@@ -4,16 +4,16 @@
 负责检查更新、下载安装包、执行静默安装。
 """
 
-import os
 import logging
-import tempfile
+import os
 import subprocess
-import httpx
+import tempfile
 from dataclasses import dataclass
-from typing import Optional
 
-from common.utils import SUBPROCESS_HIDE_WINDOW
+import httpx
+
 from common.packaging import get_base_dir
+from common.utils import SUBPROCESS_HIDE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class UpgradeManager:
         self.check_timeout = check_timeout
         self.download_timeout = download_timeout
 
-    def check_upgrade(self) -> Optional[UpgradeInfo]:
+    def check_upgrade(self) -> UpgradeInfo | None:
         """
         检查是否有新版本。
 
@@ -211,9 +211,9 @@ class UpgradeManager:
             # 启动安装进程（后台运行，不等待，独立进程）
             # 与 worker/upgrade/installer.py 保持一致：脱离父进程组，
             # 避免安装器随托盘进程退出而被连带终止。
-            DETACHED_PROCESS = 0x00000008
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+            DETACHED_PROCESS = 0x00000008  # noqa: N806 -- Win32 API 常量名
+            CREATE_NEW_PROCESS_GROUP = 0x00000200  # noqa: N806 -- Win32 API 常量名
+            CREATE_BREAKAWAY_FROM_JOB = 0x01000000  # noqa: N806 -- Win32 API 常量名
             subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,

@@ -2,9 +2,9 @@
 
 from worker.screen.manager import (
     ScreenManager,
-    get_screen_manager,
-    close_screen_manager,
     close_all_screen_managers,
+    close_screen_manager,
+    get_screen_manager,
 )
 
 __all__ = [

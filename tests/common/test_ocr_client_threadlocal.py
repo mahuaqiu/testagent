@@ -1,9 +1,9 @@
 """OCR 客户端线程隔离缓存测试。"""
 
 import threading
+from io import BytesIO
 
 from PIL import Image
-from io import BytesIO
 
 from common.ocr_client import OCRClient
 

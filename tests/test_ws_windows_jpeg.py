@@ -1,6 +1,8 @@
 """测试 WebSocket 连接到 Windows screen - JPEG 模式"""
 import asyncio
+
 import websockets
+
 
 async def test_ws():
     try:

@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from worker.task.action import Action
 
@@ -34,7 +34,7 @@ class TaskConfig:
     retry_count: int = 0            # 失败重试次数
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TaskConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "TaskConfig":
         """从字典创建。"""
         return cls(
             timeout=data.get("timeout", 300000),
@@ -55,27 +55,27 @@ class Task:
 
     task_id: str
     platform: str                          # web / android / ios / windows / mac
-    actions: List[Action]
-    device_id: Optional[str] = None        # 移动设备 UDID
-    user_id: Optional[str] = None          # 用户标识
+    actions: list[Action]
+    device_id: str | None = None        # 移动设备 UDID
+    user_id: str | None = None          # 用户标识
     config: TaskConfig = field(default_factory=TaskConfig)
-    callback_url: Optional[str] = None     # 回调地址
+    callback_url: str | None = None     # 回调地址
     created_at: datetime = field(default_factory=datetime.now)
     priority: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     execution_domain: str = "task"  # 普通用例或远程操作执行域
 
     @classmethod
     def create(
         cls,
         platform: str,
-        actions: List[Dict[str, Any]],
-        device_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
-        callback_url: Optional[str] = None,
+        actions: list[dict[str, Any]],
+        device_id: str | None = None,
+        user_id: str | None = None,
+        config: dict[str, Any] | None = None,
+        callback_url: str | None = None,
         priority: int = 0,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
         generate_id: bool = True,
         execution_domain: str = "task",
     ) -> "Task":
@@ -120,7 +120,7 @@ class Task:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Task":
+    def from_dict(cls, data: dict[str, Any]) -> "Task":
         """从字典创建任务。"""
         return cls(
             task_id=data.get("task_id", str(uuid.uuid4())[:8]),
@@ -136,7 +136,7 @@ class Task:
             execution_domain=data.get("execution_domain", "task"),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典。"""
         return {
             "task_id": self.task_id,

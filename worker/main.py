@@ -22,7 +22,7 @@ if sys.platform.startswith("win"):
 
     ensure_process_dpi_awareness()
 
-from common.packaging import is_packaged, get_app_dir
+from common.packaging import get_app_dir, is_packaged
 
 # 过滤 websockets 弃用警告
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
@@ -31,6 +31,8 @@ from worker.config import load_config
 from worker.logger import setup_logging
 from worker.server import app, set_uvicorn_server, set_worker
 from worker.worker import Worker
+
+logger = logging.getLogger(__name__)
 
 
 class SocketErrorFilter(logging.Filter):

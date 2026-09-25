@@ -7,11 +7,11 @@ import time
 from dataclasses import dataclass, field
 
 
-class ActionCancelled(Exception):
+class ActionCancelledError(Exception):
     """Action 被任务取消。"""
 
 
-class ActionTimedOut(Exception):
+class ActionTimedOutError(Exception):
     """Action 达到任务或动作截止时间。"""
 
 
@@ -25,9 +25,9 @@ class ExecutionControl:
     def checkpoint(self) -> None:
         """在阻塞操作前后检查取消和截止时间。"""
         if self.cancel_event.is_set():
-            raise ActionCancelled("Task cancelled by user")
+            raise ActionCancelledError("Task cancelled by user")
         if self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic:
-            raise ActionTimedOut("Task timeout")
+            raise ActionTimedOutError("Task timeout")
 
     def remaining_seconds(self) -> float | None:
         """返回剩余秒数。"""
@@ -51,5 +51,5 @@ class ExecutionControl:
             if remaining is not None:
                 timeout = min(timeout, remaining)
             if self.cancel_event.wait(timeout):
-                raise ActionCancelled("Task cancelled by user")
+                raise ActionCancelledError("Task cancelled by user")
         self.checkpoint()

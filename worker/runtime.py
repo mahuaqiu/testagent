@@ -5,19 +5,19 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from common.packaging import get_base_dir
 from worker.artifacts.service import ArtifactService
 from worker.devices.registry import DeviceRegistry
 from worker.scheduling.scheduler import ResourceScheduler
 from worker.storage.database import Database
+from worker.task.idempotent_service import IdempotentTaskService
 from worker.task.recovery import recover_interrupted_tasks
 from worker.task.repository import TaskRepository
-from worker.task.idempotent_service import IdempotentTaskService
-from worker.task.sqlite_repository import SQLiteTaskRepository
 from worker.task.result import TaskResult
+from worker.task.sqlite_repository import SQLiteTaskRepository
 from worker.task.task import Task
 
 logger = logging.getLogger(__name__)

@@ -4,13 +4,14 @@ GUI 入口模块。
 整合托盘、Worker、升级管理器、设置窗口，提供完整的应用生命周期管理。
 """
 
-import sys
 import os
+import sys
 import traceback
 
 # 导入打包检测工具
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.packaging import is_packaged, get_app_dir
+from common.packaging import get_app_dir, is_packaged
+
 
 # ============ 最早期错误捕获（在任何导入之前） ============
 # 打包后没有控制台窗口，错误会被吞掉，所以写入文件
@@ -52,31 +53,31 @@ try:
 
     import logging
     import os
-    import threading
     import tempfile
+    import threading
 
     import uvicorn
+    from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal
+    from PyQt5.QtGui import QIcon
     from PyQt5.QtWidgets import (
         QDialog,
-        QVBoxLayout,
         QHBoxLayout,
         QLabel,
-        QPushButton,
-        QWidget,
         QProgressBar,
+        QPushButton,
+        QVBoxLayout,
+        QWidget,
     )
-    from PyQt5.QtCore import Qt, QObject, pyqtSignal, QTimer
-    from PyQt5.QtGui import QIcon
 
-    from worker.config import load_config, WorkerConfig
+    from worker.config import WorkerConfig, load_config
+    from worker.download_dialog import DownloadDialog
     from worker.logger import setup_logging
-    from worker.worker import Worker
-    from worker.server import app, set_worker, set_gui_app
+    from worker.server import app, set_gui_app, set_worker
+    from worker.settings_window import SettingsWindow
     from worker.single_instance import check_single_instance, release_instance_lock
     from worker.tray_manager import TrayManager
-    from worker.upgrade_manager import UpgradeManager, UpgradeInfo
-    from worker.download_dialog import DownloadDialog
-    from worker.settings_window import SettingsWindow
+    from worker.upgrade_manager import UpgradeInfo, UpgradeManager
+    from worker.worker import Worker
 
     logger = logging.getLogger(__name__)
 

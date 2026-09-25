@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import struct
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import IntEnum
-import struct
-from typing import BinaryIO, Iterator
-
+from typing import BinaryIO
 
 MAGIC = b"HOS1"
 VERSION = 1

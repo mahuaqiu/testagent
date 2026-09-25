@@ -8,16 +8,16 @@ import io
 import logging
 import subprocess  # 用于 CalledProcessError 异常类型
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 import pyautogui
 import pyperclip
 
 from common.utils import run_cmd
+from worker.actions import ActionRegistry
+from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
 from worker.task import Action, ActionResult, ActionStatus
-from worker.config import PlatformConfig
-from worker.actions import ActionRegistry
 from worker.tools import get_tools_dir
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class MacPlatformManager(PlatformManager):
     """
 
     # Mac 平台特有动作
-    SUPPORTED_ACTIONS: Set[str] = {"start_app", "stop_app"}
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
@@ -68,7 +68,7 @@ class MacPlatformManager(PlatformManager):
 
     # ========== 上下文管理 ==========
 
-    def create_context(self, device_id: Optional[str] = None, options: Optional[Dict] = None) -> Any:
+    def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
         """创建桌面上下文（Mac 不需要特殊上下文）。"""
         logger.info("Mac context created (no-op)")
         return None
@@ -111,7 +111,7 @@ class MacPlatformManager(PlatformManager):
         pyautogui.hotkey('command', 'v')
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
-              duration: int = 500, steps: Optional[int] = None, context: Any = None) -> None:
+              duration: int = 500, steps: int | None = None, context: Any = None) -> None:
         """滑动/拖拽。
 
         Args:

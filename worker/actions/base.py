@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING
 
 from PIL import Image
 
-logger = logging.getLogger(__name__)
-
 from worker.task import Action, ActionResult, ActionStatus
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from worker.platforms.base import PlatformManager
@@ -244,7 +244,7 @@ class BaseActionExecutor(ActionExecutor):
         已返回的 FAILED 结果而不升级为任务级 TIMEOUT（见 Worker._execute_actions）。
 
         Raises:
-            ActionTimedOut: 动作截止时间已到（由调用方捕获并按断言失败返回）。
+            ActionTimedOutError: 动作截止时间已到（由调用方捕获并按断言失败返回）。
         """
         if not action.timeout_explicit or action.execution_control is None:
             return None

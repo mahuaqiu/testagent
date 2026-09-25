@@ -3,7 +3,6 @@
 """
 
 import logging
-from typing import Optional, Dict, List
 
 import httpx
 
@@ -45,11 +44,11 @@ class Reporter:
         self,
         ip: str,
         port: int,
-        devices: Dict[str, List[str]],
+        devices: dict[str, list[str]],
         namespace: str,
-        version: Optional[str] = None,
-        config_version: Optional[str] = None,
-        scripts: Optional[Dict[str, str]] = None,
+        version: str | None = None,
+        config_version: str | None = None,
+        scripts: dict[str, str] | None = None,
     ) -> bool:
         """
         调用设备注册接口（新格式）。

@@ -27,7 +27,7 @@ import pyautogui  # noqa: E402  (必须在 DPI 声明之后导入)
 import pyperclip  # noqa: E402
 
 from worker.actions import ActionRegistry  # noqa: E402
-from worker.actions.spec import ActionCancelled, ActionTimedOut  # noqa: E402
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError  # noqa: E402
 from worker.config import PlatformConfig  # noqa: E402
 from worker.platforms.base import PlatformManager  # noqa: E402
 from worker.task import Action, ActionResult, ActionStatus  # noqa: E402
@@ -398,6 +398,7 @@ class WindowsPlatformManager(PlatformManager):
     ) -> bytes:
         """获取窗口截图并校验原始帧，失败时由调用方执行窗口区域 fallback。"""
         from PIL import Image
+
         from worker.screen.monitor_utils import get_monitor_offset
 
         data = manager.get_frame_raw_with_meta()
@@ -438,6 +439,7 @@ class WindowsPlatformManager(PlatformManager):
     ) -> bytes:
         """按当前窗口或显示器范围获取桌面截图，保持截图与坐标基准一致。"""
         from PIL import ImageGrab
+
         from worker.screen.monitor_utils import get_mapped_monitor_index
 
         if window_rect is None:
@@ -517,7 +519,7 @@ class WindowsPlatformManager(PlatformManager):
             result.duration_ms = duration_ms
             return result
 
-        except (ActionCancelled, ActionTimedOut):
+        except (ActionCancelledError, ActionTimedOutError):
             # 取消和超时必须交回任务层处理（映射为 CANCELLED/TIMEOUT），
             # 吞成普通 FAILED 会把任务结果伪装成动作失败。
             raise
@@ -622,7 +624,7 @@ class WindowsPlatformManager(PlatformManager):
             )
 
         try:
-            from win_control.display import set_resolution, DisplayError
+            from win_control.display import DisplayError, set_resolution
             monitor_index = action.monitor_index
             set_resolution(width, height, monitor_index)
             # 分辨率变化后所有显示器几何信息失效，必须刷新缓存，
@@ -672,7 +674,7 @@ class WindowsPlatformManager(PlatformManager):
                     error="volume must be between 0 and 100",
                 )
 
-            from win_control.audio import set_volume, AudioError
+            from win_control.audio import AudioError, set_volume
             set_volume(volume_int)
             return ActionResult(
                 number=0,
@@ -716,7 +718,7 @@ class WindowsPlatformManager(PlatformManager):
             )
 
         try:
-            from win_control.audio import enable_device, disable_device, AudioError
+            from win_control.audio import AudioError, disable_device, enable_device
             if state == "enable":
                 enable_device(device)
                 output = f"Device '{device}' enabled"

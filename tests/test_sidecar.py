@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 
+
 def test_sidecar():
     # 启动进程
     proc = subprocess.Popen(

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """鸿蒙平台 action 真机验收脚本。
 
 背景：鸿蒙各 action 是在没有真机的情况下按 uitest/aa/bm 文档实现的，

@@ -34,7 +34,7 @@ def make_request(host: str, port: int, platform: str, actions: list, device_id: 
     if window:
         payload["window"] = window
 
-    print(f"\n=== 请求 ===")
+    print("\n=== 请求 ===")
     print(f"URL: {url}")
     print(f"Payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
 
@@ -42,7 +42,7 @@ def make_request(host: str, port: int, platform: str, actions: list, device_id: 
     response.raise_for_status()
     result = response.json()
 
-    print(f"\n=== 响应 ===")
+    print("\n=== 响应 ===")
     # 打印响应，截断过长的 base64
     result_copy = json.loads(json.dumps(result))
     if "actions" in result_copy:
@@ -174,7 +174,7 @@ def run_recording(host: str, port: int, platform: str, duration_seconds: int = 2
 
     # 第一次截图：录制进行到 1/3 时
     time.sleep(duration_seconds / 3)
-    print(f"\n录制中截图 #1...")
+    print("\n录制中截图 #1...")
     screenshot_actions = [
         {
             "action_type": "screenshot",
@@ -186,14 +186,14 @@ def run_recording(host: str, port: int, platform: str, duration_seconds: int = 2
 
     # 第二次截图：录制进行到 2/3 时
     time.sleep(duration_seconds / 3)
-    print(f"\n录制中截图 #2...")
+    print("\n录制中截图 #2...")
     result = make_request(host, port, platform, screenshot_actions)
     save_screenshot(result, f"{platform}_during_recording_2")
 
     # 等待剩余时间
     time.sleep(duration_seconds / 3)
 
-    print(f"\n停止录制")
+    print("\n停止录制")
     actions = [
         {
             "action_type": "stop_recording",

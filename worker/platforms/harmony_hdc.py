@@ -6,24 +6,23 @@
 
 import logging
 import os
-import subprocess
-import uuid
 import re
+import subprocess
 import threading
 import time
+import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Dict
 
 from common.packaging import get_base_dir
 from common.utils import popen_cmd, run_cmd
-from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 from worker.platforms.harmony_hdc_process import (
     capture_hdc_processes_before_launch,
     cleanup_stale_records,
     register_launched_processes,
     register_process,
 )
+from worker.platforms.harmony_keycodes import HARMONY_KEY_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +51,7 @@ def _get_screenshot_remote_path(serial: str) -> str:
     return f"/data/local/tmp/zq_worker_screenshot_{serial_key}.jpeg"
 
 
-def classify_harmony_device(properties: Dict[str, str]) -> str:
+def classify_harmony_device(properties: dict[str, str]) -> str:
     """按属性优先级和规范值判断鸿蒙设备形态。"""
     mobile_values = {"phone", "tablet", "watch", "wearable", "mobile"}
     pc_values = {"pc", "desktop", "laptop", "notebook", "computer", "2in1", "2-in-1"}
@@ -71,7 +70,7 @@ def classify_harmony_device(properties: Dict[str, str]) -> str:
     return "unknown"
 
 
-def parse_harmony_display_size(output: str) -> Tuple[int, int]:
+def parse_harmony_display_size(output: str) -> tuple[int, int]:
     """从不同版本的 hidumper 窗口信息中解析屏幕宽高。"""
     patterns = (
         # 手机 RenderService 输出：activeMode: 1260x2720, refreshrate=120
@@ -108,7 +107,7 @@ def parse_harmony_screen_state(output: str) -> str:
     return "UNKNOWN"
 
 
-def parse_harmony_interactive_state(output: str) -> Optional[int]:
+def parse_harmony_interactive_state(output: str) -> int | None:
     """解析 ScreenlockService 输出中的交互状态值，无法判断返回 None。
 
     真机实测（Mate 60 Pro）：0 = 非交互（AOD 息屏时钟亮屏但合成触摸
@@ -127,7 +126,7 @@ def parse_harmony_interactive_state(output: str) -> Optional[int]:
         return None
 
 
-def parse_harmony_lock_state(output: str) -> Optional[bool]:
+def parse_harmony_lock_state(output: str) -> bool | None:
     """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。"""
     match = re.search(
         r"(?:is\s*)?(?:screen[_\s]?(?:locked|lock[_\s]?state|lock[_\s]?status)|"
@@ -219,7 +218,7 @@ _HDC_RETRYABLE_HDC_PAIRS = frozenset({
 })
 
 
-def _is_readonly_hdc_command(args: List[str]) -> bool:
+def _is_readonly_hdc_command(args: list[str]) -> bool:
     """判断 HDC 命令是否只读/幂等，仅这类命令允许瞬态失败自动重试。"""
     tokens = list(args)
     # 跳过 -t <serial> 等带值全局选项
@@ -254,7 +253,7 @@ def _is_readonly_hdc_command(args: List[str]) -> bool:
 
 def _execute_hdc_command(
     hdc_path: str,
-    args: List[str],
+    args: list[str],
     timeout: int = 30,
     retries: int = 1,
 ) -> CommandResult:
@@ -366,7 +365,7 @@ def restart_hdc_server(hdc_path: str) -> CommandResult:
         return result
 
 
-def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
+def _find_hdc_path(configured_path: str | None = None) -> str | None:
     """
     查找 HDC 工具路径。
 
@@ -377,7 +376,7 @@ def _find_hdc_path(configured_path: Optional[str] = None) -> Optional[str]:
     Returns:
         Optional[str]: HDC 工具路径，未找到则返回 None
     """
-    def resolve_candidate(candidate: str) -> Optional[str]:
+    def resolve_candidate(candidate: str) -> str | None:
         """解析 hdc.exe、SDK 根目录或 command-line-tools 根目录。"""
         if not os.path.isabs(candidate):
             candidate = os.path.join(get_base_dir(), candidate)
@@ -467,7 +466,7 @@ def _quote_remote_shell_argument(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def parse_target_lines(output: str) -> List[HdcTarget]:
+def parse_target_lines(output: str) -> list[HdcTarget]:
     """解析 hdc list targets -v 输出。"""
     targets: list[HdcTarget] = []
     for raw_line in output.splitlines():
@@ -488,7 +487,7 @@ def parse_target_lines(output: str) -> List[HdcTarget]:
     return targets
 
 
-def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
+def list_target_info(hdc_path: str | None = None) -> list[HdcTarget]:
     """列出可用状态的 HDC target（排除 UART 串口，避免把 COM 口当设备）。"""
     hdc_path = _find_hdc_path(hdc_path)
     if hdc_path is None:
@@ -526,7 +525,7 @@ def list_target_info(hdc_path: Optional[str] = None) -> List[HdcTarget]:
     ]
 
 
-def list_devices(hdc_path: Optional[str] = None) -> List[str]:
+def list_devices(hdc_path: str | None = None) -> list[str]:
     """
     列出所有在线的鸿蒙设备。
 
@@ -562,7 +561,7 @@ class HarmonyHdcWrapper:
 
     KEY_MAP = HARMONY_KEY_MAP
 
-    def __init__(self, serial: str, hdc_path: Optional[str] = None):
+    def __init__(self, serial: str, hdc_path: str | None = None):
         """
         初始化 HDC 包装器。
 
@@ -591,7 +590,7 @@ class HarmonyHdcWrapper:
 
         logger.info(f"已连接鸿蒙设备: {self.serial}")
 
-    def _execute(self, args: List[str], timeout: int = 30) -> CommandResult:
+    def _execute(self, args: list[str], timeout: int = 30) -> CommandResult:
         """
         执行带设备 ID 的 HDC 命令。
 
@@ -810,7 +809,7 @@ class HarmonyHdcWrapper:
             return False
         return True
 
-    def fport_ls(self) -> List[str]:
+    def fport_ls(self) -> list[str]:
         """
         列出当前设备的端口转发规则。
 
@@ -977,7 +976,7 @@ class HarmonyHdcWrapper:
 
     def device_category(self) -> str:
         """根据系统属性判断设备形态，无法确认时返回 unknown。"""
-        properties: Dict[str, str] = {}
+        properties: dict[str, str] = {}
         for key in (
             "const.product.devicetype",
             "const.product.type",
@@ -1050,7 +1049,7 @@ class HarmonyHdcWrapper:
         result = self.shell(f"uinput -K -d {key_code} -u {key_code}")
         return self._check_result(result, "发送按键")
 
-    def tap_key_combination(self, key_code: int, modifier_codes: List[int]) -> bool:
+    def tap_key_combination(self, key_code: int, modifier_codes: list[int]) -> bool:
         """
         按下并释放带修饰键的组合键。
 
@@ -1141,7 +1140,7 @@ class HarmonyHdcWrapper:
         state = self.screen_state()
         return state in ("AWAKE", "INACTIVE")
 
-    def lock_state(self) -> Optional[bool]:
+    def lock_state(self) -> bool | None:
         """
         查询锁屏状态。
 
@@ -1176,7 +1175,7 @@ class HarmonyHdcWrapper:
             return state
         return not self.is_screen_on()
 
-    def interactive_state(self) -> Optional[int]:
+    def interactive_state(self) -> int | None:
         """
         查询交互状态（ScreenlockService interactiveState 字段）。
 
@@ -1229,7 +1228,7 @@ class HarmonyHdcWrapper:
     # 设备信息
     # ========================================================================
 
-    def display_size(self) -> Tuple[int, int]:
+    def display_size(self) -> tuple[int, int]:
         """
         获取屏幕分辨率。
 
@@ -1314,7 +1313,7 @@ class HarmonyHdcWrapper:
 
         return result.output.strip()
 
-    def device_info(self) -> Dict:
+    def device_info(self) -> dict:
         """
         获取设备信息字典。
 
@@ -1462,7 +1461,7 @@ class HarmonyHdcWrapper:
         logger.info(f"应用数据已清除: {package}")
         return True
 
-    def list_apps(self, include_system: bool = False) -> List[str]:
+    def list_apps(self, include_system: bool = False) -> list[str]:
         """
         获取已安装应用列表。
 
@@ -1547,7 +1546,7 @@ class HarmonyHdcWrapper:
             return False
         return package in result.output
 
-    def current_app(self) -> Tuple[Optional[str], Optional[str]]:
+    def current_app(self) -> tuple[str | None, str | None]:
         """
         获取当前前台应用。
 
