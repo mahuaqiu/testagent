@@ -1,5 +1,6 @@
 # tests/files/test_files_delete.py
 """删除端点测试。"""
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

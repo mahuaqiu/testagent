@@ -1,5 +1,6 @@
 # tests/files/test_files_download.py
 """下载端点测试:基本下载、限速、错误分支。"""
+
 import time
 
 import pytest
@@ -52,9 +53,7 @@ def test_download_errors(client):
 
 
 def test_download_rate_limited(client):
-    set_files_config(
-        WorkerConfig(files_root=str(_root_of(client)), files_download_rate_limit_mb=0.1)
-    )
+    set_files_config(WorkerConfig(files_root=str(_root_of(client)), files_download_rate_limit_mb=0.1))
     content = b"x" * (100 * 1024)  # 100KB,限速 0.1MB/s → 约 1s
     (_root_of(client) / "slow.log").write_bytes(content)
     start = time.monotonic()
@@ -65,9 +64,7 @@ def test_download_rate_limited(client):
 
 
 def test_download_unlimited_fast(client):
-    set_files_config(
-        WorkerConfig(files_root=str(_root_of(client)), files_download_rate_limit_mb=0)
-    )
+    set_files_config(WorkerConfig(files_root=str(_root_of(client)), files_download_rate_limit_mb=0))
     content = b"x" * (100 * 1024)
     (_root_of(client) / "fast.log").write_bytes(content)
     start = time.monotonic()
@@ -75,3 +72,19 @@ def test_download_unlimited_fast(client):
     elapsed = time.monotonic() - start
     assert resp.status_code == 200 and resp.content == content
     assert elapsed < 0.8, f"elapsed={elapsed}"
+
+
+def test_download_content_length_survives_gzip(client):
+    """浏览器会带 Accept-Encoding: gzip;GZipMiddleware 一旦重压缩会丢
+    Content-Length,浏览器原生下载进度条就失效。identity 应阻止压缩。"""
+    content = b"x" * (100 * 1024)
+    (_root_of(client) / "g.bin").write_bytes(content)
+    resp = client.get(
+        "/files/download",
+        params={"path": "g.bin"},
+        headers={"Accept-Encoding": "gzip, deflate"},
+    )
+    assert resp.status_code == 200
+    assert resp.content == content
+    assert resp.headers["content-length"] == str(len(content))
+    assert resp.headers.get("content-encoding") == "identity"

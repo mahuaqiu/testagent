@@ -1,5 +1,6 @@
 # tests/files/test_server_registration.py
 """server.py 挂载 files 路由的冒烟检查。"""
+
 import pytest
 
 

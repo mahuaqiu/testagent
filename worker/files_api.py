@@ -7,9 +7,9 @@
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -153,10 +153,11 @@ async def download_file(path: str = Query(...)):
     headers = {
         "Content-Length": str(target.stat().st_size),
         "Content-Disposition": _content_disposition(target.name),
+        # 声明 identity 阻止 GZipMiddleware 重压缩二进制流:
+        # 压缩会丢掉 Content-Length,浏览器原生下载进度条依赖它
+        "Content-Encoding": "identity",
     }
-    return StreamingResponse(
-        chunk_iter(), media_type="application/octet-stream", headers=headers
-    )
+    return StreamingResponse(chunk_iter(), media_type="application/octet-stream", headers=headers)
 
 
 @router.post("/upload")
