@@ -3,12 +3,15 @@
 """
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from worker.task.action import Action
+
+logger = logging.getLogger(__name__)
 
 
 def request_fingerprint(task: "Task") -> str:
@@ -33,9 +36,15 @@ class TaskConfig:
     slow_motion: int = 0            # 慢动作延迟(ms)
     retry_count: int = 0            # 失败重试次数
 
+    # from_dict 认识的键;平台侧拼错键名时告警,不再静默回退默认值
+    KNOWN_KEYS = {"timeout", "action_timeout", "screenshot_on_error", "slow_motion", "retry_count"}
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskConfig":
         """从字典创建。"""
+        unknown = set(data) - cls.KNOWN_KEYS
+        if unknown:
+            logger.warning("TaskConfig 忽略未知配置键: %s", sorted(unknown))
         return cls(
             timeout=data.get("timeout", 300000),
             action_timeout=data.get("action_timeout", 30000),
