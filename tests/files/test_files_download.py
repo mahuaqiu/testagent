@@ -88,3 +88,28 @@ def test_download_content_length_survives_gzip(client):
     assert resp.content == content
     assert resp.headers["content-length"] == str(len(content))
     assert resp.headers.get("content-encoding") == "identity"
+
+
+def test_download_content_length_survives_real_gzip_middleware(client):
+    """真实 server(worker/server.py)挂了 GZipMiddleware;本测试用同样的
+    中间件配置验证 identity 确实阻止了重压缩。之前只用裸 app,回归
+    (中间件压缩丢 Content-Length)在单测层根本测不到。"""
+    from fastapi.middleware.gzip import GZipMiddleware
+
+    content = b"x" * (100 * 1024)
+    (_root_of(client) / "g2.bin").write_bytes(content)
+
+    app = FastAPI()
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+    app.include_router(router)
+    with TestClient(app) as gzip_client:
+        resp = gzip_client.get(
+            "/files/download",
+            params={"path": "g2.bin"},
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.content == content
+    assert resp.headers["content-length"] == str(len(content))
+    assert resp.headers.get("content-encoding") == "identity"

@@ -122,6 +122,7 @@ class WorkerConfig:
     files_download_rate_limit_mb: float = 1.0    # 下载限速 MB/s,0 = 不限速
     files_upload_rate_limit_mb: float = 1.0      # 上传限速 MB/s,0 = 不限速
     files_max_concurrent_downloads: int = 2      # 最大并发下载数,超出排队
+    files_max_concurrent_uploads: int = 2        # 最大并发上传数,超出排队
     files_max_upload_size_mb: int = 1000         # 上传大小上限(1GB)
 
     # 配置版本号
@@ -243,6 +244,7 @@ class WorkerConfig:
             files_download_rate_limit_mb=float(files_cfg.get("download_rate_limit_mb", 1.0)),
             files_upload_rate_limit_mb=float(files_cfg.get("upload_rate_limit_mb", 1.0)),
             files_max_concurrent_downloads=int(files_cfg.get("max_concurrent_downloads", 2)),
+            files_max_concurrent_uploads=int(files_cfg.get("max_concurrent_uploads", 2)),
             files_max_upload_size_mb=int(files_cfg.get("max_upload_size_mb", 1000)),
         )
 

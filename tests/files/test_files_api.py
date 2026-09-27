@@ -26,7 +26,7 @@ def _root_of(client):
 def test_list_empty_root(client):
     resp = client.get("/files/list")
     assert resp.status_code == 200
-    assert resp.json() == {"path": "", "entries": []}
+    assert resp.json() == {"path": "", "entries": [], "truncated": False}
 
 
 def test_list_dirs_first_and_sorted(client):
@@ -65,4 +65,22 @@ def test_list_file_as_path(client):
     root_path = _root_of(client)
     (root_path / "f.log").write_text("x")
     resp = client.get("/files/list", params={"path": "f.log"})
+    assert resp.status_code == 400
+
+
+def test_list_truncated_when_over_cap(client, monkeypatch):
+    import worker.files_api as files_api
+
+    root_path = _root_of(client)
+    for i in range(5):
+        (root_path / f"f{i}.log").write_text("x")
+    monkeypatch.setattr(files_api, "MAX_LIST_ENTRIES", 2)
+    resp = client.get("/files/list")
+    body = resp.json()
+    assert len(body["entries"]) == 2
+    assert body["truncated"] is True
+
+
+def test_list_null_byte_rejected(client):
+    resp = client.get("/files/list", params={"path": "a\0b"})
     assert resp.status_code == 400
