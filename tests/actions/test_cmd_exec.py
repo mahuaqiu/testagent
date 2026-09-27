@@ -32,6 +32,7 @@ def test_tools_placeholder_inside_quotes() -> None:
     assert _resolve_tools_placeholder('"@tools/x.ps1"') == expected
 
 
+@pytest.mark.skipif(os.name != "nt", reason="依赖 cmd.exe 的 type 命令")
 def test_execute_backslash_placeholder(tmp_path, monkeypatch) -> None:
     (tmp_path / "hello.txt").write_text("placeholder_ok", encoding="utf-8")
     monkeypatch.setattr("worker.actions.cmd_exec.get_tools_dir", lambda: str(tmp_path))
@@ -44,6 +45,7 @@ def test_execute_backslash_placeholder(tmp_path, monkeypatch) -> None:
     assert "placeholder_ok" in (result.stdout or "")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="依赖 cmd.exe 的 type 命令")
 def test_execute_forward_slash_placeholder(tmp_path, monkeypatch) -> None:
     (tmp_path / "hello.txt").write_text("placeholder_ok", encoding="utf-8")
     monkeypatch.setattr("worker.actions.cmd_exec.get_tools_dir", lambda: str(tmp_path))
