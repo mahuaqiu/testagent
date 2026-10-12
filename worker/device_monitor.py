@@ -63,9 +63,11 @@ class DeviceMonitor:
         # 线程控制
         self._monitor_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._initial_detection_complete = threading.Event()
 
         # 回调
         self.on_device_change: Callable[[dict], None] | None = None
+        self.on_device_discovery: Callable[[dict], None] | None = None
 
     def set_platform_managers(
         self,
@@ -91,8 +93,11 @@ class DeviceMonitor:
             return
 
         self._stop_event.clear()
+        self._initial_detection_complete.clear()
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
+        if not self._initial_detection_complete.wait(timeout=30):
+            logger.warning("等待首次设备发现超时，Worker 将继续启动")
         logger.info(f"Device monitor started (interval={self.check_interval}s)")
 
     def trigger_check(self) -> None:
@@ -110,7 +115,7 @@ class DeviceMonitor:
     def _monitor_loop(self) -> None:
         """监控循环。"""
         # 首次立即执行
-        self._check_and_maintain()
+        self._check_and_maintain(initial=True)
 
         while not self._stop_event.is_set():
             self._stop_event.wait(self.check_interval)
@@ -125,7 +130,7 @@ class DeviceMonitor:
             except Exception:
                 logger.exception("设备检查/维护轮次异常，等待下个周期重试")
 
-    def _check_and_maintain(self) -> None:
+    def _check_and_maintain(self, *, initial: bool = False) -> None:
         """检查和维护设备。
 
         检测与维护各自捕获异常：二者失败时仍要触发注册上报——周期注册
@@ -138,12 +143,24 @@ class DeviceMonitor:
             logger.exception("物理设备检测失败，本轮跳过设备维护")
 
         try:
+            if self.on_device_discovery:
+                self.on_device_discovery(self.get_all_devices())
+        except Exception:
+            logger.exception("同步首次设备发现结果失败")
+        finally:
+            if initial:
+                self._initial_detection_complete.set()
+
+        try:
             self._maintain_services()
         except Exception:
             logger.exception("设备服务维护失败")
 
         if self.on_device_change:
-            self.on_device_change(self.get_all_devices())
+            try:
+                self.on_device_change(self.get_all_devices())
+            except Exception:
+                logger.exception("发布设备状态变更失败")
 
     def _detect_physical_devices(self) -> None:
         """检测物理设备连接。"""
@@ -549,8 +566,11 @@ class DeviceMonitor:
             # 从正常列表移除
             self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
             # 添加到 faulty 列表（避免重复）
+            for device in self._faulty_android_devices:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
             if udid not in [d["udid"] for d in self._faulty_android_devices]:
-                self._faulty_android_devices.append({"udid": udid})
+                self._faulty_android_devices.append({"udid": udid, "connection_status": "disconnected"})
         elif platform in ("harmony_mobile", "harmony_pc"):
             manager = self._harmony_mobile_manager if platform == "harmony_mobile" else self._harmony_pc_manager
             faulty = self._faulty_harmony_mobile_devices if platform == "harmony_mobile" else self._faulty_harmony_pc_devices
@@ -559,9 +579,13 @@ class DeviceMonitor:
                 (dict(d) for d in online if d["udid"] == udid),
                 {"udid": udid},
             )
+            device_info["connection_status"] = "disconnected"
             if manager and hasattr(manager, 'mark_device_faulty'):
                 manager.mark_device_faulty(udid)
             online[:] = [d for d in online if d["udid"] != udid]
+            for device in faulty:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
             if udid not in [d["udid"] for d in faulty]:
                 faulty.append(device_info)
         else:
@@ -572,8 +596,11 @@ class DeviceMonitor:
             # 从正常列表移除
             self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
             # 添加到 faulty 列表（避免重复）
+            for device in self._faulty_ios_devices:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
             if udid not in [d["udid"] for d in self._faulty_ios_devices]:
-                self._faulty_ios_devices.append({"udid": udid})
+                self._faulty_ios_devices.append({"udid": udid, "connection_status": "disconnected"})
 
     def get_all_devices(self) -> dict[str, Any]:
         """获取所有设备状态。"""
@@ -627,6 +654,7 @@ class DeviceMonitor:
                 (dict(d) for d in faulty if d["udid"] == udid),
                 {"udid": udid},
             )
+            device_info.pop("connection_status", None)
             faulty[:] = [d for d in faulty if d["udid"] != udid]
             if udid not in [d["udid"] for d in online]:
                 online.append(device_info)
@@ -645,18 +673,24 @@ class DeviceMonitor:
         if platform == "android":
             # 从正常列表移除
             self._android_devices = [d for d in self._android_devices if d["udid"] != udid]
+            for device in self._faulty_android_devices:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
 
             # 添加到 faulty 列表（避免重复）
             if udid not in [d["udid"] for d in self._faulty_android_devices]:
-                self._faulty_android_devices.append({"udid": udid})
+                self._faulty_android_devices.append({"udid": udid, "connection_status": "disconnected"})
                 logger.warning(f"Device marked offline: {udid}")
         elif platform == "ios":
             # 从正常列表移除
             self._ios_devices = [d for d in self._ios_devices if d["udid"] != udid]
+            for device in self._faulty_ios_devices:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
 
             # 添加到 faulty 列表（避免重复）
             if udid not in [d["udid"] for d in self._faulty_ios_devices]:
-                self._faulty_ios_devices.append({"udid": udid})
+                self._faulty_ios_devices.append({"udid": udid, "connection_status": "disconnected"})
                 logger.warning(f"Device marked offline: {udid}")
         elif platform in ("harmony_mobile", "harmony_pc"):
             online = self._harmony_mobile_devices if platform == "harmony_mobile" else self._harmony_pc_devices
@@ -665,7 +699,11 @@ class DeviceMonitor:
                 (dict(d) for d in online if d["udid"] == udid),
                 {"udid": udid},
             )
+            device_info["connection_status"] = "disconnected"
             online[:] = [d for d in online if d["udid"] != udid]
+            for device in faulty:
+                if device["udid"] == udid:
+                    device["connection_status"] = "disconnected"
             if udid not in [d["udid"] for d in faulty]:
                 faulty.append(device_info)
                 logger.warning(f"Device marked offline: {platform}/{udid}")

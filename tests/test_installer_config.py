@@ -6,6 +6,10 @@ from worker.config import WorkerConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_SCRIPT = PROJECT_ROOT / "installer" / "installer.nsi"
+WINDOWS_BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows.ps1"
+HARMONY_BRIDGE_SOURCE = (
+    PROJECT_ROOT / "worker" / "platforms" / "harmony_official" / "java" / "StreamBridge.java"
+)
 
 
 def test_worker_config_reads_utf16_config_written_by_legacy_installer() -> None:
@@ -86,6 +90,17 @@ def test_installer_escapes_powershell_regex_line_anchors() -> None:
 
     assert "-replace '(?m)^\\s*ip:.*$$'" in script
     assert "-replace '(?m)^\\s*discover_harmony_pc_devices:.*$$'" in script
+
+
+def test_windows_build_packages_xml_module_and_both_java_config_templates() -> None:
+    script = WINDOWS_BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "java.xml" in script
+    assert '"$InternalConfigDir\\worker.yaml"' in script
+    assert "tools/jre/bin/java.exe" in script
+
+    bridge_source = HARMONY_BRIDGE_SOURCE.read_text(encoding="utf-8")
+    assert "System.setOut(new PrintStream(System.err" in bridge_source
 
 
 def test_oninit_keeps_defaults_when_command_line_option_missing() -> None:

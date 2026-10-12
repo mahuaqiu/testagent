@@ -7,6 +7,8 @@ HEAD 请求返回 405,前端如需大小应走 /files/list。
 """
 
 import asyncio
+import errno
+import heapq
 import logging
 import os
 import shutil
@@ -158,9 +160,16 @@ def resolve_under_root(rel: str | None) -> Path:
     return target
 
 
-def _scan_dir(target: Path) -> list[dict]:
+def _scan_dir(target: Path) -> tuple[list[dict], bool]:
+    # 只保留排序靠前的上限 + 1 项，超大目录不再把所有条目读入内存。
+    items = heapq.nsmallest(
+        MAX_LIST_ENTRIES + 1,
+        target.iterdir(),
+        key=lambda item: (not item.is_dir(), item.name.lower()),
+    )
+    truncated = len(items) > MAX_LIST_ENTRIES
     entries = []
-    for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+    for item in items[:MAX_LIST_ENTRIES]:
         st = item.stat()
         entries.append(
             {
@@ -170,7 +179,7 @@ def _scan_dir(target: Path) -> list[dict]:
                 "mtime": int(st.st_mtime),
             }
         )
-    return entries
+    return entries, truncated
 
 
 @router.get("/list")
@@ -181,11 +190,10 @@ async def list_files(path: str | None = Query(default=None)) -> dict:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail="不是目录")
     # iterdir/stat 是阻塞 IO,放线程池执行,避免大目录拖住事件循环上的流式任务
-    entries = await asyncio.to_thread(_scan_dir, target)
-    truncated = len(entries) > MAX_LIST_ENTRIES
+    entries, truncated = await asyncio.to_thread(_scan_dir, target)
     return {
         "path": (path or "").replace("\\", "/").strip("/"),
-        "entries": entries[:MAX_LIST_ENTRIES],
+        "entries": entries,
         "truncated": truncated,
     }
 
@@ -243,9 +251,20 @@ async def upload_file(
     dest = target_dir / filename
 
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
-    # 磁盘余量预检:根目录所在盘剩余空间不足以容纳单文件上限时直接拒绝
+    # 按请求声明的体积预检；未知长度的流在实际写入时由磁盘错误兜底。
     free = (await asyncio.to_thread(shutil.disk_usage, str(settings.root))).free
-    if free < max_bytes:
+    content_length = request.headers.get("content-length")
+    expected_bytes = None
+    if content_length is not None:
+        try:
+            expected_bytes = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="无效的 Content-Length") from exc
+        if expected_bytes < 0:
+            raise HTTPException(status_code=400, detail="无效的 Content-Length")
+        if expected_bytes > max_bytes:
+            raise HTTPException(status_code=413, detail="文件超过大小限制")
+    if free < (expected_bytes if expected_bytes is not None else 1):
         raise HTTPException(status_code=507, detail="磁盘空间不足")
 
     if dest.exists() and not overwrite:
@@ -267,10 +286,20 @@ async def upload_file(
                     delay = _pacing_delay(len(chunk), settings.upload_rate_limit_mb)
                     if delay > 0:
                         await asyncio.sleep(delay)
-            tmp.replace(dest)
-        except BaseException:
-            # 覆盖读流中断与 replace 失败两类异常,都要清掉残留 .part
+            if overwrite:
+                tmp.replace(dest)
+            else:
+                try:
+                    # 硬链接以原子方式占用目标名，消除预检查与发布之间的覆盖竞态。
+                    os.link(tmp, dest)
+                except FileExistsError as exc:
+                    raise HTTPException(status_code=409, detail="file_exists") from exc
+                tmp.unlink()
+        except BaseException as exc:
+            # 覆盖读流中断与文件发布失败都要清掉残留 .part
             tmp.unlink(missing_ok=True)
+            if isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, errno.EDQUOT):
+                raise HTTPException(status_code=507, detail="磁盘空间不足") from exc
             raise
     rel_path = dest.relative_to(settings.root.resolve()).as_posix()
     return {"name": filename, "size": written, "rel_path": rel_path}

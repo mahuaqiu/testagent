@@ -307,27 +307,15 @@ class Worker:
             snapshot = self.device_monitor.get_all_devices()
         if snapshot:
             for platform in ("android", "ios", "harmony_mobile", "harmony_pc"):
-                by_id = {record.device_id: record for record in records[platform]}
-                for item in snapshot.get(platform, []):
-                    device_id = item.get("udid") or item.get("device_id")
-                    if not device_id:
-                        continue
-                    current = by_id.get(device_id)
-                    if current is None:
-                        current = DeviceRecord(device_id=device_id, platform=platform)
-                        by_id[device_id] = current
-                    current.name = item.get("name") or current.name
-                    current.model = item.get("model") or current.model
-                    current.os_version = item.get("os_version") or item.get("sys_version") or current.os_version
-                    current.connection_status = item.get("connection_status", current.connection_status)
-                    current.service_status = item.get("service_status", current.service_status)
-                    current.health_status = item.get("health_status", current.health_status)
-                    current.capabilities = list(item.get("capabilities", current.capabilities))
-                    current.metadata.update(item)
-                records[platform] = list(by_id.values())
+                records[platform] = self.device_registry.merge_monitor_snapshot(
+                    platform,
+                    records[platform],
+                    snapshot.get(platform, []),
+                    snapshot.get(f"faulty_{platform}", []),
+                )
 
         for platform, values in records.items():
-            if values:
+            if values or snapshot is not None:
                 self.device_registry.replace_platform(platform, values)
             if snapshot:
                 faulty = snapshot.get(f"faulty_{platform}", [])
@@ -335,7 +323,9 @@ class Worker:
                     device_id = item.get("udid") or item.get("device_id")
                     if device_id:
                         self.device_registry.update_status(
-                            platform, device_id, connection_status="disconnected",
+                            platform,
+                            device_id,
+                            service_status="unavailable",
                             health_status="unhealthy",
                         )
 
@@ -444,6 +434,7 @@ class Worker:
             harmony_pc_manager=self.harmony_pc_manager,
         )
         self.device_monitor.on_device_change = self._on_device_change
+        self.device_monitor.on_device_discovery = self._sync_device_registry
 
         # 设置帧捕获失败回调（仅移动端）
         if (

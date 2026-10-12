@@ -81,35 +81,62 @@ class ScreenManager:
         self._frame_queue: Queue[bytes] = Queue(maxsize=10)
         self._bgra_queue: Queue[bytearray] = Queue(maxsize=2)  # 录制只需要 1 帧当前 + 1 帧缓冲
         self._capture_thread: threading.Thread | None = None
+        self._capture_stop_event: threading.Event | None = None
         self._running: bool = False
         self._streamer: WebSocketStreamer | None = None
         # 保护 _running/_capture_thread 状态迁移，避免并发 start/stop
         # 出现"看到线程在跑却被对方 join 掉"的竞态
         self._state_lock: threading.Lock = threading.Lock()
+        self._state_condition = threading.Condition(self._state_lock)
+        self._stopping = False
 
     def start_capture(self) -> None:
         """启动后台截图线程（已在运行时幂等返回）。"""
-        with self._state_lock:
+        with self._state_condition:
+            while self._stopping or (
+                self._capture_thread
+                and self._capture_thread.is_alive()
+                and self._capture_stop_event
+                and self._capture_stop_event.is_set()
+            ):
+                self._state_condition.wait(timeout=0.1)
             if self._running and self._capture_thread and self._capture_thread.is_alive():
                 return
             self._running = True
-            self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            stop_event = threading.Event()
+            self._capture_stop_event = stop_event
+            self._capture_thread = threading.Thread(
+                target=self._capture_loop,
+                args=(stop_event,),
+                daemon=True,
+            )
             self._capture_thread.start()
         logger.info("Frame capture thread started")
 
     def stop(self) -> None:
         """停止所有资源（截图线程、推流）。"""
-        with self._state_lock:
+        with self._state_condition:
+            if self._stopping:
+                return
+            self._stopping = True
             self._running = False
             capture_thread = self._capture_thread
-            self._capture_thread = None
-        if capture_thread:
-            # 如果是当前线程调用 stop（如帧捕获线程检测失败后），则不 join（避免死锁）
-            if capture_thread != threading.current_thread():
+            capture_stop_event = self._capture_stop_event
+            if capture_stop_event:
+                capture_stop_event.set()
+        try:
+            if capture_thread and capture_thread != threading.current_thread():
                 capture_thread.join(timeout=5)
-        if self._streamer:
-            self._streamer.stop()
-        self._frame_source.stop()
+            if self._streamer:
+                self._streamer.stop()
+            self._frame_source.stop()
+        finally:
+            with self._state_condition:
+                if capture_thread is None or not capture_thread.is_alive():
+                    self._capture_thread = None
+                    self._capture_stop_event = None
+                self._stopping = False
+                self._state_condition.notify_all()
         logger.info("ScreenManager stopped")
 
     def get_frame(self, timeout: float = 1.0) -> bytes:
@@ -173,7 +200,7 @@ class ScreenManager:
         img.save(buffer, format="JPEG", quality=80)
         return buffer.getvalue()
 
-    def _capture_loop(self) -> None:
+    def _capture_loop(self, stop_event: threading.Event) -> None:
         """后台截图循环（队列满时丢弃旧帧，带帧率控制）。
 
         优化：MacFrameSource 每次循环只截屏一次，同时放入两个队列。
@@ -192,7 +219,7 @@ class ScreenManager:
         # BGRA 是否不受支持（如 HarmonyFrameSource）——首次探测后置位，避免每轮刷 ERROR
         bgra_unsupported = False
 
-        while self._running:
+        while self._running and not stop_event.is_set():
             try:
                 capture_fps = default_capture_fps
 
@@ -227,6 +254,9 @@ class ScreenManager:
                 else:
                     frame = self._frame_source.get_frame()
                     bgra = None  # 非共享路径，后续单独获取
+
+                if stop_event.is_set():
+                    break
 
                 consecutive_errors = 0  # 成功后重置计数
                 last_frame_time = time.time()
@@ -280,6 +310,9 @@ class ScreenManager:
                 # 连续错误时增加延迟，避免快速循环
                 if consecutive_errors >= 3:
                     time.sleep(0.5)
+
+        with self._state_condition:
+            self._state_condition.notify_all()
 
     def start_streaming(
         self,

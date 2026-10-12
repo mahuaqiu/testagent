@@ -21,6 +21,7 @@ from worker.platforms.harmony import HarmonyPlatformManager
 from worker.platforms.harmony_capture import HarmonyScreenCapture
 from worker.platforms.harmony_official.bridge import JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
+    BridgeMessage,
     BridgeMessageType,
     BridgeProtocolError,
     command_mouse_down,
@@ -151,6 +152,40 @@ def test_hos1_rejects_truncated_payload() -> None:
 
     with pytest.raises(BridgeProtocolError, match="被截断"):
         list(iter_messages(io.BytesIO(payload)))
+
+
+def test_bridge_runtime_error_is_logged_once(caplog) -> None:
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._ready_event.set()
+
+    session._on_bridge_message(
+        BridgeMessage(BridgeMessageType.ERROR, b"H264_EXCEPTION encoder failed")
+    )
+
+    errors = [record.getMessage() for record in caplog.records if "H264_EXCEPTION" in record.getMessage()]
+    assert errors == ["鸿蒙官方 Java Bridge 运行时报错(device-1): H264_EXCEPTION encoder failed"]
+
+
+def test_packaged_java_runtime_overrides_stale_development_path(tmp_path, monkeypatch) -> None:
+    import worker.platforms.harmony_official.session as session_module
+
+    bundled_java = tmp_path / "tools" / "jre" / "bin" / "java.exe"
+    bundled_java.parent.mkdir(parents=True)
+    bundled_java.touch()
+    monkeypatch.setattr(session_module, "get_base_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(session_module, "is_packaged", lambda: True)
+
+    manager = HarmonyOfficialSessionManager(
+        "harmony_pc",
+        {"java_path": "D:/Program Files/jdk/bin/java.exe"},
+    )
+
+    assert manager._settings["java_path"] == str(bundled_java)
 
 
 def test_h264_websocket_packets_split_config_and_idr() -> None:

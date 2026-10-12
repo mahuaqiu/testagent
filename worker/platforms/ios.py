@@ -490,6 +490,13 @@ class iOSPlatformManager(PlatformManager):  # noqa: N801 -- iOS 为 Apple 品牌
             return int(info["mjpeg_port"])
         return self.mjpeg_base_port
 
+    def get_wda_port(self, device_id: str | None = None) -> int:
+        """返回设备当前分配的 WDA 端口，未知设备回退基础端口。"""
+        info = self._device_wda.get(device_id or "")
+        if info and info.get("port"):
+            return int(info["port"])
+        return self.wda_base_port
+
     def _get_tunnel_info(self, udid: str, timeout: int = 30) -> dict | None:
         """获取 iOS 17+ 设备的 tunnel 信息（等待建立）。"""
         # 先检查是否已缓存

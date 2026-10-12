@@ -2151,23 +2151,29 @@ def _create_frame_source(
             wda_client = ios_manager._device_clients.get(device_id)
             if wda_client:
                 return MJPEGFrameSource(device_id, wda_client, mjpeg_port=mjpeg_port)
-            # Fallback: 设备未注册时直连本地 WDA。此时无法得知该设备的
-            # 实际 MJPEG 端口，只能取配置的基础端口并显式告警——
-            # 静默使用默认值在多设备场景会拿到别的设备的画面。
+            # 设备客户端未注册时直连本地 WDA；优先复用管理器保存的设备端口，
+            # 未知设备才回退基础端口并告警，避免多设备时静默连到其他设备。
             from worker.platforms.wda_client import WDAClient
-            fallback_port = int(getattr(ios_manager, "mjpeg_base_port", 0) or 9100)
+            fallback_port = int(mjpeg_port)
+            get_wda_port = getattr(ios_manager, "get_wda_port", None)
+            wda_port = int(get_wda_port(device_id)) if get_wda_port else int(
+                getattr(ios_manager, "wda_base_port", 0) or 8100
+            )
             logger.warning(
                 "iOS 设备未注册，MJPEG 回退直连本地 WDA: device=%s, "
                 "mjpeg_port=%d（多设备场景可能串台，请先刷新设备）",
                 device_id,
                 fallback_port,
             )
-            wda_client = WDAClient("http://127.0.0.1:8100")
+            wda_client = WDAClient(f"http://127.0.0.1:{wda_port}")
             return MJPEGFrameSource(device_id, wda_client, mjpeg_port=fallback_port)
         # worker 未初始化时的最后兜底
         from worker.platforms.wda_client import WDAClient
-        wda_client = WDAClient("http://127.0.0.1:8100")
-        return MJPEGFrameSource(device_id, wda_client, mjpeg_port=9100)
+        ios_config = worker.config.get_platform_config("ios") if worker else {}
+        wda_port = int(ios_config.get("wda_base_port", 8100) or 8100)
+        mjpeg_port = int(ios_config.get("mjpeg_base_port", 9100) or 9100)
+        wda_client = WDAClient(f"http://127.0.0.1:{wda_port}")
+        return MJPEGFrameSource(device_id, wda_client, mjpeg_port=mjpeg_port)
 
     elif platform == "android":
         # Android: 使用 minicap 流

@@ -131,6 +131,9 @@ class MJPEGFrameSource(FrameSource):
         self._stream_response = None
         self._stream_iterator = None
         self._stream_buffer = b""
+        self._stream_lock = threading.Lock()
+        self._stream_state_lock = threading.Lock()
+        self._stream_generation = 0
 
     def _mjpeg_url(self) -> str:
         host_with_port = self.wda_client.base_url.split('/')[2]
@@ -145,49 +148,83 @@ class MJPEGFrameSource(FrameSource):
 
         mjpeg_url = self._mjpeg_url()
 
-        # 打开持续流（stream=True）
-        if self._stream_response is None:
-            self._stream_response = requests.get(mjpeg_url, stream=True, timeout=30)
-            self._stream_iterator = self._stream_response.iter_content(chunk_size=8192)
+        # 单个流只能由一个消费者推进，状态锁则允许 stop 并发关闭阻塞读取。
+        with self._stream_lock:
+            response, iterator, generation = self._get_stream(requests, mjpeg_url)
+            boundary = b"--BoundaryString"
+            content_length_pattern = re.compile(rb"Content-Length: (\d+)")
 
-        # 解析 multipart 格式：--BoundaryString + Content-Length + JPEG 数据
-        boundary = b"--BoundaryString"
-        content_length_pattern = re.compile(rb"Content-Length: (\d+)")
+            while True:
+                with self._stream_state_lock:
+                    if generation != self._stream_generation or response is not self._stream_response:
+                        raise ConnectionError("MJPEG stream stopped")
+                    boundary_pos = self._stream_buffer.find(boundary)
+                    if boundary_pos != -1:
+                        header_start = boundary_pos + len(boundary)
+                        header_end = self._stream_buffer.find(b"\r\n\r\n", header_start)
+                        if header_end != -1:
+                            header = self._stream_buffer[header_start:header_end]
+                            match = content_length_pattern.search(header)
+                            if match:
+                                content_length = int(match.group(1))
+                                data_start = header_end + 4
+                                frame_end = data_start + content_length
+                                if len(self._stream_buffer) >= frame_end:
+                                    frame_data = self._stream_buffer[data_start:frame_end]
+                                    self._stream_buffer = self._stream_buffer[frame_end:]
+                                    return frame_data
 
-        # 读取数据直到找到完整帧
-        while True:
-            # 查找 boundary
-            boundary_pos = self._stream_buffer.find(boundary)
-            if boundary_pos != -1:
-                # 查找 Content-Length
-                header_start = boundary_pos + len(boundary)
-                header_end = self._stream_buffer.find(b"\r\n\r\n", header_start)
-                if header_end != -1:
-                    header = self._stream_buffer[header_start:header_end]
-                    match = content_length_pattern.search(header)
-                    if match:
-                        content_length = int(match.group(1))
-                        data_start = header_end + 4  # \r\n\r\n
+                try:
+                    chunk = next(iterator)
+                except StopIteration as exc:
+                    self._reset_stream(response)
+                    raise ConnectionError("MJPEG stream ended") from exc
+                except Exception:
+                    self._reset_stream(response)
+                    raise
 
-                        # 检查是否有完整帧数据
-                        if len(self._stream_buffer) >= data_start + content_length:
-                            # 提取 JPEG 数据
-                            frame_data = self._stream_buffer[data_start:data_start + content_length]
-                            # 清理已处理的数据
-                            self._stream_buffer = self._stream_buffer[data_start + content_length:]
-                            return frame_data
+                with self._stream_state_lock:
+                    if generation != self._stream_generation or response is not self._stream_response:
+                        raise ConnectionError("MJPEG stream stopped")
+                    self._stream_buffer += chunk
+                    if len(self._stream_buffer) > 64 * 1024 * 1024:
+                        self._reset_stream_locked(response)
+                        response.close()
+                        raise ConnectionError("MJPEG stream buffer exceeded 64 MiB")
 
-            # 从流读取更多数据
-            try:
-                chunk = next(self._stream_iterator)
-                self._stream_buffer += chunk
-            except StopIteration:
-                # 流结束，重新连接
-                self._stream_response.close()
-                self._stream_response = None
-                self._stream_iterator = None
-                self._stream_buffer = b""
-                raise ConnectionError("MJPEG stream ended")
+    def _get_stream(self, requests, mjpeg_url: str):
+        """在读取锁保护下获取当前流，防止重复创建或覆盖响应对象。"""
+        with self._stream_state_lock:
+            if self._stream_response is not None:
+                return self._stream_response, self._stream_iterator, self._stream_generation
+            generation = self._stream_generation
+
+        response = requests.get(mjpeg_url, stream=True, timeout=30)
+        iterator = response.iter_content(chunk_size=8192)
+        with self._stream_state_lock:
+            if generation != self._stream_generation:
+                response.close()
+                raise ConnectionError("MJPEG stream stopped")
+            self._stream_response = response
+            self._stream_iterator = iterator
+            return response, iterator, generation
+
+    def _reset_stream_locked(self, expected_response=None):
+        """清除匹配的流状态；调用方必须持有状态锁。"""
+        if expected_response is not None and self._stream_response is not expected_response:
+            return None
+        response = self._stream_response
+        self._stream_response = None
+        self._stream_iterator = None
+        self._stream_buffer = b""
+        self._stream_generation += 1
+        return response
+
+    def _reset_stream(self, expected_response=None) -> None:
+        with self._stream_state_lock:
+            response = self._reset_stream_locked(expected_response)
+        if response is not None:
+            response.close()
 
     def get_screen_size(self) -> tuple[int, int]:
         """获取屏幕尺寸。"""
@@ -210,11 +247,10 @@ class MJPEGFrameSource(FrameSource):
 
     def stop(self) -> None:
         """停止 MJPEG 流。"""
-        if self._stream_response:
-            self._stream_response.close()
-            self._stream_response = None
-        self._stream_iterator = None
-        self._stream_buffer = b""
+        with self._stream_state_lock:
+            response = self._reset_stream_locked()
+        if response is not None:
+            response.close()
 
     def get_blank_frame(self) -> bytes:
         """返回黑屏 JPEG 帧。"""

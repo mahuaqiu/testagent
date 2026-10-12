@@ -9,6 +9,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class StreamBridge {
+    private static final OutputStream PROTOCOL_OUTPUT = System.out;
     private static final byte VERSION = 1;
     private static final byte READY = 1;
     private static final byte H264 = 2;
@@ -54,10 +56,12 @@ public final class StreamBridge {
         this.serial = serial;
         this.deviceType = deviceType;
         this.device = device;
-        this.writer = new ProtocolWriter(System.out);
+        this.writer = new ProtocolWriter(PROTOCOL_OUTPUT);
     }
 
     public static void main(String[] args) throws Exception {
+        // SDK/Java 诊断信息统一走 stderr，保护 stdout 上的 HOS1 二进制协议。
+        System.setOut(new PrintStream(System.err, true, StandardCharsets.UTF_8));
         if (args.length < 1) {
             System.err.println("用法: StreamBridge <serial> [mobile|pc] [hdc] [ip] [port] [scale] [fps] [bitrate]");
             System.exit(2);

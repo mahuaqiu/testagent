@@ -12,7 +12,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Any
 
-from common.packaging import get_base_dir
+from common.packaging import get_base_dir, is_packaged
 from worker.platforms.harmony_official.bridge import JavaBridgeError, JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
     BridgeMessage,
@@ -584,10 +584,10 @@ class HarmonyOfficialSession:
             self._ready_event.set()
         elif message.message_type == BridgeMessageType.ERROR:
             detail = message.text
-            logger.warning("鸿蒙官方 Java Bridge 报错(%s): %s", self.serial, detail)
             if not self._ready_event.is_set():
                 self._startup_error = detail
                 self._ready_event.set()
+                logger.warning("鸿蒙官方 Java Bridge 启动时报错(%s): %s", self.serial, detail)
             else:
                 logger.warning("鸿蒙官方 Java Bridge 运行时报错(%s): %s", self.serial, detail)
         elif message.message_type == BridgeMessageType.EOF:
@@ -1329,6 +1329,10 @@ class HarmonyOfficialSessionManager:
             if key in self.DEFAULTS and value is not None
         })
         base_dir = Path(get_base_dir())
+        bundled_java = base_dir / "tools" / "jre" / "bin" / "java.exe"
+        if is_packaged() and bundled_java.is_file():
+            # 安装包随附的 JRE 优先于旧配置中残留的开发机绝对路径。
+            settings["java_path"] = str(bundled_java)
         for key in ("java_path", "jar_path", "bridge_class_path"):
             value = Path(str(settings[key]))
             # ``java`` 仅是 PATH 命令，不应拼接项目目录；显式相对路径则用于

@@ -195,13 +195,19 @@ class TaskService:
             return
 
         deadline = time.monotonic() + max(0.0, timeout)
-        while self._handles and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            with self._lock:
+                active_task_ids = tuple(self._handles)
+            if not active_task_ids:
+                break
             time.sleep(0.05)
-        if self._handles:
+        with self._lock:
+            active_task_ids = tuple(self._handles)
+        if active_task_ids:
             logger.warning(
                 "Task shutdown timed out after %.1fs, abandoning task(s): %s",
                 timeout,
-                ",".join(self._handles.keys()),
+                ",".join(active_task_ids),
             )
         self._executor.shutdown(wait=False, cancel_futures=True)
 

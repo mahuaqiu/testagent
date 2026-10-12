@@ -322,11 +322,10 @@ if ($JavaRuntimePath -ne "") {
     $JreTarget = "$PackageDir\tools\jre"
     if (Test-Path $JreTarget) { Remove-Item -Recurse -Force $JreTarget }
 
-    # 优先用 jlink 生成精简运行时（约 60-80M），模块集来自 jdeps 对鸿蒙 jar+Bridge 的
-    # 实测结果，另加 java.management/jdk.crypto.* 兜底 jdeps 看不到的反射与 TLS 依赖。
+    # 优先用 jlink 生成精简运行时（约 60-80M），模块集包含 SDK 反射加载 XML 所需的 java.xml。
     $JlinkExe = Join-Path $JavaRuntimePath "bin\jlink.exe"
     $JmodsDir = Join-Path $JavaRuntimePath "jmods"
-    $BridgeModules = "java.base,java.compiler,java.desktop,java.management,java.naming,java.sql,jdk.unsupported,jdk.crypto.ec,jdk.crypto.cryptoki"
+    $BridgeModules = "java.base,java.compiler,java.desktop,java.management,java.naming,java.sql,java.xml,jdk.unsupported,jdk.crypto.ec,jdk.crypto.cryptoki"
 
     if ((Test-Path $JlinkExe) -and (Test-Path $JmodsDir)) {
         Write-Host "Building slim Java runtime with jlink..."
@@ -375,18 +374,6 @@ Write-Host "Copying config directory..."
 if (Test-Path "$PackageDir\config") { Remove-Item -Recurse -Force "$PackageDir\config" }
 Copy-Item -Path "$ProjectRoot\config" -Destination "$PackageDir\config" -Recurse -Force
 
-if ($JavaRuntimePath -ne "") {
-    # 发布包一律指向随包 JRE，开发机配置中的绝对 JDK 路径不能带到用户机器。
-    $PackagedConfig = "$PackageDir\config\worker.yaml"
-    $ConfigText = Get-Content -Path $PackagedConfig -Raw -Encoding UTF8
-    $ConfigText = [regex]::Replace(
-        $ConfigText,
-        '(?m)^(\s*java_path:)\s*.*$',
-        '$1 tools/jre/bin/java.exe'
-    )
-    Set-Content -Path $PackagedConfig -Value $ConfigText -Encoding UTF8
-}
-
 # Copy minicap binary files (Nuitka --include-data-dir may miss)
 Write-Host "Copying minicap static files..."
 # Nuitka --include-data-dir creates directories under root, but may be incomplete
@@ -404,6 +391,27 @@ Write-Host "Creating _internal\config template..."
 $InternalConfigDir = "$PackageDir\_internal\config"
 New-Item -ItemType Directory -Force -Path $InternalConfigDir | Out-Null
 Copy-Item -Path "$ProjectRoot\config\*" -Destination $InternalConfigDir -Recurse -Force
+
+if ($JavaRuntimePath -ne "") {
+    # 新装时安装器从 _internal 模板生成用户配置，两个模板都要指向随包 JRE。
+    $PackagedConfigs = @(
+        "$PackageDir\config\worker.yaml",
+        "$InternalConfigDir\worker.yaml"
+    )
+    foreach ($PackagedConfig in $PackagedConfigs) {
+        if (-not (Test-Path $PackagedConfig -PathType Leaf)) {
+            Write-Error "Worker 配置模板不存在: $PackagedConfig"
+            exit 1
+        }
+        $ConfigText = Get-Content -Path $PackagedConfig -Raw -Encoding UTF8
+        $ConfigText = [regex]::Replace(
+            $ConfigText,
+            '(?m)^(\s*java_path:)\s*.*$',
+            '$1 tools/jre/bin/java.exe'
+        )
+        Set-Content -Path $PackagedConfig -Value $ConfigText -Encoding UTF8
+    }
+}
 
 # Copy HWiNFO64.EXE (Nuitka --include-package-data does not include .exe files)
 Write-Host "Copying HWiNFO64.EXE for perfwin..."
