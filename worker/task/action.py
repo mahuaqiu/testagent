@@ -144,7 +144,7 @@ class Action:
     fps: int | None = None                    # 帧率（默认 10）
     audio: bool = False                       # 是否录制音频
     watermark: bool = True                    # 是否开启时间水印
-    recording_timeout: int | None = None      # 录屏超时时间（毫秒，默认 7200000）
+    recording_timeout: int | None = None      # 录屏超时时间（毫秒，默认使用代码固定值）
 
     # 命令执行参数（cmd_exec 专用）
     background: bool = False                  # 是否后台异步执行（不等待结果直接返回）

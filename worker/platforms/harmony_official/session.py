@@ -13,6 +13,11 @@ from queue import Empty, Full, Queue
 from typing import Any
 
 from common.packaging import get_base_dir, is_packaged
+from worker.constants import (
+    DEFAULT_HARMONY_BRIDGE_REL_PATH,
+    DEFAULT_HARMONY_BUNDLED_JAVA_REL_PATH,
+    DEFAULT_HARMONY_JAR_REL_PATH,
+)
 from worker.platforms.harmony_official.bridge import JavaBridgeError, JavaBridgeProcess
 from worker.platforms.harmony_official.protocol import (
     BridgeMessage,
@@ -906,8 +911,8 @@ class HarmonyOfficialSessionManager:
 
     DEFAULTS: dict[str, Any] = {
         "java_path": "java",
-        "jar_path": "tools/harmony/hosScrcpy-1.0.15-beta.jar",
-        "bridge_class_path": "tools/harmony/bridge",
+        "jar_path": DEFAULT_HARMONY_JAR_REL_PATH,
+        "bridge_class_path": DEFAULT_HARMONY_BRIDGE_REL_PATH,
         "startup_timeout_seconds": 35,
         "idle_timeout_seconds": 60,
         "prewarm_failure_cooldown_seconds": 60,
@@ -1322,24 +1327,23 @@ class HarmonyOfficialSessionManager:
 
     def _build_settings(self, config: dict[str, Any]) -> dict[str, Any]:
         settings = dict(self.DEFAULTS)
-        # 仅读取已支持的运行参数，历史配置中的模式和回退开关不再生效。
-        settings.update({
-            key: value
-            for key, value in config.items()
-            if key in self.DEFAULTS and value is not None
-        })
+        # 除开发环境 Java 路径外，其余运行参数和工具路径都固定由代码管理。
         base_dir = Path(get_base_dir())
-        bundled_java = base_dir / "tools" / "jre" / "bin" / "java.exe"
-        if is_packaged() and bundled_java.is_file():
-            # 安装包随附的 JRE 优先于旧配置中残留的开发机绝对路径。
-            settings["java_path"] = str(bundled_java)
-        for key in ("java_path", "jar_path", "bridge_class_path"):
-            value = Path(str(settings[key]))
-            # ``java`` 仅是 PATH 命令，不应拼接项目目录；显式相对路径则用于
-            # 打包后的 tools/jre/bin/java.exe。
-            if key == "java_path" and str(value) == "java":
-                continue
-            settings[key] = str(value if value.is_absolute() else base_dir / value)
+        if is_packaged():
+            # 打包版忽略配置中的开发机 Java 路径，只使用安装目录随附的运行时。
+            settings["java_path"] = str(base_dir / DEFAULT_HARMONY_BUNDLED_JAVA_REL_PATH)
+        else:
+            # 开发环境可配置本机 Java；相对路径按项目根目录解析，java 命令走 PATH。
+            configured_java = config.get("java_path") or self.DEFAULTS["java_path"]
+            java_path = Path(str(configured_java))
+            settings["java_path"] = (
+                str(java_path)
+                if str(java_path) == "java" or java_path.is_absolute()
+                else str(base_dir / java_path)
+            )
+
+        settings["jar_path"] = str(base_dir / DEFAULT_HARMONY_JAR_REL_PATH)
+        settings["bridge_class_path"] = str(base_dir / DEFAULT_HARMONY_BRIDGE_REL_PATH)
         return settings
 
     def _settings_for_serial(self, serial: str) -> dict[str, Any]:

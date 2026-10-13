@@ -23,13 +23,14 @@ from fastapi.responses import StreamingResponse
 
 from common.packaging import get_base_dir
 from worker.config import WorkerConfig
+from worker.constants import DEFAULT_FILES_MAX_UPLOAD_SIZE_MB, DEFAULT_FILES_ROOT_REL
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-DEFAULT_ROOT_REL = os.path.join("data", "collected")
-DEFAULT_MAX_UPLOAD_SIZE_MB = 1000
+DEFAULT_ROOT_REL = os.path.join(*DEFAULT_FILES_ROOT_REL.split("/"))
+DEFAULT_MAX_UPLOAD_SIZE_MB = DEFAULT_FILES_MAX_UPLOAD_SIZE_MB
 CHUNK_SIZE = 256 * 1024
 # 目录列表条目上限:超大目录截断返回(truncated=true),避免巨量条目拖垮
 # worker 与平台前端表格
@@ -38,7 +39,7 @@ MAX_LIST_ENTRIES = 2000
 
 @dataclass
 class FilesSettings:
-    """文件管理运行时设置(由 worker.yaml 的 files 段推导)。"""
+    """文件管理运行时固定参数。"""
 
     root: Path
     download_rate_limit_mb: float
@@ -69,7 +70,7 @@ def set_files_config(config: WorkerConfig, *, create_root: bool = True) -> None:
     upload_size_mb = config.files_max_upload_size_mb
     if upload_size_mb <= 0:
         logger.warning(
-            "files.max_upload_size_mb=%s 非法(需为正数),回退默认 %sMB",
+            "文件上传大小上限 %sMB 非法（需为正数），回退默认 %sMB",
             upload_size_mb,
             DEFAULT_MAX_UPLOAD_SIZE_MB,
         )
@@ -90,10 +91,8 @@ def get_files_settings() -> FilesSettings:
     if _settings is None:
         # 兜底:仅出现在未走 worker.set_worker 的场景(如裸路由冒烟)。
         # 不创建根目录,避免未经启动流程就触碰真实磁盘状态。
-        from worker.config import load_config
-
-        logger.warning("files 配置未经 set_files_config 注入,回退读取 worker.yaml")
-        set_files_config(load_config(), create_root=False)
+        logger.warning("文件管理参数未经启动流程注入，使用代码默认值")
+        set_files_config(WorkerConfig(), create_root=False)
     assert _settings is not None
     return _settings
 

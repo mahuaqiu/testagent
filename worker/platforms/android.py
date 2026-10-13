@@ -15,6 +15,7 @@ from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.actions.spec import ActionCancelledError, ActionTimedOutError
 from worker.config import PlatformConfig
+from worker.constants import DEFAULT_UNLOCK_PASSWORD
 from worker.discovery.android import get_adb_cmd
 from worker.platforms.base import PlatformManager
 from worker.platforms.minicap import Minicap
@@ -73,7 +74,7 @@ class AndroidPlatformManager(PlatformManager):
         super().__init__(config, ocr_client)
         self._device_clients: dict[str, u2.Device] = {}
         self._current_device: str | None = None
-        self._unlock_config = unlock_config or {}  # 解锁配置
+        self._unlock_config = unlock_config or {}  # 解锁密码配置
         self._minicap_instances: dict[str, Minicap] = {}  # minicap 实例
 
     @property
@@ -481,7 +482,7 @@ class AndroidPlatformManager(PlatformManager):
         from worker.task import Action
 
         # 从配置读取密码
-        password = self._unlock_config.get("password", "123456")
+        password = self._unlock_config.get("password", DEFAULT_UNLOCK_PASSWORD)
 
         unlock_action = Action(
             action_type="unlock_screen",

@@ -9,6 +9,16 @@ import time
 from typing import TYPE_CHECKING
 
 from worker.actions.base import ActionExecutor
+from worker.constants import (
+    ANDROID_KEYPAD_COORDINATES,
+    HARMONY_KEYPAD_COORDINATES,
+    HARMONY_MOBILE_UNLOCK_SWIPE,
+    HARMONY_PC_PASSWORD_BOX,
+    HARMONY_PC_UNLOCK_SWIPE,
+    IOS_KEYPAD_COORDINATES,
+    IOS_UNLOCK_METHODS,
+    UNLOCK_CLICK_INTERVAL_MS,
+)
 from worker.task import Action, ActionResult, ActionStatus
 
 if TYPE_CHECKING:
@@ -32,54 +42,15 @@ class UnlockScreenAction(ActionExecutor):
     name = "unlock_screen"
     requires_context = True  # 需要 context（WDA client / u2 device）来执行操作
 
-    # 默认密码键盘坐标配置（物理分辨率，后备）
-    # iPhone 8: 750x1334
-    DEFAULT_IOS_KEYPAD = {
-        "1": {"x": 92, "y": 570},
-        "2": {"x": 250, "y": 570},
-        "3": {"x": 408, "y": 570},
-        "4": {"x": 92, "y": 670},
-        "5": {"x": 250, "y": 670},
-        "6": {"x": 408, "y": 670},
-        "7": {"x": 92, "y": 770},
-        "8": {"x": 250, "y": 770},
-        "9": {"x": 408, "y": 770},
-        "0": {"x": 250, "y": 870},
-    }
-
-    # Android 1080x2400
-    DEFAULT_ANDROID_KEYPAD = {
-        "1": {"x": 180, "y": 850},
-        "2": {"x": 540, "y": 850},
-        "3": {"x": 900, "y": 850},
-        "4": {"x": 180, "y": 950},
-        "5": {"x": 540, "y": 950},
-        "6": {"x": 900, "y": 950},
-        "7": {"x": 180, "y": 1050},
-        "8": {"x": 540, "y": 1050},
-        "9": {"x": 900, "y": 1050},
-        "0": {"x": 540, "y": 1150},
-    }
-
-    # Harmony 1080x2400（与 Android 布局相同）
-    DEFAULT_HARMONY_KEYPAD = {
-        "1": {"x": 180, "y": 850},
-        "2": {"x": 540, "y": 850},
-        "3": {"x": 900, "y": 850},
-        "4": {"x": 180, "y": 950},
-        "5": {"x": 540, "y": 950},
-        "6": {"x": 900, "y": 950},
-        "7": {"x": 180, "y": 1050},
-        "8": {"x": 540, "y": 1050},
-        "9": {"x": 900, "y": 1050},
-        "0": {"x": 540, "y": 1150},
-    }
+    # 保留默认坐标别名，兼容旧调用方。
+    DEFAULT_IOS_KEYPAD = IOS_KEYPAD_COORDINATES["default"]
+    DEFAULT_ANDROID_KEYPAD = ANDROID_KEYPAD_COORDINATES["default"]
+    DEFAULT_HARMONY_KEYPAD = HARMONY_KEYPAD_COORDINATES["default"]
 
     # 鸿蒙平台双形态（手机九宫格点坐标，PC 文本框输入）
     HARMONY_PLATFORMS = ("harmony_mobile", "harmony_pc")
 
-    # 鸿蒙 PC 锁屏密码框坐标（占位值，按 3120x2080 真机预估，后期校准或走配置）
-    DEFAULT_HARMONY_PC_PASSWORD_BOX = {"x": 1560, "y": 1300}
+    DEFAULT_HARMONY_PC_PASSWORD_BOX = HARMONY_PC_PASSWORD_BOX
 
     def execute(
         self,
@@ -99,7 +70,7 @@ class UnlockScreenAction(ActionExecutor):
         password = action.value or getattr(action, "password", None)
 
         # 获取点击间隔（毫秒）
-        click_interval = self._get_click_interval(platform)
+        click_interval = self._get_click_interval()
 
         # 获取设备分辨率和缩放因子（用于 iOS 坐标转换）
         resolution = self._get_device_resolution(platform, context)
@@ -245,15 +216,12 @@ class UnlockScreenAction(ActionExecutor):
                 error=str(e),
             )
 
-    def _get_click_interval(self, platform: "PlatformManager") -> int:
-        """获取点击间隔（毫秒）。"""
-        # 从配置读取，默认 150ms
-        unlock_config = getattr(platform, "_unlock_config", {})
-        return unlock_config.get("click_interval", 150)
+    def _get_click_interval(self) -> int:
+        """获取固定的密码键盘点击间隔（毫秒）。"""
+        return UNLOCK_CLICK_INTERVAL_MS
 
     def _get_keypad_coords(self, platform: "PlatformManager", context: object) -> dict:
-        """获取密码键盘坐标配置（根据设备分辨率自动匹配）。"""
-        unlock_config = getattr(platform, "_unlock_config", {})
+        """根据设备分辨率获取代码内置的密码键盘坐标。"""
         platform_type = platform.platform
 
         # 获取设备分辨率
@@ -262,25 +230,20 @@ class UnlockScreenAction(ActionExecutor):
 
         logger.info(f"Device resolution: {resolution_key}")
 
-        if platform_type == "ios":
-            keypad = unlock_config.get("ios_keypad", {})
-            # 先尝试按分辨率匹配，找不到则用 default
-            coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_IOS_KEYPAD))
-            logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
-            return coords
-        elif platform_type == "android":
-            keypad = unlock_config.get("android_keypad", {})
-            coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_ANDROID_KEYPAD))
-            logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
-            return coords
-        elif platform_type == "harmony_mobile":
-            keypad = unlock_config.get("harmony_keypad", {})
-            coords = keypad.get(resolution_key, keypad.get("default", self.DEFAULT_HARMONY_KEYPAD))
-            logger.info(f"Using keypad config for: {resolution_key if resolution_key in keypad else 'default'}")
-            return coords
-        else:
+        keypad_by_platform = {
+            "ios": IOS_KEYPAD_COORDINATES,
+            "android": ANDROID_KEYPAD_COORDINATES,
+            "harmony_mobile": HARMONY_KEYPAD_COORDINATES,
+        }
+        keypad = keypad_by_platform.get(platform_type)
+        if not keypad:
             logger.warning(f"Unsupported platform for unlock keypad: {platform_type}")
             return {}
+
+        coords = keypad.get(resolution_key, keypad["default"])
+        selected_resolution = resolution_key if resolution_key in keypad else "default"
+        logger.info(f"Using built-in keypad coordinates for: {selected_resolution}")
+        return coords
 
     def _get_device_resolution(self, platform: "PlatformManager", context: object) -> tuple[int, int] | None:
         """获取设备屏幕物理分辨率（通过截图尺寸获取）。"""
@@ -541,13 +504,11 @@ class UnlockScreenAction(ActionExecutor):
 
     def _get_unlock_method(self, platform: "PlatformManager", resolution: tuple[int, int] | None) -> str:
         """获取解锁方式（home_key 或 swipe_up）。"""
-        unlock_config = getattr(platform, "_unlock_config", {})
         resolution_key = f"{resolution[0]}x{resolution[1]}" if resolution else "default"
 
-        # iOS 解锁方式配置
+        # iOS 根据分辨率选择 HOME 键或上滑。
         if platform.platform == "ios":
-            methods = unlock_config.get("ios_unlock_method", {})
-            method = methods.get(resolution_key, methods.get("default", "home_key"))
+            method = IOS_UNLOCK_METHODS.get(resolution_key, IOS_UNLOCK_METHODS["default"])
             logger.info(f"iOS unlock method for {resolution_key}: {method}")
             return method
 
@@ -586,14 +547,14 @@ class UnlockScreenAction(ActionExecutor):
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 # Harmony 手机: 向上滑动解锁
-                hdc.swipe(540, 2000, 540, 500)
+                hdc.swipe(*HARMONY_MOBILE_UNLOCK_SWIPE)
                 logger.info("Harmony unlock via swipe up")
 
         elif platform_type == "harmony_pc":
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc:
                 # Harmony PC: 上滑唤出密码框（占位坐标，按 3120x2080 真机预估，后期校准）
-                hdc.swipe(1560, 1600, 1560, 600)
+                hdc.swipe(*HARMONY_PC_UNLOCK_SWIPE)
                 logger.info("Harmony PC unlock via swipe up")
 
     def _input_password_pc(self, platform: "PlatformManager", context: object, password: str) -> None:
@@ -602,8 +563,7 @@ class UnlockScreenAction(ActionExecutor):
         if not hdc:
             raise RuntimeError("No Harmony PC device context for password input")
 
-        unlock_config = getattr(platform, "_unlock_config", {})
-        box = unlock_config.get("harmony_pc_password_box", self.DEFAULT_HARMONY_PC_PASSWORD_BOX)
+        box = HARMONY_PC_PASSWORD_BOX
         x, y = box["x"], box["y"]
 
         # 点击密码框获取焦点

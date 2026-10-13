@@ -67,11 +67,17 @@ PlatformManager (抽象基类)
 
 ### 配置管理
 
-所有配置从 `config/worker.yaml` 加载，包括：
-- OCR 服务地址（必须配置）
-- 平台 API 地址
-- 设备监控间隔（默认 300 秒）
-- 平台特定参数（browser_type, wda_base_port, wda_ipa_path 等）
+可调整的 Worker 配置从 `config/worker.yaml` 加载，包括：
+- OCR 服务地址和平台 API 地址
+- 设备发现开关
+- 平台特定参数（browser_type、wda_base_port 等）
+- 解锁密码（`unlock.password`）
+
+文件管理、录屏、任务清理、升级超时以及日志文件和轮转参数由 `worker/constants.py` 统一维护，不再放入 YAML 或平台下发配置。日志级别由设置界面修改，单独保存在本机 `config/.log_level`；WebSocket 推流参数也由该代码文件维护。
+
+设备检测间隔、服务重试参数、动作间隔、iOS 工具路径和 Web 浏览器固定运行参数由代码默认值管理，不放入 YAML 或平台下发配置。
+
+鸿蒙 HDC、HOScrcpy JAR 和 Bridge 类目录由程序从安装/项目根目录自动定位，不放在 YAML 中。`harmony_official.java_path` 仅供开发环境指定 Java；打包安装后固定使用 `tools/jre/bin/java.exe`，不会读取开发配置中的路径。
 
 ## 平台支持策略
 
@@ -245,15 +251,14 @@ PlatformManager (抽象基类)
 4. 如果有密码：输入密码（固定坐标点击，带间隔）
 5. 验证解锁成功
 
-**iOS 解锁方式**（按机型配置）：
+**iOS 解锁方式**（按固定分辨率映射）：
 - `home_key`：唤醒后按 HOME 键出现密码界面（iPhone 8/SE 等 Touch ID 机型）
 - `swipe_up`：向上滑动出现密码界面（iPhone X/11/14 等 Face ID 机型）
 
 **配置项**（`config/worker.yaml`）：
-- `unlock.click_interval`: 点击间隔（毫秒），默认 150
-- `unlock.ios_unlock_method`: iOS 解锁方式配置（按分辨率）
-- `unlock.ios_keypad`: iOS 密码键盘坐标配置（物理分辨率）
-- `unlock.android_keypad`: Android 密码键盘坐标配置（物理分辨率）
+- `unlock.password`: 解锁密码
+
+点击间隔、解锁方式及各分辨率的键盘坐标统一维护在 `worker/constants.py`。
 
 ### activate_window 激活窗口（Windows/Mac/Web 专用）
 

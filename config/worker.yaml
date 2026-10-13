@@ -16,10 +16,6 @@ worker:
   discover_ios_devices: false       # Enable iOS device discovery
   discover_harmony_mobile_devices: false   # Enable HarmonyOS mobile device discovery
   discover_harmony_pc_devices: false       # Enable HarmonyOS PC device discovery
-  device_check_interval: 300        # Device check interval (seconds), 5 minutes
-  service_retry_count: 3            # Service startup retry count
-  service_retry_interval: 10        # Retry interval (seconds)
-  action_step_delay: 0.5            # Action step delay (seconds), auto-wait between actions
 
 # External Services (Required)
 external_services:
@@ -32,16 +28,11 @@ platforms:
   web:
     headless: false                 # Headless mode
     browser_type: Chromium          # Use system Chrome for screen sharing support
-    timeout: 30000                  # Timeout (ms)
-    ignore_https_errors: true       # Ignore HTTPS certificate errors
-    user_data_dir: data/chrome_profile  # Browser user data directory
     permissions:                    # Web permissions (camera, microphone, etc.)
       - camera
       - microphone
       - clipboard-read
       - clipboard-write
-    # Clear Default directory on startup (keep Cache directory)
-    clear_profile_on_start: true
     # Request blacklist: intercept specific requests
     # Action options: abort, 404, empty
     request_blacklist:
@@ -57,13 +48,8 @@ platforms:
     # Customize browser behavior, such as disabling translation and automation notices
     browser_args:
       - "--disable-features=Translate,TranslateUI"  # Disable browser translation
-    # Automatic cache cleanup settings
-    cache_clear_enabled: true              # Enable automatic cleanup
-    cache_clear_interval_hours: 24         # Cleanup interval (hours)
-    cache_clear_clear_on_idle: true        # Only clean up while idle
 
   ios:
-    go_ios_path: tools/go-ios/ios.exe  # go-ios executable path
     agent_port: 60105               # go-ios agent HTTP API port
     wda_base_port: 8100             # WDA base port
     mjpeg_base_port: 9100           # MJPEG base port
@@ -71,249 +57,12 @@ platforms:
     wda_testrunner_bundle_id: com.cloudlink.WebDriverAgentRunner.new.xctrunner
     wda_xctest_config: WebDriverAgentRunner.xctest
 
-  harmony_mobile:
-    hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
-
-  harmony_pc:
-    hdc_path: tools/hdc/hdc.exe     # HDC path; automatically search tools/hdc when empty
-
 # 鸿蒙官方 HOScrcpy Java SDK 配置。
 # Java Bridge 只用于官方 H.264 WebSocket 推流和鸿蒙官方输入控制。
 # 截图、OCR、失败附件和 JPEG 推流统一使用 HDC/agent 通道。
 harmony_official:
-  java_path: "D:/Program Files/jdk/bin/java.exe"  # 当前开发机；发布包由构建脚本改为 tools/jre/bin/java.exe
-  jar_path: tools/harmony/hosScrcpy-1.0.15-beta.jar
-  bridge_class_path: tools/harmony/bridge
-  startup_timeout_seconds: 35
-  idle_timeout_seconds: 60        # 最后一个官方会话使用者断开后 1 分钟释放 Java
-  prewarm_on_device_ready: false  # Worker 启动、重启和设备发现时不预热 Java
-  prewarm_failure_cooldown_seconds: 60  # 预热失败后冷却，避免后台反复拉起 Java
-  input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
-  reconnect_attempts: 3
-  reconnect_backoff_seconds: 0.5   # 首次通道抖动时快速重试
-  frame_queue_capacity: 2          # 每个 H.264 订阅的有界队列容量
-  backpressure_log_interval_seconds: 600  # H.264 直写和订阅队列每 10 分钟记录一次积压
-  image_scale_size: 720            # 仅影响 JPEG 图像采集（setImageScaleSize）；H.264 视频始终按原生分辨率推流，坐标请用原生分辨率
-  frame_rate: 10                  # 官方 H.264 采集帧率，直通推流按此帧率输出
-  bit_rate: 4000000
+  java_path: "D:/Program Files/jdk/bin/java.exe"  # 开发环境 Java 路径；打包后固定使用 tools/jre/bin/java.exe
 
-# Logging Settings
-logging:
-  level: INFO                       # Log level: DEBUG / INFO / WARNING / ERROR
-  file: null                        # Log file path, null means default (exe_dir/worker.log)
-  max_size: 52428800                # Max file size in bytes, default 50MB
-  backup_count: 5                   # Number of backup files to keep
-
-# Upgrade Settings
-upgrade:
-  check_url: ""                     # Upgrade check API URL (empty = auto: {platform_api}/api/core/env/upgrade/worker/info?device_type=windows)
-  check_timeout: 30                 # Upgrade check timeout (seconds)
-  download_timeout: 300             # Download timeout (seconds)
-
-# Unlock Screen Settings (iOS/Android only)
+# 解锁屏幕设置
 unlock:
-  # Default unlock password
   password: "3665"
-
-  # Click interval (milliseconds)
-  click_interval: 150
-
-  # iOS unlock method per device (physical resolution)
-  # Methods: home_key (press HOME key) or swipe_up (swipe up)
-  ios_unlock_method:
-    # iPhone 8 / iPhone SE (750x1334) - HOME key unlock
-    "750x1334": "home_key"
-    # iPhone 11 / iPhone XR (828x1792) - HOME key unlock
-    "828x1792": "home_key"
-    # iPhone 14 / iPhone 15 (1170x2532) - Swipe up unlock (Face ID)
-    "1170x2532": "swipe_up"
-    # iPhone 14 Pro / iPhone 15 Pro (1179x2556) - Swipe up unlock
-    "1179x2556": "swipe_up"
-    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796) - Swipe up unlock
-    "1290x2796": "swipe_up"
-    # Default method
-    default: "home_key"
-
-  # iOS password keypad coordinates (physical resolution)
-  # Keypad layout: 1 2 3 / 4 5 6 / 7 8 9 / 0
-  # Configure by physical resolution, auto-matched at runtime
-  # How to get: screenshot and check image size for physical resolution
-  ios_keypad:
-    # iPhone 8 / iPhone SE (750x1334)
-    "750x1334":
-      "1": {x: 167, y: 483}
-      "2": {x: 375, y: 483}
-      "3": {x: 570, y: 483}
-      "4": {x: 167, y: 670}
-      "5": {x: 375, y: 670}
-      "6": {x: 570, y: 670}
-      "7": {x: 167, y: 838}
-      "8": {x: 375, y: 838}
-      "9": {x: 570, y: 838}
-      "0": {x: 375, y: 1010}
-
-    # iPhone 11 / iPhone XR (828x1792)
-    "828x1792":
-      "1": {x: 104, y: 760}
-      "2": {x: 276, y: 760}
-      "3": {x: 448, y: 760}
-      "4": {x: 104, y: 880}
-      "5": {x: 276, y: 880}
-      "6": {x: 448, y: 880}
-      "7": {x: 104, y: 1000}
-      "8": {x: 276, y: 1000}
-      "9": {x: 448, y: 1000}
-      "0": {x: 276, y: 1120}
-
-    # iPhone 14 / iPhone 15 (1170x2532)
-    "1170x2532":
-      "1": {x: 144, y: 1080}
-      "2": {x: 390, y: 1080}
-      "3": {x: 636, y: 1080}
-      "4": {x: 144, y: 1260}
-      "5": {x: 390, y: 1260}
-      "6": {x: 636, y: 1260}
-      "7": {x: 144, y: 1440}
-      "8": {x: 390, y: 1440}
-      "9": {x: 636, y: 1440}
-      "0": {x: 390, y: 1620}
-
-    # iPhone 14 Pro / iPhone 15 Pro (1179x2556)
-    "1179x2556":
-      "1": {x: 147, y: 1095}
-      "2": {x: 393, y: 1095}
-      "3": {x: 639, y: 1095}
-      "4": {x: 147, y: 1275}
-      "5": {x: 393, y: 1275}
-      "6": {x: 639, y: 1275}
-      "7": {x: 147, y: 1455}
-      "8": {x: 393, y: 1455}
-      "9": {x: 639, y: 1455}
-      "0": {x: 393, y: 1635}
-
-    # iPhone 14 Pro Max / iPhone 15 Pro Max (1290x2796)
-    "1290x2796":
-      "1": {x: 162, y: 1200}
-      "2": {x: 430, y: 1200}
-      "3": {x: 698, y: 1200}
-      "4": {x: 162, y: 1400}
-      "5": {x: 430, y: 1400}
-      "6": {x: 698, y: 1400}
-      "7": {x: 162, y: 1600}
-      "8": {x: 430, y: 1600}
-      "9": {x: 698, y: 1600}
-      "0": {x: 430, y: 1800}
-
-    # Fallback default (use iPhone 8 if resolution not matched)
-    default:
-      "1": {x: 92, y: 570}
-      "2": {x: 250, y: 570}
-      "3": {x: 408, y: 570}
-      "4": {x: 92, y: 670}
-      "5": {x: 250, y: 670}
-      "6": {x: 408, y: 670}
-      "7": {x: 92, y: 770}
-      "8": {x: 250, y: 770}
-      "9": {x: 408, y: 770}
-      "0": {x: 250, y: 870}
-
-  # Android password keypad coordinates (physical resolution)
-  android_keypad:
-    # 1080x2400 resolution (common Android devices)
-    "1080x2400":
-      "1": {x: 180, y: 850}
-      "2": {x: 540, y: 850}
-      "3": {x: 900, y: 850}
-      "4": {x: 180, y: 950}
-      "5": {x: 540, y: 950}
-      "6": {x: 900, y: 950}
-      "7": {x: 180, y: 1050}
-      "8": {x: 540, y: 1050}
-      "9": {x: 900, y: 1050}
-      "0": {x: 540, y: 1150}
-
-    # Fallback default
-    default:
-      "1": {x: 90, y: 850}
-      "2": {x: 270, y: 850}
-      "3": {x: 450, y: 850}
-      "4": {x: 90, y: 950}
-      "5": {x: 270, y: 950}
-      "6": {x: 450, y: 950}
-      "7": {x: 90, y: 1050}
-      "8": {x: 270, y: 1050}
-      "9": {x: 450, y: 1050}
-      "0": {x: 270, y: 1150}
-
-  # HarmonyOS password keypad coordinates (physical resolution)
-  harmony_keypad:
-    # HUAWEI Mate 60 Pro / 1260x2720。
-    # 根据远程页面实测的 1=(335,1466)、4=(343,1783)、2=(645,1481)
-    # 推算为三列四行固定键盘中心点，实际点击使用物理坐标。
-    "1260x2720":
-      "1": {x: 340, y: 1475}
-      "2": {x: 645, y: 1475}
-      "3": {x: 950, y: 1475}
-      "4": {x: 340, y: 1785}
-      "5": {x: 645, y: 1785}
-      "6": {x: 950, y: 1785}
-      "7": {x: 340, y: 2095}
-      "8": {x: 645, y: 2095}
-      "9": {x: 950, y: 2095}
-      "0": {x: 645, y: 2405}
-    "1080x2400":
-      "1": {x: 180, y: 850}
-      "2": {x: 540, y: 850}
-      "3": {x: 900, y: 850}
-      "4": {x: 180, y: 950}
-      "5": {x: 540, y: 950}
-      "6": {x: 900, y: 950}
-      "7": {x: 180, y: 1050}
-      "8": {x: 540, y: 1050}
-      "9": {x: 900, y: 1050}
-      "0": {x: 540, y: 1150}
-    default:
-      "1": {x: 180, y: 850}
-      "2": {x: 540, y: 850}
-      "3": {x: 900, y: 850}
-      "4": {x: 180, y: 950}
-      "5": {x: 540, y: 950}
-      "6": {x: 900, y: 950}
-      "7": {x: 180, y: 1050}
-      "8": {x: 540, y: 1050}
-      "9": {x: 900, y: 1050}
-      "0": {x: 540, y: 1150}
-
-# Recording Settings
-recording:
-  output_dir: data/recordings    # Output directory
-  default_fps: 10                # Default frame rate
-  max_timeout_ms: 7200000        # Max timeout (ms), 2 hours
-
-# 本地任务和附件清理设置
-storage:
-  task_retention_hours: 1        # worker_tasks 终态数据保留时间
-  artifact_retention_days: 3     # data/artifacts 截图、录屏保留时间
-  cleanup_interval_hours: 6      # 后台清理执行间隔
-
-# WebSocket Streaming Settings
-websocket_streaming:
-  max_connections_per_device: 3  # Max connections per device
-  send_timeout_seconds: 30       # Send timeout (seconds)
-  idle_timeout_seconds: 900      # 无用户操作后自动断开推流（秒，15分钟）
-  streaming_fps: 15              # Streaming frame rate (Windows)
-  harmony_streaming_fps: 15      # Harmony 推流帧率（官方 H.264/JPEG 统一不超过 15fps）
-  realtime_input_enabled: true   # 实时指针输入（WS 上行 down/move/up/wheel）
-  streaming_codec: jpeg          # Default codec (jpeg/h264/mjpeg). Keep jpeg by default.
-                                  # server.py selects the actual codec from the WebSocket codec query parameter (for example, ?codec=h264).
-                                  # This value is only the fallback when no query parameter is supplied and does not conflict with H.264 streaming optimizations.
-  streaming_bitrate: 4000000     # Average H.264 bitrate (4 Mbps; VBR bursts may exceed this value)
-  streaming_profile: 66          # H.264 profile: 66=Baseline, 77=Main, 100=High
-
-files:
-  root: null                      # 产物根目录,null = <安装目录>/data/collected
-  download_rate_limit_mb: 1.0     # 下载限速 MB/s,0 = 不限
-  upload_rate_limit_mb: 1.0       # 上传限速 MB/s,0 = 不限
-  max_concurrent_downloads: 2     # 最大并发下载数,超出排队
-  max_concurrent_uploads: 2       # 最大并发上传数,超出排队
-  max_upload_size_mb: 1000        # 上传大小上限(1GB)

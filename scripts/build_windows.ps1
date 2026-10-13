@@ -351,7 +351,17 @@ if ($JavaRuntimePath -ne "") {
     }
     Write-Host "  Java runtime ready at tools/jre: $($JavaVersionOutput | Select-Object -First 1)"
 } else {
-    Write-Warning "JavaRuntimePath is empty; the package requires an external JRE 17+ configured in harmony_official.java_path"
+    $BundledJavaExe = "$PackageDir\tools\jre\bin\java.exe"
+    if (-not (Test-Path $BundledJavaExe -PathType Leaf)) {
+        Write-Error "JavaRuntimePath is empty and tools/jre/bin/java.exe is missing from the package"
+        exit 1
+    }
+    $JavaVersionOutput = & $BundledJavaExe -version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Bundled Java runtime failed to start: $JavaVersionOutput"
+        exit 1
+    }
+    Write-Host "  Java runtime ready at tools/jre: $($JavaVersionOutput | Select-Object -First 1)"
 }
 
 # Verify the bundled Harmony module can be imported with the matching CPython ABI.
@@ -391,27 +401,6 @@ Write-Host "Creating _internal\config template..."
 $InternalConfigDir = "$PackageDir\_internal\config"
 New-Item -ItemType Directory -Force -Path $InternalConfigDir | Out-Null
 Copy-Item -Path "$ProjectRoot\config\*" -Destination $InternalConfigDir -Recurse -Force
-
-if ($JavaRuntimePath -ne "") {
-    # 新装时安装器从 _internal 模板生成用户配置，两个模板都要指向随包 JRE。
-    $PackagedConfigs = @(
-        "$PackageDir\config\worker.yaml",
-        "$InternalConfigDir\worker.yaml"
-    )
-    foreach ($PackagedConfig in $PackagedConfigs) {
-        if (-not (Test-Path $PackagedConfig -PathType Leaf)) {
-            Write-Error "Worker 配置模板不存在: $PackagedConfig"
-            exit 1
-        }
-        $ConfigText = Get-Content -Path $PackagedConfig -Raw -Encoding UTF8
-        $ConfigText = [regex]::Replace(
-            $ConfigText,
-            '(?m)^(\s*java_path:)\s*.*$',
-            '$1 tools/jre/bin/java.exe'
-        )
-        Set-Content -Path $PackagedConfig -Value $ConfigText -Encoding UTF8
-    }
-}
 
 # Copy HWiNFO64.EXE (Nuitka --include-package-data does not include .exe files)
 Write-Host "Copying HWiNFO64.EXE for perfwin..."

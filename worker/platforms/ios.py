@@ -18,6 +18,7 @@ from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.actions.spec import ActionCancelledError, ActionTimedOutError
 from worker.config import PlatformConfig
+from worker.constants import DEFAULT_UNLOCK_PASSWORD
 from worker.platforms.base import PlatformManager
 from worker.platforms.go_ios_client import GoIOSClient
 from worker.platforms.wda_client import WDAClient
@@ -1592,7 +1593,7 @@ class iOSPlatformManager(PlatformManager):  # noqa: N801 -- iOS 为 Apple 品牌
         from worker.actions import ActionRegistry
         from worker.task import Action
 
-        password = self._unlock_config.get("password", "123456")
+        password = self._unlock_config.get("password", DEFAULT_UNLOCK_PASSWORD)
 
         unlock_action = Action(
             action_type="unlock_screen",

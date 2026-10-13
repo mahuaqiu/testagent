@@ -4,6 +4,7 @@ Worker 配置管理模块。
 
 import logging
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -13,6 +14,39 @@ import yaml
 
 from common.packaging import get_base_dir, is_packaged
 from common.utils import popen_cmd
+from worker.constants import (
+    DEFAULT_ARTIFACT_RETENTION_DAYS,
+    DEFAULT_CLEANUP_INTERVAL_HOURS,
+    DEFAULT_FILES_DOWNLOAD_RATE_LIMIT_MB,
+    DEFAULT_FILES_MAX_CONCURRENT_DOWNLOADS,
+    DEFAULT_FILES_MAX_CONCURRENT_UPLOADS,
+    DEFAULT_FILES_MAX_UPLOAD_SIZE_MB,
+    DEFAULT_FILES_ROOT,
+    DEFAULT_FILES_UPLOAD_RATE_LIMIT_MB,
+    DEFAULT_HARMONY_STREAMING_FPS,
+    DEFAULT_HARMONY_STREAMING_JPEG_QUALITY,
+    DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE,
+    DEFAULT_LOG_BACKUP_COUNT,
+    DEFAULT_LOG_FILE,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_LOG_MAX_SIZE,
+    DEFAULT_MAX_CONNECTIONS_PER_DEVICE,
+    DEFAULT_REALTIME_INPUT_ENABLED,
+    DEFAULT_RECORDING_FPS,
+    DEFAULT_RECORDING_MAX_TIMEOUT_MS,
+    DEFAULT_RECORDING_OUTPUT_DIR,
+    DEFAULT_TASK_RETENTION_HOURS,
+    DEFAULT_UNLOCK_PASSWORD,
+    DEFAULT_UPGRADE_CHECK_TIMEOUT,
+    DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT,
+    DEFAULT_WEBSOCKET_IDLE_TIMEOUT_SECONDS,
+    DEFAULT_WEBSOCKET_SEND_TIMEOUT_SECONDS,
+    DEFAULT_WEBSOCKET_STREAMING_BITRATE,
+    DEFAULT_WEBSOCKET_STREAMING_CODEC,
+    DEFAULT_WEBSOCKET_STREAMING_FPS,
+    DEFAULT_WEBSOCKET_STREAMING_PROFILE,
+    LOG_LEVEL_OPTIONS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +84,10 @@ class WorkerConfig:
     port: int = 8080
     namespace: str = "public"               # 命名空间，用于分类 Worker
     namespace_overrides: dict[str, str] = field(default_factory=dict)
-    device_check_interval: int = 300        # 设备检测间隔(秒)，改为5分钟
-    service_retry_count: int = 3            # 服务启动重试次数
-    service_retry_interval: int = 10        # 重试间隔(秒)
-    action_step_delay: float = 0.5  # 动作间隔延迟(秒)
+    device_check_interval: int = 300
+    service_retry_count: int = 3
+    service_retry_interval: int = 10
+    action_step_delay: float = 0.5
     discover_android_devices: bool = False  # 是否发现 Android 设备
     discover_ios_devices: bool = False      # 是否发现 iOS 设备
     discover_harmony_mobile_devices: bool = False  # 是否发现鸿蒙移动设备
@@ -70,60 +104,60 @@ class WorkerConfig:
     harmony_official: dict[str, Any] = field(default_factory=dict)
 
     # 日志配置
-    log_level: str = "INFO"
-    log_file: str | None = None  # None 表示使用默认路径
-    log_max_size: int = 52428800  # 50MB
-    log_backup_count: int = 5
+    log_level: str = DEFAULT_LOG_LEVEL
+    log_file: str | None = DEFAULT_LOG_FILE
+    log_max_size: int = DEFAULT_LOG_MAX_SIZE
+    log_backup_count: int = DEFAULT_LOG_BACKUP_COUNT
 
     # 升级配置
     upgrade_check_url: str = ""       # 升级检查 URL（对应 YAML 的 upgrade.check_url）
-    upgrade_check_timeout: int = 30   # 升级检查超时（秒）
-    upgrade_download_timeout: int = 300  # 升级下载超时（秒）
+    upgrade_check_timeout: int = DEFAULT_UPGRADE_CHECK_TIMEOUT
+    upgrade_download_timeout: int = DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT
 
     # 解锁屏幕配置
     unlock: dict[str, Any] = field(default_factory=dict)
 
     # 录屏配置
-    recording_output_dir: str = "data/recordings"
-    recording_default_fps: int = 10
-    recording_max_timeout_ms: int = 7200000  # 2小时
+    recording_output_dir: str = DEFAULT_RECORDING_OUTPUT_DIR
+    recording_default_fps: int = DEFAULT_RECORDING_FPS
+    recording_max_timeout_ms: int = DEFAULT_RECORDING_MAX_TIMEOUT_MS
 
     # 本地任务和附件清理配置
-    task_retention_hours: int = 1
-    artifact_retention_days: int = 3
-    cleanup_interval_hours: int = 6
+    task_retention_hours: int = DEFAULT_TASK_RETENTION_HOURS
+    artifact_retention_days: int = DEFAULT_ARTIFACT_RETENTION_DAYS
+    cleanup_interval_hours: int = DEFAULT_CLEANUP_INTERVAL_HOURS
 
     # WebSocket 推流配置
-    websocket_max_connections_per_device: int = 3
-    websocket_send_timeout_seconds: int = 30  # 发送超时（秒）
-    websocket_idle_timeout_seconds: int = 900  # 无用户操作后自动断开（秒）
-    websocket_streaming_fps: int = 15  # 推流帧率（Windows 侧）
-    websocket_streaming_codec: str = "jpeg"  # 默认编码格式
-    websocket_streaming_bitrate: int = 4000000  # H.264 平均码率 (4Mbps, VBR 瞬时突发可超)
-    websocket_streaming_profile: int = 66  # H.264 profile: 66=Baseline, 77=Main, 100=High
+    websocket_max_connections_per_device: int = DEFAULT_MAX_CONNECTIONS_PER_DEVICE
+    websocket_send_timeout_seconds: int = DEFAULT_WEBSOCKET_SEND_TIMEOUT_SECONDS
+    websocket_idle_timeout_seconds: int = DEFAULT_WEBSOCKET_IDLE_TIMEOUT_SECONDS
+    websocket_streaming_fps: int = DEFAULT_WEBSOCKET_STREAMING_FPS
+    websocket_streaming_codec: str = DEFAULT_WEBSOCKET_STREAMING_CODEC
+    websocket_streaming_bitrate: int = DEFAULT_WEBSOCKET_STREAMING_BITRATE
+    websocket_streaming_profile: int = DEFAULT_WEBSOCKET_STREAMING_PROFILE
 
     # 实时指针输入（浏览器 WS 上行 down/move/up/wheel，替代 mouseup 才发一条
     # REST 手势）。官方会话未就绪/不可用时 worker 自动退化为整手势合帧。
-    realtime_input_enabled: bool = True
+    realtime_input_enabled: bool = DEFAULT_REALTIME_INPUT_ENABLED
 
     # 鸿蒙 JPEG 推流独立参数（仅作用于实时推流，不影响 Windows/iOS/Android/Mac，
     # 也不影响截图/录屏——截图走设备端 snapshot_display，画质保持高清）
-    harmony_streaming_fps: int = 15  # 鸿蒙推流帧率（官方 H.264/JPEG 统一不超过 15fps）
-    harmony_streaming_jpeg_quality: int = 60  # 鸿蒙推流重编码质量（0 表示不重编码，原样转发）
+    harmony_streaming_fps: int = DEFAULT_HARMONY_STREAMING_FPS
+    harmony_streaming_jpeg_quality: int = DEFAULT_HARMONY_STREAMING_JPEG_QUALITY
     # 鸿蒙推流长边上限，超过则等比缩小；<=0 表示不缩放。
     # 【默认 1600 降采样】WS 流开头已通过 meta 文本帧把真机原生分辨率
     # 下发给前端做坐标基准（与推流图像尺寸解耦，参考 Windows 的 H.264
     # SPS 带内自描述），故缩小推流不再影响 uitest 坐标。仅当 worker 成功
     # 拿到真机分辨率并下发 meta 后才实际启用缩放，否则自动回退为不缩放。
-    harmony_streaming_max_long_edge: int = 1600
+    harmony_streaming_max_long_edge: int = DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE
 
-    # ---- 文件管理(对应 YAML 的 files 段) ----
-    files_root: str | None = None                # 产物根目录,None = <base_dir>/data/collected
-    files_download_rate_limit_mb: float = 1.0    # 下载限速 MB/s,0 = 不限速
-    files_upload_rate_limit_mb: float = 1.0      # 上传限速 MB/s,0 = 不限速
-    files_max_concurrent_downloads: int = 2      # 最大并发下载数,超出排队
-    files_max_concurrent_uploads: int = 2        # 最大并发上传数,超出排队
-    files_max_upload_size_mb: int = 1000         # 上传大小上限(1GB)
+    # 文件接口固定参数，由代码统一维护。
+    files_root: str | None = DEFAULT_FILES_ROOT
+    files_download_rate_limit_mb: float = DEFAULT_FILES_DOWNLOAD_RATE_LIMIT_MB
+    files_upload_rate_limit_mb: float = DEFAULT_FILES_UPLOAD_RATE_LIMIT_MB
+    files_max_concurrent_downloads: int = DEFAULT_FILES_MAX_CONCURRENT_DOWNLOADS
+    files_max_concurrent_uploads: int = DEFAULT_FILES_MAX_CONCURRENT_UPLOADS
+    files_max_upload_size_mb: int = DEFAULT_FILES_MAX_UPLOAD_SIZE_MB
 
     # 配置版本号
     config_version: str | None = None
@@ -185,17 +219,15 @@ class WorkerConfig:
         if data is None:
             data = {}
 
+        data = _strip_removed_config_sections(data)
+
         worker_data = data.get("worker", {})
         external = data.get("external_services", {})
         platforms = data.get("platforms", {})
         harmony_official_cfg = data.get("harmony_official", {})
-        logging_cfg = data.get("logging", {})
-        upgrade_cfg = data.get("upgrade", {})
         unlock_cfg = data.get("unlock", {})
-        recording_cfg = data.get("recording", {})
-        websocket_cfg = data.get("websocket_streaming", {})
-        storage_cfg = data.get("storage", {})
-        files_cfg = data.get("files", {})
+        if not isinstance(unlock_cfg, dict):
+            unlock_cfg = {}
 
         return cls(
             id=worker_data.get("id") or _generate_worker_id(),
@@ -203,10 +235,6 @@ class WorkerConfig:
             port=worker_data.get("port", 8080),
             namespace=worker_data.get("namespace", "public"),
             namespace_overrides=worker_data.get("namespace_overrides") or {},
-            device_check_interval=worker_data.get("device_check_interval", 300),
-            service_retry_count=worker_data.get("service_retry_count", 3),
-            service_retry_interval=worker_data.get("service_retry_interval", 10),
-            action_step_delay=worker_data.get("action_step_delay", 0.5),
             discover_android_devices=worker_data.get("discover_android_devices", False),
             discover_ios_devices=worker_data.get("discover_ios_devices", False),
             discover_harmony_mobile_devices=bool(worker_data.get("discover_harmony_mobile_devices", False)),
@@ -215,37 +243,7 @@ class WorkerConfig:
             ocr_service=external.get("ocr_service", ""),
             platforms=platforms,
             harmony_official=harmony_official_cfg,
-            log_level=logging_cfg.get("level", "INFO"),
-            log_file=logging_cfg.get("file"),
-            log_max_size=logging_cfg.get("max_size", 52428800),
-            log_backup_count=logging_cfg.get("backup_count", 5),
-            upgrade_check_url=upgrade_cfg.get("check_url", ""),
-            upgrade_check_timeout=upgrade_cfg.get("check_timeout", 30),
-            upgrade_download_timeout=upgrade_cfg.get("download_timeout", 300),
-            unlock=unlock_cfg,
-            recording_output_dir=recording_cfg.get("output_dir", "data/recordings"),
-            recording_default_fps=recording_cfg.get("default_fps", 10),
-            recording_max_timeout_ms=recording_cfg.get("max_timeout_ms", 7200000),
-            task_retention_hours=max(1, int(storage_cfg.get("task_retention_hours", 1))),
-            artifact_retention_days=max(1, int(storage_cfg.get("artifact_retention_days", 3))),
-            cleanup_interval_hours=max(1, int(storage_cfg.get("cleanup_interval_hours", 6))),
-            websocket_max_connections_per_device=websocket_cfg.get("max_connections_per_device", 3),
-            websocket_send_timeout_seconds=websocket_cfg.get("send_timeout_seconds", 30),
-            websocket_idle_timeout_seconds=websocket_cfg.get("idle_timeout_seconds", 900),
-            websocket_streaming_fps=websocket_cfg.get("streaming_fps", 15),
-            websocket_streaming_codec=websocket_cfg.get("streaming_codec", "jpeg"),
-            websocket_streaming_bitrate=websocket_cfg.get("streaming_bitrate", 4000000),
-            websocket_streaming_profile=websocket_cfg.get("streaming_profile", 66),
-            realtime_input_enabled=websocket_cfg.get("realtime_input_enabled", True),
-            harmony_streaming_fps=websocket_cfg.get("harmony_streaming_fps", 15),
-            harmony_streaming_jpeg_quality=websocket_cfg.get("harmony_streaming_jpeg_quality", 60),
-            harmony_streaming_max_long_edge=websocket_cfg.get("harmony_streaming_max_long_edge", 1600),
-            files_root=files_cfg.get("root"),
-            files_download_rate_limit_mb=float(files_cfg.get("download_rate_limit_mb", 1.0)),
-            files_upload_rate_limit_mb=float(files_cfg.get("upload_rate_limit_mb", 1.0)),
-            files_max_concurrent_downloads=int(files_cfg.get("max_concurrent_downloads", 2)),
-            files_max_concurrent_uploads=int(files_cfg.get("max_concurrent_uploads", 2)),
-            files_max_upload_size_mb=int(files_cfg.get("max_upload_size_mb", 1000)),
+            unlock={"password": unlock_cfg.get("password", DEFAULT_UNLOCK_PASSWORD)},
         )
 
     def get_platform_config(self, platform: str) -> dict[str, Any]:
@@ -263,7 +261,7 @@ class PlatformConfig:
     timeout: int = 30000
     ignore_https_errors: bool = True
     permissions: list[str] = field(default_factory=lambda: ["camera", "microphone"])
-    user_data_dir: str = "data/chrome_profile"  # 浏览器用户数据目录
+    user_data_dir: str = "data/chrome_profile"
 
     # 启动前清理 Default 目录数据（保留 Cache 目录），避免账号缓存
     clear_profile_on_start: bool = True
@@ -279,22 +277,14 @@ class PlatformConfig:
     # Web 专用 - Chromium 启动参数（字符串列表）
     browser_args: list[str] = field(default_factory=list)
 
-    # Web 专用 - 缓存自动清理
-    cache_clear_enabled: bool = True           # 是否启用自动清理
-    cache_clear_interval_hours: int = 24       # 清理间隔（小时）
-    cache_clear_clear_on_idle: bool = True     # 是否仅在空闲时清理
-
     # iOS 专用
     wda_base_port: int = 8100
     wda_bundle_id: str = "com.facebook.WebDriverAgentRunner"
     wda_testrunner_bundle_id: str = ""  # go-ios runwda 需要
     wda_xctest_config: str = "WebDriverAgentRunner.xctest"  # go-ios runwda 需要
-    go_ios_path: str = "tools/go-ios/ios.exe"  # go-ios 可执行文件路径
+    go_ios_path: str = "tools/go-ios/ios.exe"
     agent_port: int = 60105                    # go-ios agent HTTP API 端口（默认 60105）
     mjpeg_base_port: int = 9100               # MJPEG 基础端口
-
-    # 鸿蒙专用
-    hdc_path: str = "tools/hdc/hdc.exe"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlatformConfig":
@@ -302,25 +292,17 @@ class PlatformConfig:
         return cls(
             headless=data.get("headless", True),
             browser_type=data.get("browser_type", "chromium"),
-            timeout=data.get("timeout", 30000),
-            ignore_https_errors=data.get("ignore_https_errors", True),
+            timeout=30000,
             permissions=data.get("permissions", ["camera", "microphone"]),
-            user_data_dir=data.get("user_data_dir", "data/chrome_profile"),
-            clear_profile_on_start=data.get("clear_profile_on_start", True),
             request_blacklist=data.get("request_blacklist", []),
             token_headers=data.get("token_headers", []),
             browser_args=data.get("browser_args", []),
-            cache_clear_enabled=data.get("cache_clear_enabled", True),
-            cache_clear_interval_hours=data.get("cache_clear_interval_hours", 24),
-            cache_clear_clear_on_idle=data.get("cache_clear_clear_on_idle", True),
             wda_base_port=data.get("wda_base_port", 8100),
             wda_bundle_id=data.get("wda_bundle_id", "com.facebook.WebDriverAgentRunner"),
             wda_testrunner_bundle_id=data.get("wda_testrunner_bundle_id", ""),
             wda_xctest_config=data.get("wda_xctest_config", "WebDriverAgentRunner.xctest"),
-            go_ios_path=data.get("go_ios_path", "tools/go-ios/ios.exe"),
             agent_port=data.get("agent_port", 60105),
             mjpeg_base_port=data.get("mjpeg_base_port", 9100),
-            hdc_path=data.get("hdc_path", "tools/hdc/hdc.exe"),
         )
 
 
@@ -359,6 +341,35 @@ def get_default_template_path() -> str:
     else:
         # 开发模式：用户配置和模板路径相同
         return os.path.join(_get_base_dir(), "config", "worker.yaml")
+
+
+def get_log_level_path() -> str:
+    """获取仅保存在本机的日志级别文件路径。"""
+    return os.path.join(_get_base_dir(), "config", ".log_level")
+
+
+def load_log_level() -> str:
+    """读取本机日志级别；无效或缺失时使用代码默认值。"""
+    try:
+        with open(get_log_level_path(), encoding="utf-8-sig") as level_file:
+            level = level_file.read().strip().upper()
+        if level in LOG_LEVEL_OPTIONS:
+            return level
+    except OSError:
+        pass
+    return DEFAULT_LOG_LEVEL
+
+
+def save_log_level(level: str) -> None:
+    """保存设置界面选择的本机日志级别。"""
+    normalized_level = str(level).strip().upper()
+    if normalized_level not in LOG_LEVEL_OPTIONS:
+        raise ValueError(f"不支持的日志级别: {level}")
+
+    level_path = get_log_level_path()
+    os.makedirs(os.path.dirname(level_path), exist_ok=True)
+    with open(level_path, "w", encoding="utf-8") as level_file:
+        level_file.write(normalized_level)
 
 
 def _copy_default_to_user_config(src: str, dst: str) -> None:
@@ -406,8 +417,264 @@ def _merge_missing_config(
                 result[key] = deep_merge(result[key], value)
         return result
 
-    # 以用户配置为基准，从模板补充缺失项
-    return deep_merge(user_data, template_data)
+    # 以用户配置为基准，从模板补充缺失项，并丢弃已固定到代码的旧配置段。
+    return deep_merge(
+        _strip_removed_config_sections(user_data),
+        _strip_removed_config_sections(template_data),
+    )
+
+
+_REMOVED_CONFIG_SECTIONS = {
+    "files",
+    "logging",
+    "recording",
+    "storage",
+    "upgrade",
+    "websocket_streaming",
+}
+
+_REMOVED_WORKER_OPTIONS = {
+    "device_check_interval",
+    "service_retry_count",
+    "service_retry_interval",
+    "action_step_delay",
+}
+
+_REMOVED_PLATFORM_OPTIONS = {
+    "web": {
+        "timeout",
+        "ignore_https_errors",
+        "user_data_dir",
+        "clear_profile_on_start",
+        "cache_clear_enabled",
+        "cache_clear_interval_hours",
+        "cache_clear_clear_on_idle",
+    },
+    "ios": {"go_ios_path"},
+    "harmony_mobile": {"hdc_path"},
+    "harmony_pc": {"hdc_path"},
+}
+
+
+def _strip_removed_config_sections(data: dict[str, Any]) -> dict[str, Any]:
+    """从内存中的配置数据剔除已固定到代码里的配置段。"""
+    normalized = dict(data)
+    for section in _REMOVED_CONFIG_SECTIONS:
+        normalized.pop(section, None)
+
+    worker_data = normalized.get("worker")
+    if isinstance(worker_data, dict):
+        worker_data = dict(worker_data)
+        worker_data.pop("log_level", None)
+        for option in _REMOVED_WORKER_OPTIONS:
+            worker_data.pop(option, None)
+        normalized["worker"] = worker_data
+
+    if "unlock" in normalized:
+        unlock_data = normalized.get("unlock")
+        if isinstance(unlock_data, dict) and "password" in unlock_data:
+            normalized["unlock"] = {"password": unlock_data["password"]}
+        else:
+            normalized["unlock"] = {}
+
+    platforms = normalized.get("platforms")
+    if isinstance(platforms, dict):
+        platforms = dict(platforms)
+        for platform_name, removed_options in _REMOVED_PLATFORM_OPTIONS.items():
+            platform_config = platforms.get(platform_name)
+            if isinstance(platform_config, dict):
+                platform_config = dict(platform_config)
+                for option in removed_options:
+                    platform_config.pop(option, None)
+                if platform_config:
+                    platforms[platform_name] = platform_config
+                else:
+                    platforms.pop(platform_name, None)
+            elif platform_name in {"harmony_mobile", "harmony_pc"}:
+                platforms.pop(platform_name, None)
+        normalized["platforms"] = platforms
+
+    harmony_official = normalized.get("harmony_official")
+    if isinstance(harmony_official, dict):
+        normalized["harmony_official"] = (
+            {"java_path": harmony_official["java_path"]}
+            if "java_path" in harmony_official
+            else {}
+        )
+    elif "harmony_official" in normalized:
+        normalized["harmony_official"] = {}
+
+    return normalized
+
+
+def _remove_legacy_config_sections(path: str) -> None:
+    """清理旧 YAML 中已固定到代码的配置段，并迁移本机日志级别。"""
+    try:
+        content = _read_file_with_encoding(path)
+        try:
+            old_data = yaml.safe_load(content) or {}
+        except yaml.YAMLError:
+            old_data = {}
+
+        old_platforms = old_data.get("platforms", {}) if isinstance(old_data, dict) else {}
+        empty_platform_sections = {
+            platform_name
+            for platform_name, removed_options in _REMOVED_PLATFORM_OPTIONS.items()
+            if isinstance(old_platforms, dict)
+            and isinstance(old_platforms.get(platform_name), dict)
+            and set(old_platforms[platform_name]).issubset(removed_options)
+        }
+
+        old_logging = old_data.get("logging", {}) if isinstance(old_data, dict) else {}
+        old_level = old_logging.get("level") if isinstance(old_logging, dict) else None
+        level_path = get_log_level_path()
+        if (
+            not os.path.exists(level_path)
+            and isinstance(old_level, str)
+            and old_level.strip().upper() in LOG_LEVEL_OPTIONS
+        ):
+            save_log_level(old_level)
+
+        lines = content.splitlines(keepends=True)
+        root_key_pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):")
+        section_pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(?:#.*)?(?:\r?\n)?$")
+        output: list[str] = []
+        removed_sections: set[str] = set()
+        removed_unlock_options = False
+        removed_fixed_options = False
+        index = 0
+
+        while index < len(lines):
+            line = lines[index]
+            section_match = section_pattern.match(line)
+            section_name = section_match.group(1) if section_match else None
+
+            if section_name in _REMOVED_CONFIG_SECTIONS:
+                removed_sections.add(section_name)
+                index += 1
+                while index < len(lines):
+                    candidate = lines[index]
+                    if not candidate.strip() or candidate[0].isspace():
+                        index += 1
+                        continue
+                    if candidate.startswith("#"):
+                        output.append(candidate)
+                        index += 1
+                        continue
+                    if root_key_pattern.match(candidate):
+                        break
+                    output.append(candidate)
+                    index += 1
+                continue
+
+            if section_name == "unlock":
+                output.append(line)
+                index += 1
+                while index < len(lines):
+                    candidate = lines[index]
+                    if not candidate.strip():
+                        output.append(candidate)
+                        index += 1
+                        continue
+                    if not candidate[0].isspace():
+                        if root_key_pattern.match(candidate):
+                            break
+                        output.append(candidate)
+                        index += 1
+                        continue
+                    if re.match(r"^  password\s*:", candidate):
+                        output.append(candidate)
+                    elif candidate.startswith("  #"):
+                        output.append(candidate)
+                    else:
+                        removed_unlock_options = True
+                    index += 1
+                continue
+
+            if not line.strip() or line.startswith("#"):
+                lookahead = index
+                while lookahead < len(lines):
+                    candidate = lines[lookahead]
+                    if candidate.strip() and not candidate.startswith("#"):
+                        break
+                    lookahead += 1
+                next_section = (
+                    section_pattern.match(lines[lookahead])
+                    if lookahead < len(lines)
+                    else None
+                )
+                if next_section and next_section.group(1) in _REMOVED_CONFIG_SECTIONS:
+                    index += 1
+                    continue
+
+            output.append(line)
+            index += 1
+
+        # 只保留 harmony_official.java_path，其他鸿蒙运行参数固定由代码管理。
+        cleaned_output: list[str] = []
+        root_section: str | None = None
+        platform_section: str | None = None
+        skip_official_option = False
+        for line in output:
+            if not line.startswith((" ", "\t")) and line.strip() and not line.startswith("#"):
+                root_match = root_key_pattern.match(line)
+                root_section = root_match.group(1) if root_match else None
+                platform_section = None
+                skip_official_option = False
+            elif root_section == "platforms":
+                platform_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_-]*):", line)
+                if platform_match:
+                    platform_section = platform_match.group(1)
+
+            worker_option_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_-]*)\s*:", line)
+            platform_option_match = re.match(r"^    ([A-Za-z_][A-Za-z0-9_-]*)\s*:", line)
+            if (
+                root_section == "worker"
+                and worker_option_match
+                and worker_option_match.group(1) in _REMOVED_WORKER_OPTIONS
+            ):
+                removed_fixed_options = True
+                continue
+
+            if root_section == "harmony_official":
+                official_option_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_-]*)\s*:", line)
+                if official_option_match:
+                    skip_official_option = official_option_match.group(1) != "java_path"
+                    if skip_official_option:
+                        removed_fixed_options = True
+                        continue
+                elif skip_official_option and (
+                    not line.strip() or line.startswith(("    ", "  #"))
+                ):
+                    continue
+
+            remove_line = (
+                root_section == "platforms"
+                and re.match(r"^  (harmony_mobile|harmony_pc):", line) is not None
+                and platform_section in empty_platform_sections
+            ) or (
+                root_section == "platforms"
+                and platform_section in _REMOVED_PLATFORM_OPTIONS
+                and platform_option_match is not None
+                and platform_option_match.group(1) in _REMOVED_PLATFORM_OPTIONS[platform_section]
+            )
+            if remove_line:
+                removed_fixed_options = True
+                continue
+            cleaned_output.append(line)
+
+        if removed_sections or removed_unlock_options or removed_fixed_options:
+            updated = "".join(cleaned_output)
+            with open(path, "w", encoding="utf-8", newline="") as config_file:
+                config_file.write(updated)
+            if removed_sections:
+                logger.info("已从用户配置中移除固定配置段: %s", ", ".join(sorted(removed_sections)))
+            if removed_unlock_options:
+                logger.info("已从用户配置中移除旧版解锁参数")
+            if removed_fixed_options:
+                logger.info("已从用户配置中移除固定配置项")
+    except OSError as e:
+        logger.warning(f"清理旧版配置段失败，文件为 {path}: {e}")
 
 
 def load_config() -> WorkerConfig:
@@ -418,11 +685,16 @@ def load_config() -> WorkerConfig:
     # 优先读取用户配置
     if os.path.exists(user_config_path):
         logger.info(f"Loading user config: {user_config_path}")
-        user_data = yaml.safe_load(_read_file_with_encoding(user_config_path)) or {}
+        _remove_legacy_config_sections(user_config_path)
+        user_data = _strip_removed_config_sections(
+            yaml.safe_load(_read_file_with_encoding(user_config_path)) or {}
+        )
 
         # 检查模板是否存在，合并缺失配置项
         if os.path.exists(default_template_path):
-            template_data = yaml.safe_load(_read_file_with_encoding(default_template_path)) or {}
+            template_data = _strip_removed_config_sections(
+                yaml.safe_load(_read_file_with_encoding(default_template_path)) or {}
+            )
 
             # 检查是否需要合并（模板配置比用户配置多）
             merged_data = _merge_missing_config(user_data, template_data)
@@ -444,6 +716,7 @@ def load_config() -> WorkerConfig:
 
     # 从单独文件读取版本号
     config.config_version = load_config_version()
+    config.log_level = load_log_level()
 
     return config
 
@@ -463,6 +736,7 @@ def _read_file_with_encoding(path: str) -> str:
 
 def _save_user_config(data: dict[str, Any], path: str) -> None:
     """保存用户配置文件。"""
+    data = _strip_removed_config_sections(data)
     config_yaml = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -512,12 +786,14 @@ def merge_config_with_local_protection(
     Returns:
         dict: 合并后的配置数据
     """
-    # 解析新配置
-    new_data = yaml.safe_load(new_config_yaml) or {}
+    # 解析新配置并丢弃固定项，避免平台下发旧字段后再次写入本机配置。
+    new_data = _strip_removed_config_sections(yaml.safe_load(new_config_yaml) or {})
 
     # 读取现有配置的保留字段
     if os.path.exists(existing_config_path):
-        existing_data = yaml.safe_load(_read_file_with_encoding(existing_config_path)) or {}
+        existing_data = _strip_removed_config_sections(
+            yaml.safe_load(_read_file_with_encoding(existing_config_path)) or {}
+        )
         existing_worker = existing_data.get("worker", {})
     else:
         existing_worker = {}
@@ -558,6 +834,7 @@ def save_config_with_version(
     Raises:
         OSError: 文件写入失败时抛出，自动回滚
     """
+    config_data = _strip_removed_config_sections(config_data)
     config_yaml = yaml.dump(config_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     # 确保 config 目录存在

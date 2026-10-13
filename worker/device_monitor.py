@@ -35,15 +35,6 @@ class DeviceMonitor:
         self.check_interval = config.device_check_interval
         self.retry_count = config.service_retry_count
         self.retry_interval = config.service_retry_interval
-        harmony_configs = (
-            config.get_platform_config("harmony_mobile"),
-            config.get_platform_config("harmony_pc"),
-        )
-        self.harmony_hdc_path = next(
-            (item.get("hdc_path") for item in harmony_configs if item.get("hdc_path")),
-            None,
-        )
-
         # 设备列表
         self._android_devices: list[dict[str, Any]] = []
         self._ios_devices: list[dict[str, Any]] = []
@@ -209,7 +200,7 @@ class DeviceMonitor:
         if (self._harmony_mobile_manager or self._harmony_pc_manager) and self.discover_harmony:
             try:
                 from worker.discovery.harmony import HarmonyDiscoverer
-                devices = HarmonyDiscoverer.discover(self.harmony_hdc_path)
+                devices = HarmonyDiscoverer.discover()
 
                 for device in devices:
                     category = self._harmony_platform_for_category(device.device_category)
@@ -340,7 +331,7 @@ class DeviceMonitor:
                 physical_udids = set(iOSDiscoverer.list_devices())
             elif platform in ("harmony_mobile", "harmony_pc"):
                 from worker.discovery.harmony import HarmonyDiscoverer
-                devices = HarmonyDiscoverer.discover(self.harmony_hdc_path)
+                devices = HarmonyDiscoverer.discover()
                 physical_udids = {
                     d.udid for d in devices
                     if (platform == "harmony_mobile" and d.device_category == "mobile")
@@ -494,7 +485,7 @@ class DeviceMonitor:
         if (self._harmony_mobile_manager or self._harmony_pc_manager) and self.discover_harmony:
             try:
                 from worker.discovery.harmony import HarmonyDiscoverer
-                devices = HarmonyDiscoverer.discover(self.harmony_hdc_path)
+                devices = HarmonyDiscoverer.discover()
                 harmony_physical_detection_ok = True
                 if self.discover_harmony_mobile:
                     physical_harmony_mobile_udids = {

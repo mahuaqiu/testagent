@@ -1,5 +1,5 @@
 # tests/test_files_config.py
-"""files 配置段解析测试。"""
+"""files 固定运行参数测试。"""
 from worker.config import WorkerConfig
 
 
@@ -13,10 +13,12 @@ def test_files_defaults():
     assert cfg.files_max_upload_size_mb == 1000
 
 
-def test_files_from_yaml(tmp_path):
+def test_files_settings_in_yaml_are_ignored(tmp_path):
     yaml_file = tmp_path / "worker.yaml"
     yaml_file.write_text(
         """
+worker:
+  id: test-worker
 files:
   root: D:/collected
   download_rate_limit_mb: 0
@@ -28,12 +30,12 @@ files:
         encoding="utf-8",
     )
     cfg = WorkerConfig.from_yaml(str(yaml_file))
-    assert cfg.files_root == "D:/collected"
-    assert cfg.files_download_rate_limit_mb == 0
-    assert cfg.files_upload_rate_limit_mb == 2.5
-    assert cfg.files_max_concurrent_downloads == 4
-    assert cfg.files_max_concurrent_uploads == 3
-    assert cfg.files_max_upload_size_mb == 2048
+    assert cfg.files_root is None
+    assert cfg.files_download_rate_limit_mb == 1.0
+    assert cfg.files_upload_rate_limit_mb == 1.0
+    assert cfg.files_max_concurrent_downloads == 2
+    assert cfg.files_max_concurrent_uploads == 2
+    assert cfg.files_max_upload_size_mb == 1000
 
 
 def test_set_files_config_creates_missing_root(tmp_path):

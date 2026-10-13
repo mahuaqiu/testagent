@@ -86,13 +86,13 @@ class HarmonyPlatformManager(PlatformManager):
         Args:
             config: 平台配置
             ocr_client: OCR 客户端
-            unlock_config: 解锁配置（可选）
+            unlock_config: 解锁密码配置（可选）
         """
         super().__init__(config, ocr_client)
         self._device_clients: dict[str, HarmonyHdcWrapper] = {}
         self._hdc_path: str | None = None
         self._current_device: str | None = None
-        self._unlock_config = unlock_config or {}  # 解锁配置
+        self._unlock_config = unlock_config or {}  # 解锁密码配置
         self._device_type = device_type
         self._official_sessions = HarmonyOfficialSessionManager(
             device_type,
@@ -126,7 +126,7 @@ class HarmonyPlatformManager(PlatformManager):
             return
 
         # 查找 HDC 工具路径
-        self._hdc_path = _find_hdc_path(self.config.hdc_path)
+        self._hdc_path = _find_hdc_path(None)
 
         if self._hdc_path is None:
             logger.warning("HDC 工具未找到，鸿蒙平台可能不可用")

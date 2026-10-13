@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from worker.constants import LOG_LEVEL_OPTIONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +54,11 @@ class SettingsWindow(QDialog):
         优先从根目录 config/worker.yaml 读取，
         若不存在则从 _internal/config/worker.yaml 复制一份。
         """
-        from worker.config import get_default_template_path, get_user_config_path
+        from worker.config import (
+            _remove_legacy_config_sections,
+            get_default_template_path,
+            get_user_config_path,
+        )
 
         config_path = get_user_config_path()
 
@@ -65,6 +71,8 @@ class SettingsWindow(QDialog):
 
         if not os.path.exists(self.config_path):
             return {}
+
+        _remove_legacy_config_sections(self.config_path)
 
         # 尝试多种编码
         # 兼容旧安装器在 Windows PowerShell 5.1 下生成的 UTF-16 配置。
@@ -194,7 +202,7 @@ class SettingsWindow(QDialog):
         # 日志级别
         grid.addWidget(self._create_label("日志级别"), row, 0)
         self.log_level_combo = QComboBox()
-        self.log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
+        self.log_level_combo.addItems(LOG_LEVEL_OPTIONS)
         grid.addWidget(self.log_level_combo, row, 1)
         row += 1
 
@@ -351,7 +359,6 @@ class SettingsWindow(QDialog):
         """从配置加载值。"""
         worker = self._config.get("worker", {})
         external = self._config.get("external_services", {})
-        logging_cfg = self._config.get("logging", {})
 
         ip = worker.get("ip")
         if ip:
@@ -369,7 +376,9 @@ class SettingsWindow(QDialog):
         ocr_service = external.get("ocr_service", "")
         self.ocr_service_input.setText(ocr_service)
 
-        log_level = logging_cfg.get("level", "INFO")
+        from worker.config import load_log_level
+
+        log_level = load_log_level()
         index = self.log_level_combo.findText(log_level)
         if index >= 0:
             self.log_level_combo.setCurrentIndex(index)
@@ -479,7 +488,6 @@ class SettingsWindow(QDialog):
             original_content = self._update_yaml_value(original_content, "namespace", self.namespace_input.text().strip())
             original_content = self._update_yaml_value(original_content, "platform_api", self.platform_api_input.text().strip())
             original_content = self._update_yaml_value(original_content, "ocr_service", self.ocr_service_input.text().strip())
-            original_content = self._update_yaml_value(original_content, "level", self.log_level_combo.currentText())
             original_content = self._update_yaml_value(original_content, "discover_android_devices", "true" if self.discover_android_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_ios_devices", "true" if self.discover_ios_checkbox.isChecked() else "false")
             original_content = self._update_yaml_value(original_content, "discover_harmony_mobile_devices", "true" if self.discover_harmony_mobile_checkbox.isChecked() else "false")
@@ -488,6 +496,9 @@ class SettingsWindow(QDialog):
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
                     f.write(original_content)
+                from worker.config import save_log_level
+
+                save_log_level(self.log_level_combo.currentText())
                 logger.info(f"Configuration saved: {self.config_path}")
                 QMessageBox.information(self, "保存成功", "配置已保存，程序将重启以应用新配置。")
                 self.accept()
@@ -509,12 +520,12 @@ class SettingsWindow(QDialog):
             self._config["external_services"]["platform_api"] = self.platform_api_input.text().strip()
             self._config["external_services"]["ocr_service"] = self.ocr_service_input.text().strip()
 
-            self._config.setdefault("logging", {})
-            self._config["logging"]["level"] = self.log_level_combo.currentText()
-
             try:
                 with open(self.config_path, "w", encoding="utf-8") as f:
                     yaml.dump(self._config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+                from worker.config import save_log_level
+
+                save_log_level(self.log_level_combo.currentText())
                 logger.info(f"Configuration saved: {self.config_path}")
                 QMessageBox.information(self, "保存成功", "配置已保存，程序将重启以应用新配置。")
                 self.accept()

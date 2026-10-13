@@ -144,8 +144,8 @@ def test_stop_without_identity_keeps_existing_collector():
     collector.configure_device.assert_not_called()
 
 
-def test_harmony_hdc_path_is_resolved_before_configure():
-    """性能路径应先把 SDK 根/相对路径解析成 hdc 可执行文件。"""
+def test_harmony_hdc_path_is_resolved_without_worker_config():
+    """性能采集从程序安装目录自动定位 HDC，不再读取 Worker 配置。"""
     record = _harmony_record()
     worker = _worker_with_record(record)
     collector = MagicMock()
@@ -161,7 +161,7 @@ def test_harmony_hdc_path_is_resolved_before_configure():
         server_module._prepare_performance_collector(
             "env-machine-id", "harmony_mobile", "HDC-UDID-001"
         )
-    find_hdc.assert_called_once_with("tools/hdc/hdc.exe")
+    find_hdc.assert_called_once_with(None)
     collector.configure_device.assert_called_once_with(
         "harmony_mobile",
         "HDC-UDID-001",

@@ -433,18 +433,9 @@ def set_gui_app(app: Any) -> None:
 _PERFORMANCE_DEVICE_TYPES = {"windows", "harmony_pc", "harmony_mobile"}
 
 
-def _resolve_performance_hdc_path(device_type: str) -> str | None:
-    """把配置中的 HDC 路径解析成可执行文件。
-
-    配置可能是 hdc.exe、tools/hdc 相对路径或 SDK 根目录；性能采集不能把
-    未解析的目录字符串直接交给 perfharmony。未配置时由 _find_hdc_path
-    自动搜索 tools/hdc 兜底。
-    """
-    if not worker or not worker.config:
-        return _find_hdc_path(None)
-
-    configured = worker.config.get_platform_config(device_type).get("hdc_path")
-    return _find_hdc_path(configured)
+def _resolve_performance_hdc_path() -> str | None:
+    """自动定位鸿蒙性能采集使用的 HDC 可执行文件。"""
+    return _find_hdc_path(None)
 
 
 def _prepare_performance_collector(
@@ -488,7 +479,7 @@ def _prepare_performance_collector(
 
     hdc_path = None
     if normalized_type != "windows":
-        hdc_path = _resolve_performance_hdc_path(normalized_type)
+        hdc_path = _resolve_performance_hdc_path()
     try:
         collector.configure_device(normalized_type, normalized_sn, hdc_path)
     except ValueError as error:

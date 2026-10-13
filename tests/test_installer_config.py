@@ -92,12 +92,13 @@ def test_installer_escapes_powershell_regex_line_anchors() -> None:
     assert "-replace '(?m)^\\s*discover_harmony_pc_devices:.*$$'" in script
 
 
-def test_windows_build_packages_xml_module_and_both_java_config_templates() -> None:
+def test_windows_build_bundles_java_without_rewriting_config_templates() -> None:
     script = WINDOWS_BUILD_SCRIPT.read_text(encoding="utf-8")
 
     assert "java.xml" in script
-    assert '"$InternalConfigDir\\worker.yaml"' in script
     assert "tools/jre/bin/java.exe" in script
+    assert '$BundledJavaExe = "$PackageDir\\tools\\jre\\bin\\java.exe"' in script
+    assert "$PackagedConfigs" not in script
 
     bridge_source = HARMONY_BRIDGE_SOURCE.read_text(encoding="utf-8")
     assert "System.setOut(new PrintStream(System.err" in bridge_source

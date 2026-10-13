@@ -2114,7 +2114,8 @@ components:
   # ---------- 移动端解锁和缩放动作 ----------
   # unlock_screen - 解锁屏幕（iOS/Android/Harmony 平台）
   # 检测设备锁屏状态并自动解锁，使用固定坐标点击密码键盘
-  # 配置：密码键盘坐标在 config/worker.yaml 的 unlock 配置中设置
+  # 密码在 config/worker.yaml 的 unlock.password 中设置。
+  # 点击坐标和解锁方式由 worker/constants.py 管理。
   # iOS 锁屏检测：GET /wda/locked
   # Android 锁屏检测：device.info['screenOn']
   # 执行流程：检测锁屏 → 唤醒屏幕 → 滑动解锁 → 输入密码 → 验证解锁

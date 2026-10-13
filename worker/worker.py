@@ -365,7 +365,7 @@ class Worker:
 
     def _init_platform_managers(self) -> None:
         """初始化平台管理器。"""
-        unlock_config = self.config.unlock  # 获取解锁配置
+        unlock_config = self.config.unlock  # 获取解锁密码配置
 
         for platform in self.supported_platforms:
             # Android/iOS/Harmony 平台根据开关跳过初始化
@@ -853,7 +853,7 @@ class Worker:
 
         触发条件：
         - 缓存清理功能已启用
-        - 距离上次清理超过配置的间隔
+        - 距离上次清理超过固定间隔
         - 当前状态为 idle（无任务执行）或 clear_on_idle 为 false
         """
         # 获取 Web 平台配置
@@ -861,20 +861,14 @@ class Worker:
         if not web_config:
             return
 
-        # 检查是否启用
-        if not web_config.get("cache_clear_enabled", True):
-            logger.debug("Cache clear is disabled")
-            return
-
         # 检查是否仅在空闲时清理
-        clear_on_idle = web_config.get("cache_clear_clear_on_idle", True)
+        clear_on_idle = True
         if clear_on_idle and self.status != "online":
             logger.debug("Not idle, skip cache clear check")
             return
 
         # 检查时间间隔
-        interval_hours = web_config.get("cache_clear_interval_hours", 24)
-        interval_seconds = interval_hours * 3600
+        interval_seconds = 24 * 3600
 
         status = self._get_cache_clear_status()
         last_clear = status.get("last_clear_timestamp", 0)

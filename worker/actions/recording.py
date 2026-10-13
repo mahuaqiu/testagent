@@ -28,8 +28,8 @@ class StartRecordingAction(ActionExecutor):
                   - 目录路径（如 d:\\recorder）→ 自动生成文件名
                   - 文件路径（如 d:\\recorder\\test.mp4）→ 直接使用
                   - 为空时使用默认配置目录 + 自动生成文件名
-                - fps: 帧率（默认 10）
-                - timeout: 超时（毫秒，默认 7200000）
+                - fps: 帧率（默认使用代码固定值）
+                - timeout: 超时（毫秒，默认使用代码固定值）
                 - monitor: 显示器选择（默认 1，主屏幕）
                 - audio: 是否录制音频（默认 false）
                 - watermark: 是否开启水印（默认 true）
@@ -74,8 +74,12 @@ class StartRecordingAction(ActionExecutor):
         if output_file_dir:
             os.makedirs(output_file_dir, exist_ok=True)
 
-        fps = action.fps if action.fps is not None else 10
-        timeout_ms = action.recording_timeout if action.recording_timeout is not None else 7200000
+        fps = action.fps if action.fps is not None else config.recording_default_fps
+        timeout_ms = (
+            action.recording_timeout
+            if action.recording_timeout is not None
+            else config.recording_max_timeout_ms
+        )
         monitor = action.monitor
         audio = action.audio
         watermark = action.watermark
