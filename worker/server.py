@@ -1406,11 +1406,13 @@ async def screen_stream(
             )
             return
 
-    activity_task = asyncio.create_task(receive_activity())
-    idle_watchdog_task = asyncio.create_task(close_when_idle())
+    activity_task: asyncio.Task | None = None
+    idle_watchdog_task: asyncio.Task | None = None
 
     frame_source = None
     screen_manager = None
+    harmony_remote_session_manager = None
+    harmony_remote_session_owner: str | None = None
     direct_h264_frame_source = is_harmony and codec == "h264"
     h264_subscriber_id = None
     h264_queue = None
@@ -1462,6 +1464,35 @@ async def screen_stream(
                     logger.warning(f"WebSocket rejected: Harmony device not available: {device_id}, {message}")
                     await websocket.close(code=1008, reason=f"Harmony device not available: {device_id}")
                     return
+
+            # 实时远程操作按连接获取官方会话租约；同一设备上的多个 WebSocket
+            # 复用管理器中的会话。会话不可用时，指针分发器仍可回退 HDC。
+            if pointer_injector is not None:
+                remote_owner = f"remote-websocket:{id(websocket)}"
+                try:
+                    session = await asyncio.to_thread(
+                        harmony_manager.acquire_official_session,
+                        device_id,
+                        remote_owner,
+                    )
+                except Exception as exc:
+                    session = None
+                    logger.warning(
+                        "远程 WebSocket 启动鸿蒙官方会话失败，输入将回退 HDC: device=%s, error=%s",
+                        device_id,
+                        exc,
+                    )
+                if session is not None:
+                    harmony_remote_session_manager = harmony_manager
+                    harmony_remote_session_owner = remote_owner
+                    logger.info("远程 WebSocket 已获取鸿蒙官方会话: device=%s", device_id)
+                else:
+                    logger.info("鸿蒙官方会话暂不可用，远程输入回退 HDC: device=%s", device_id)
+
+        # 在 Harmony 设备检查和官方会话按需启动完成后再读取输入，避免首个
+        # WebSocket 事件抢在 Java 启动前落入 HDC 回退路径。
+        activity_task = asyncio.create_task(receive_activity())
+        idle_watchdog_task = asyncio.create_task(close_when_idle())
 
         if direct_h264_frame_source:
             # 官方 H.264 不需要 ScreenManager 的 JPEG 捕获线程；锁屏时保留
@@ -1977,10 +2008,14 @@ async def screen_stream(
             logger.error(f"WebSocket error: {e}")
     finally:
         stream_stop_event.set()
-        for background_task in (activity_task, idle_watchdog_task):
+        background_tasks = tuple(
+            task for task in (activity_task, idle_watchdog_task) if task is not None
+        )
+        for background_task in background_tasks:
             if not background_task.done():
                 background_task.cancel()
-        await asyncio.gather(activity_task, idle_watchdog_task, return_exceptions=True)
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         # 注入器关闭会排空队列并对按住的按键补发抬起，防止设备端按键卡死
         if pointer_injector is not None:
             pointer_injector.close()
@@ -2009,6 +2044,14 @@ async def screen_stream(
                 frame_source.stop()
             except Exception as exc:
                 logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
+        if harmony_remote_session_manager is not None and harmony_remote_session_owner:
+            try:
+                harmony_remote_session_manager.release_official_session(
+                    device_id,
+                    harmony_remote_session_owner,
+                )
+            except Exception as exc:
+                logger.warning("释放远程 WebSocket 鸿蒙官方会话租约失败: %s", exc)
         # 确保减少连接计数（并发下计数可能已被清理，用 pop 兜底）
         remaining = _ws_connections.get(conn_key, 1) - 1
 

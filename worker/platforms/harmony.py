@@ -178,11 +178,6 @@ class HarmonyPlatformManager(PlatformManager):
             if client:
                 # 检查现有连接是否有效
                 if client.is_online():
-                    if (
-                        self._device_type != "harmony_pc"
-                        and self._official_sessions.prewarm_on_device_ready
-                    ):
-                        self._prewarm_if_screen_available(udid, client)
                     return ("online", "OK")
                 else:
                     # 连接失效，移除旧的客户端
@@ -194,11 +189,6 @@ class HarmonyPlatformManager(PlatformManager):
             self._device_clients[udid] = client
 
             logger.info(f"Harmony device service ready: {udid}")
-            if (
-                self._device_type != "harmony_pc"
-                and self._official_sessions.prewarm_on_device_ready
-            ):
-                self._prewarm_if_screen_available(udid, client)
             return ("online", "OK")
 
         except DeviceNotFoundError as e:
@@ -223,13 +213,6 @@ class HarmonyPlatformManager(PlatformManager):
         """供官方会话管理器判断设备是否可启动屏幕采集。"""
         client = self._device_clients.get(udid)
         return self._is_locked_client(client) if client is not None else False
-
-    def _prewarm_if_screen_available(self, udid: str, client: HarmonyHdcWrapper) -> None:
-        """屏幕已解锁时才预热官方链路，避免设备启动阶段反复拉起 Java。"""
-        if self._is_locked_client(client):
-            logger.debug("Harmony 设备处于锁屏状态，跳过官方会话预热: %s", udid)
-            return
-        self._official_sessions.prewarm(udid)
 
     def mark_device_faulty(self, udid: str) -> None:
         """
@@ -496,20 +479,25 @@ class HarmonyPlatformManager(PlatformManager):
                 raise HarmonyError(hdc_error)
             return
 
+        owner = f"task:{id(client)}"
         serial, official_session = self._get_official_session_for_client(client)
-        if official_session and official_fn is not None:
-            try:
-                official_fn(official_session)
-                return
-            except HarmonyOfficialPartialActionError as exc:
-                self._handle_official_failure(serial, operation, exc)
-                raise HarmonyError(
-                    f"鸿蒙官方{operation}已部分执行，放弃 HDC 回退以免动作重复"
-                ) from exc
-            except Exception as exc:
-                self._handle_official_failure(serial, operation, exc)
-        if not hdc_fn(client):
-            raise HarmonyError(hdc_error)
+        try:
+            if official_session and official_fn is not None:
+                try:
+                    official_fn(official_session)
+                    return
+                except HarmonyOfficialPartialActionError as exc:
+                    self._handle_official_failure(serial, operation, exc)
+                    raise HarmonyError(
+                        f"鸿蒙官方{operation}已部分执行，放弃 HDC 回退以免动作重复"
+                    ) from exc
+                except Exception as exc:
+                    self._handle_official_failure(serial, operation, exc)
+            if not hdc_fn(client):
+                raise HarmonyError(hdc_error)
+        finally:
+            if serial:
+                self.release_official_session(serial, owner)
 
     def click(self, x: int, y: int, duration: int = 0, context=None) -> None:
         """

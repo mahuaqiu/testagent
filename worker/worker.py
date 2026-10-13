@@ -947,10 +947,9 @@ class Worker:
             return validation_result
 
         harmony_service_ready = False
-        harmony_activity_owner: str | None = None
 
         # 鸿蒙移动端动作可使用官方会话；鸿蒙 PC task action 固定走 HDC，
-        # 不为任务启动 Java。H.264 推流仍按需使用官方会话。
+        # task 接口不主动预热 Java。官方会话仅由实际动作或 WebSocket 按需启动。
         if platform in ("harmony_mobile", "harmony_pc") and task.device_id:
             status, message = manager.ensure_device_service(task.device_id)
             if status != "online":
@@ -964,12 +963,6 @@ class Worker:
             harmony_service_ready = True
             if self.device_monitor:
                 self.device_monitor.mark_device_online(platform, task.device_id)
-            if platform == "harmony_mobile" and hasattr(manager, "prewarm_official_session"):
-                harmony_activity_owner = f"task:{task.task_id}"
-                manager.prewarm_official_session(
-                    task.device_id,
-                    owner=harmony_activity_owner,
-                )
 
         # 设备命令类动作需要确保设备服务可用，即使执行器声明 requires_context=False。
         # 因为这些动作依赖 _current_device 和 client 来执行命令
@@ -1064,13 +1057,6 @@ class Worker:
                     manager.close_context(context, close_session=False)
                 except Exception as e:
                     logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
-            if harmony_activity_owner and hasattr(manager, "release_official_session"):
-                try:
-                    manager.release_official_session(task.device_id, harmony_activity_owner)
-                except Exception as e:
-                    logger.warning(f"释放鸿蒙官方预热租约失败: {e}")
-
-
     def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:
         """登记动作产生的截图和录屏文件。"""
         references: list[dict[str, Any]] = []

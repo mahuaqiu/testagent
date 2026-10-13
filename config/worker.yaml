@@ -85,8 +85,8 @@ harmony_official:
   jar_path: tools/harmony/hosScrcpy-1.0.15-beta.jar
   bridge_class_path: tools/harmony/bridge
   startup_timeout_seconds: 35
-  idle_timeout_seconds: 600       # 无截图、推流或鸿蒙动作 10 分钟后释放官方会话
-  prewarm_on_device_ready: true   # 设备解锁且发现在线后后台预热官方 Java 会话
+  idle_timeout_seconds: 60        # 最后一个官方会话使用者断开后 1 分钟释放 Java
+  prewarm_on_device_ready: false  # Worker 启动、重启和设备发现时不预热 Java
   prewarm_failure_cooldown_seconds: 60  # 预热失败后冷却，避免后台反复拉起 Java
   input_ready_delay_seconds: 1.5   # SDK READY 早于 uitest 输入 socket 就绪
   reconnect_attempts: 3
