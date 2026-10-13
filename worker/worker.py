@@ -682,13 +682,33 @@ class Worker:
                 )
 
             # 验证设备是否连接
-            registry = getattr(self, "device_registry", None)
-            if registry is not None:
-                device_ids = [d.device_id for d in registry.list(task.platform) if d.connection_status != "disconnected"]
-            elif self.device_monitor:
-                device_ids = self.device_monitor.get_online_devices(task.platform)
+            device_monitor = getattr(self, "device_monitor", None)
+            if task.platform == "harmony_pc":
+                # 鸿蒙 PC 任务直接使用 DeviceMonitor 的内存发现结果，
+                # 包括物理连接但 HDC 服务暂不可用的设备；不以注册表快照拦截解锁。
+                if device_monitor:
+                    get_known_device_ids = getattr(
+                        device_monitor, "get_known_device_ids", None
+                    )
+                    if get_known_device_ids:
+                        device_ids = get_known_device_ids(task.platform)
+                    else:
+                        device_ids = device_monitor.get_online_devices(task.platform)
+                else:
+                    device_clients = getattr(manager, "_device_clients", {})
+                    device_ids = list(device_clients)
             else:
-                device_ids = []
+                registry = getattr(self, "device_registry", None)
+                if registry is not None:
+                    device_ids = [
+                        d.device_id
+                        for d in registry.list(task.platform)
+                        if d.connection_status != "disconnected"
+                    ]
+                elif device_monitor:
+                    device_ids = device_monitor.get_online_devices(task.platform)
+                else:
+                    device_ids = []
 
             if task.device_id not in device_ids:
                 return TaskResult(
@@ -929,8 +949,8 @@ class Worker:
         harmony_service_ready = False
         harmony_activity_owner: str | None = None
 
-        # 鸿蒙任意 action 都触发官方链路后台预热；不等待预热完成，保证当前
-        # 屏锁、Shell、按键等 HDC 动作可以和 Java 启动并行执行。
+        # 鸿蒙移动端动作可使用官方会话；鸿蒙 PC task action 固定走 HDC，
+        # 不为任务启动 Java。H.264 推流仍按需使用官方会话。
         if platform in ("harmony_mobile", "harmony_pc") and task.device_id:
             status, message = manager.ensure_device_service(task.device_id)
             if status != "online":
@@ -944,7 +964,7 @@ class Worker:
             harmony_service_ready = True
             if self.device_monitor:
                 self.device_monitor.mark_device_online(platform, task.device_id)
-            if hasattr(manager, "prewarm_official_session"):
+            if platform == "harmony_mobile" and hasattr(manager, "prewarm_official_session"):
                 harmony_activity_owner = f"task:{task.task_id}"
                 manager.prewarm_official_session(
                     task.device_id,

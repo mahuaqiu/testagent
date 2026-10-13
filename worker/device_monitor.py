@@ -615,6 +615,21 @@ class DeviceMonitor:
             "faulty_harmony_pc": self._faulty_harmony_pc_devices,
         }
 
+    def get_known_device_ids(self, platform: str) -> list[str]:
+        """从监控器内存快照返回已发现且未明确断开的设备 ID。"""
+        devices = self.get_all_devices()
+        known_ids: dict[str, None] = {}
+        for key in (platform, f"faulty_{platform}"):
+            for item in tuple(devices.get(key, ())):
+                device_id = item.get("udid") or item.get("device_id")
+                if not device_id:
+                    continue
+                status = str(item.get("connection_status", "")).lower()
+                if status in ("disconnected", "offline"):
+                    continue
+                known_ids[device_id] = None
+        return list(known_ids)
+
     def get_online_devices(self, platform: str) -> list[str]:
         """获取在线设备 UDID 列表。"""
         if platform == "android":

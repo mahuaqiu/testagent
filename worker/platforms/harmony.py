@@ -178,7 +178,10 @@ class HarmonyPlatformManager(PlatformManager):
             if client:
                 # 检查现有连接是否有效
                 if client.is_online():
-                    if self._official_sessions.prewarm_on_device_ready:
+                    if (
+                        self._device_type != "harmony_pc"
+                        and self._official_sessions.prewarm_on_device_ready
+                    ):
                         self._prewarm_if_screen_available(udid, client)
                     return ("online", "OK")
                 else:
@@ -191,7 +194,10 @@ class HarmonyPlatformManager(PlatformManager):
             self._device_clients[udid] = client
 
             logger.info(f"Harmony device service ready: {udid}")
-            if self._official_sessions.prewarm_on_device_ready:
+            if (
+                self._device_type != "harmony_pc"
+                and self._official_sessions.prewarm_on_device_ready
+            ):
                 self._prewarm_if_screen_available(udid, client)
             return ("online", "OK")
 
@@ -478,13 +484,18 @@ class HarmonyPlatformManager(PlatformManager):
         hdc_fn: Callable[[Any], bool],
         hdc_error: str,
     ) -> None:
-        """动作执行模板：官方会话优先，失败回退 HDC。
+        """执行设备动作；Harmony PC 固定走 HDC，移动端保留官方会话回退。
 
-        官方手势已部分执行（HarmonyOfficialPartialActionError）时放弃 HDC
-        回退并抛错，避免同一动作在设备上执行两次；会话已在
+        鸿蒙移动端官方手势已部分执行（HarmonyOfficialPartialActionError）时
+        放弃 HDC 回退并抛错，避免同一动作在设备上执行两次；会话已在
         _handle_official_failure 中停用，后续动作自然走 HDC 直连。
         official_fn 传 None 表示该动作在当前设备类型下无官方实现。
         """
+        if self._device_type == "harmony_pc":
+            if not hdc_fn(client):
+                raise HarmonyError(hdc_error)
+            return
+
         serial, official_session = self._get_official_session_for_client(client)
         if official_session and official_fn is not None:
             try:

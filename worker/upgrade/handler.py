@@ -111,12 +111,6 @@ def start_async_upgrade(request: UpgradeRequest) -> UpgradeResponse:
                 target_version=target_version,
             )
 
-        # 立即停止设备监控定时任务
-        _stop_device_monitor()
-
-        # 下载期间也不保留官方 Java 进程，避免升级包覆盖 JAR/Bridge 时发生占用。
-        _stop_harmony_official_sessions()
-
         # 初始化状态
         state = UpgradeState(
             status="accepted",
@@ -167,6 +161,11 @@ def _execute_upgrade_background(
     注意：安装前清理（杀进程、删 playwright）由 NSIS 安装包处理
     """
     try:
+        # 清理设备监控和 Java 会话可能等待线程退出；放在后台执行，
+        # 让平台下发升级请求先拿到 accepted 响应。
+        _stop_device_monitor()
+        _stop_harmony_official_sessions()
+
         # 1. 开始下载
         _status_manager.update_status("downloading")
 
