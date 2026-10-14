@@ -939,6 +939,10 @@ class HarmonyOfficialSessionManager:
         self._prewarm_threads: dict[str, threading.Thread] = {}
         self._prewarm_failure_until: dict[str, float] = {}
         self._prewarm_generation = 0
+        # 单设备代次用于作废正在启动的会话；显式断开时，未完成的冷启动不得
+        # 在断开接口返回后又被装回会话表。
+        self._session_generations: dict[str, int] = {}
+        self._stopping_sessions: set[str] = set()
         # per-serial 启动锁：start()（最长 startup_timeout×重试次数）在锁外执行，
         # 只串行同一设备的并发启动，不阻塞其他设备的 acquire/订阅/预热。
         self._start_locks: dict[str, threading.Lock] = {}
@@ -977,6 +981,7 @@ class HarmonyOfficialSessionManager:
         serial: str,
         *,
         retry_attempts: int | None = None,
+        owner: str | None = None,
     ) -> HarmonyOfficialSession | None:
         """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。
 
@@ -984,8 +989,12 @@ class HarmonyOfficialSessionManager:
         启动锁下锁外执行，一台设备的启动（最长 startup_timeout×重试次数）不再
         阻塞其他设备的 acquire/订阅/预热操作。
         """
-        generation = self._prewarm_generation
         try:
+            with self._lock:
+                generation = self._prewarm_generation
+                serial_generation = self._session_generations.get(serial, 0)
+                if serial in self._stopping_sessions:
+                    return None
             if not self._hdc_path:
                 return self._handle_start_failure("HDC 路径不可用")
             if self._is_device_locked(serial):
@@ -994,16 +1003,30 @@ class HarmonyOfficialSessionManager:
 
             with self._lock:
                 current = self._sessions.get(serial)
-                if current and current.is_running:
+                if (
+                    generation == self._prewarm_generation
+                    and serial_generation == self._session_generations.get(serial, 0)
+                    and serial not in self._stopping_sessions
+                    and current
+                    and current.is_running
+                ):
                     # 预热会话只需 Bridge 仍在运行即可复用；视频数据由真实的
                     # WebSocket 订阅消费，不能在这里阻塞等待消费者。
+                    self._claim_owner_locked(serial, owner)
                     return current
 
-            start_lock = self._start_locks.setdefault(serial, threading.Lock())
+            with self._lock:
+                start_lock = self._start_locks.setdefault(serial, threading.Lock())
             with start_lock:
                 with self._lock:
+                    if (
+                        generation != self._prewarm_generation
+                        or serial_generation != self._session_generations.get(serial, 0)
+                    ):
+                        return None
                     current = self._sessions.get(serial)
                     if current and current.is_running:
+                        self._claim_owner_locked(serial, owner)
                         return current
                     if current:
                         self._sessions.pop(serial, None)
@@ -1054,6 +1077,14 @@ class HarmonyOfficialSessionManager:
                             attempts,
                             exc,
                         )
+                        with self._lock:
+                            invalidated = (
+                                generation != self._prewarm_generation
+                                or serial_generation
+                                != self._session_generations.get(serial, 0)
+                            )
+                        if invalidated:
+                            return None
                         if attempt < attempts:
                             time.sleep(float(self._settings["reconnect_backoff_seconds"]))
                         continue
@@ -1072,9 +1103,13 @@ class HarmonyOfficialSessionManager:
                                     serial,
                                     stop_exc,
                                 )
+                            self._claim_owner_locked(serial, owner)
                             return existing
-                        if generation != self._prewarm_generation:
-                            # 启动期间发生 stop_all（升级/停机），不把新会话装回字典。
+                        if (
+                            generation != self._prewarm_generation
+                            or serial_generation != self._session_generations.get(serial, 0)
+                        ):
+                            # 会话代次失效后，不把新会话装回字典。
                             logger.info(
                                 "鸿蒙官方会话启动完成但管理器已停机，直接释放: serial=%s",
                                 serial,
@@ -1089,6 +1124,9 @@ class HarmonyOfficialSessionManager:
                                 )
                             return self._handle_start_failure("会话管理器已停机")
                         self._sessions[serial] = session
+                        # 会话复用、租约登记和空闲计时器取消必须在同一把锁内完成，
+                        # 否则空闲计时器可能先停掉刚刚被 acquire 返回的会话。
+                        self._claim_owner_locked(serial, owner)
                         return session
                 return self._handle_start_failure(last_error)
         except Exception as exc:
@@ -1214,13 +1252,7 @@ class HarmonyOfficialSessionManager:
         get_or_start 可能耗时数十秒（冷启动/重试），期间不能持有全局锁，
         否则会阻塞其他设备的所有会话操作（H-2）。
         """
-        session = self.get_or_start(serial)
-        if session is None:
-            return None
-        with self._lock:
-            self._cancel_idle_timer_locked(serial)
-            self._owners.setdefault(serial, set()).add(owner)
-            return session
+        return self.get_or_start(serial, owner=owner)
 
     def release(self, serial: str, owner: str) -> None:
         """释放官方会话租约；没有活动租约时启动空闲释放倒计时。"""
@@ -1236,12 +1268,22 @@ class HarmonyOfficialSessionManager:
 
     def stop_session(self, serial: str) -> None:
         with self._lock:
+            self._session_generations[serial] = self._session_generations.get(serial, 0) + 1
+            self._stopping_sessions.add(serial)
             self._cancel_idle_timer_locked(serial)
             self._owners.pop(serial, None)
             self._prewarm_failure_until.pop(serial, None)
-            session = self._sessions.pop(serial, None)
-        if session:
-            session.stop()
+            start_lock = self._start_locks.setdefault(serial, threading.Lock())
+        # 与该设备的冷启动串行化，避免旧会话 stop 与新 SDK 启动重叠。
+        with start_lock:
+            with self._lock:
+                session = self._sessions.pop(serial, None)
+            try:
+                if session:
+                    session.stop()
+            finally:
+                with self._lock:
+                    self._stopping_sessions.discard(serial)
 
     def stop_session_if_idle(self, serial: str, wait_idle_seconds: float = 0.0) -> dict[str, Any]:
         """立即停止没有租约的官方会话，供平台调试页显式断开使用。
@@ -1253,13 +1295,17 @@ class HarmonyOfficialSessionManager:
         """
         deadline = time.monotonic() + max(0.0, wait_idle_seconds)
         owners: list[str] = []
+        timer = None
         while True:
             with self._lock:
                 owners_set = self._owners.get(serial)
                 if not owners_set:
+                    # 使正在进行的冷启动失效；它完成后会自行 stop，而不会成为
+                    # 一个没有租约、但仍留在设备上的常驻会话。
+                    self._session_generations[serial] = self._session_generations.get(serial, 0) + 1
+                    self._stopping_sessions.add(serial)
                     timer = self._idle_timers.pop(serial, None)
-                    session = self._sessions.pop(serial, None)
-                    self._prewarm_failure_until.pop(serial, None)
+                    start_lock = self._start_locks.setdefault(serial, threading.Lock())
                     break
                 owners = sorted(owners_set)
             if time.monotonic() >= deadline:
@@ -1272,10 +1318,33 @@ class HarmonyOfficialSessionManager:
             time.sleep(0.05)
         if timer:
             timer.cancel()
-        if session:
-            logger.info("平台调试页断开，立即停止鸿蒙官方会话: serial=%s", serial)
-            session.stop()
-        return {"stopped": True, "owners": []}
+        remaining = max(0.0, deadline - time.monotonic())
+        acquired = (
+            start_lock.acquire(timeout=remaining)
+            if remaining > 0
+            else start_lock.acquire(blocking=False)
+        )
+        if not acquired:
+            # 冷启动仍在 SDK 内部等待；代次已作废，启动线程完成后会自行清理。
+            with self._lock:
+                self._stopping_sessions.discard(serial)
+            return {"stopped": False, "owners": [], "pending_start": True}
+        try:
+            with self._lock:
+                # 冷启动完成与断开并发时，新的 acquire 可能先登记租约；尊重该租约。
+                owners_set = self._owners.get(serial)
+                if owners_set:
+                    return {"stopped": False, "owners": sorted(owners_set)}
+                session = self._sessions.pop(serial, None)
+                self._prewarm_failure_until.pop(serial, None)
+            if session:
+                logger.info("平台调试页断开，立即停止鸿蒙官方会话: serial=%s", serial)
+                session.stop()
+            return {"stopped": True, "owners": []}
+        finally:
+            with self._lock:
+                self._stopping_sessions.discard(serial)
+            start_lock.release()
 
     def stop_all(self) -> None:
         with self._lock:
@@ -1297,6 +1366,13 @@ class HarmonyOfficialSessionManager:
         if timer:
             timer.cancel()
 
+    def _claim_owner_locked(self, serial: str, owner: str | None) -> None:
+        """在持有会话锁时原子登记租约并取消空闲释放计时器。"""
+        if owner is None:
+            return
+        self._cancel_idle_timer_locked(serial)
+        self._owners.setdefault(serial, set()).add(owner)
+
     def _schedule_idle_release_locked(self, serial: str) -> None:
         if serial not in self._sessions or self._owners.get(serial):
             return
@@ -1311,14 +1387,20 @@ class HarmonyOfficialSessionManager:
         logger.info("鸿蒙官方会话进入空闲保活: serial=%s, timeout=%.1fs", serial, timeout)
 
     def _release_idle_session(self, serial: str) -> None:
+        timer_thread = threading.current_thread()
         with self._lock:
-            self._idle_timers.pop(serial, None)
-            if self._owners.get(serial):
-                return
-            session = self._sessions.pop(serial, None)
-        if session:
-            logger.info("鸿蒙官方会话空闲超时，退出 Java Bridge: %s", serial)
-            session.stop()
+            start_lock = self._start_locks.setdefault(serial, threading.Lock())
+        with start_lock:
+            with self._lock:
+                if self._idle_timers.get(serial) is not timer_thread:
+                    return
+                self._idle_timers.pop(serial, None)
+                if self._owners.get(serial) or serial in self._stopping_sessions:
+                    return
+                session = self._sessions.pop(serial, None)
+            if session:
+                logger.info("鸿蒙官方会话空闲超时，退出 Java Bridge: %s", serial)
+                session.stop()
 
     def _handle_start_failure(self, detail: str) -> None:
         message = f"鸿蒙官方 HOScrcpy 不可用: {detail}"

@@ -1309,8 +1309,20 @@ async def screen_stream(
     current_count = _ws_connections.get(conn_key, 0)
 
     if current_count >= max_connections:
-        # 超过限制，拒绝连接（WebSocket Policy Violation）
-        await websocket.close(code=1008, reason="Max connections reached")
+        # 先完成 WebSocket 握手，再发送可被浏览器读取的结构化拒绝原因。
+        # 握手前关闭时浏览器通常只报告 1006，前端无法区分超限与网络故障。
+        try:
+            await websocket.accept()
+            await websocket.send_json(
+                {
+                    "type": "connection_rejected",
+                    "code": "MAX_CONNECTIONS_REACHED",
+                    "message": "该设备的 WebSocket 连接数已达上限，请先关闭其他连接",
+                }
+            )
+            await websocket.close(code=1008, reason="MAX_CONNECTIONS_REACHED")
+        except Exception:
+            logger.debug("WebSocket 超限拒绝通知发送失败: key=%s", conn_key, exc_info=True)
         return
 
     # 先同步占位再 accept：检查与写入之间不能插入 await，否则两个并发

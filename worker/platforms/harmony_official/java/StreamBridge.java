@@ -130,6 +130,16 @@ public final class StreamBridge {
                     ready.countDown();
                 }
             };
+            // 与官方桌面入口保持一致：启动前先清理设备上可能遗留的采集会话。
+            // 清理失败时继续尝试启动，让 SDK 自己报告当前设备状态。
+            try {
+                device.stopCaptureScreen();
+            } catch (Throwable throwable) {
+                System.err.printf(
+                        "PRE_START_STOP_FAILED serial=%s error=%s%n",
+                        serial,
+                        safeMessage(throwable));
+            }
             device.startCaptureScreen(callback);
 
             if (!ready.await(30, TimeUnit.SECONDS)) {
