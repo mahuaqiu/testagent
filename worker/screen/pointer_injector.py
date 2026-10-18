@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # 队列深度上限；溢出时优先丢最旧的 move，绝不丢 down/up
 _MAX_PENDING = 64
 # 单事件注入耗时告警阈值
-_SLOW_INJECT_MS = 50
+_SLOW_INJECT_MS = 500
 # 合帧回退：位移低于该值（设备像素）视为点击
 _CLICK_MAX_DISTANCE = 24.0
 
