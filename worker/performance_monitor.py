@@ -6,6 +6,7 @@
 
 import logging
 import threading
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -17,6 +18,9 @@ from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 
 logger = logging.getLogger(__name__)
+
+# 鸿蒙后端的进程检查节奏；性能样本仍按请求的 interval 排空和上报。
+HARMONY_HEARTBEAT_INTERVAL_SECS = 10.0
 
 
 class ProcessInfo(BaseModel):
@@ -432,21 +436,34 @@ class PerformanceCollector:
 
     def _collect_loop(self) -> None:
         """采集循环（后台线程）。"""
+        next_collect_at = time.monotonic() + self._interval
+        is_harmony = self._device_type in ("harmony_pc", "harmony_mobile")
+        next_heartbeat_at = (
+            time.monotonic() + HARMONY_HEARTBEAT_INTERVAL_SECS if is_harmony else None
+        )
         while not self._stop_event.is_set():
-            # 等待采集间隔
-            self._stop_event.wait(self._interval)
-
-            if self._stop_event.is_set():
+            now = time.monotonic()
+            next_wakeup_at = next_collect_at
+            if next_heartbeat_at is not None:
+                next_wakeup_at = min(next_wakeup_at, next_heartbeat_at)
+            if self._stop_event.wait(max(0.0, next_wakeup_at - now)):
                 break
 
             try:
-                # 精准模式后端按 30s 节奏复核 PID（fuzzy 后端为 no-op）。
+                now = time.monotonic()
                 backend = self._backend
-                if backend is not None and hasattr(backend, "heartbeat"):
-                    backend.heartbeat()
-                # 先发送历史 spool，再读取本轮增量数据。
-                self._flush_spool()
-                self._drain_backend_buffer()
+                if (
+                    next_heartbeat_at is not None
+                    and now >= next_heartbeat_at
+                ):
+                    if backend is not None and hasattr(backend, "heartbeat"):
+                        backend.heartbeat()
+                    next_heartbeat_at = time.monotonic() + HARMONY_HEARTBEAT_INTERVAL_SECS
+                if now >= next_collect_at:
+                    # 先发送历史 spool，再读取本轮增量数据。
+                    self._flush_spool()
+                    self._drain_backend_buffer()
+                    next_collect_at = time.monotonic() + self._interval
             except Exception as error:
                 collect_id = self._collect_id
                 logger.error(f"采集线程异常: {error}", exc_info=True)

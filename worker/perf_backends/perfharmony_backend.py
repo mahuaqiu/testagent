@@ -9,8 +9,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 精准模式 PID 复核周期（秒）；应用未启动时也按此节奏探测。
-PID_CHECK_INTERVAL_SECS = 30.0
+# 精准模式 PID 和模糊模式目标进程列表统一复核周期（秒）。
+PID_CHECK_INTERVAL_SECS = 10.0
+FUZZY_PROCESS_CHECK_INTERVAL_SECS = 10.0
 
 
 class _EmptyResult:
@@ -28,9 +29,10 @@ class PerfharmonyBackend:
 
     SP_daemon 为设备级单例（真机实证：新实例会把旧实例顶掉），一次采集
     仅支持一个应用。match_mode：
-    - fuzzy：设备端 SP_daemon -PKG 按包名采集（自动含主进程+子进程）；
+    - fuzzy：设备端 SP_daemon -PKG 按包名采集（自动含主进程+子进程），每 10 秒
+      检查目标进程列表，列表变化时重启采集流以纳入新进程；
     - exact：ps -ef 精确解析 PID 后 SP_daemon -PID 单进程采集；
-      应用未启动时先仅采系统指标，heartbeat 每 30s 复核，
+      应用未启动时先仅采系统指标，heartbeat 每 10 秒复核，
       PID 出现/变化时自动重启跟随（旧样本暂存不丢）。
     """
 
@@ -47,6 +49,9 @@ class PerfharmonyBackend:
         self._deadline: float | None = None
         self._stopped: bool = False
         self._last_pid_check: float = 0.0
+        self._last_fuzzy_process_check: float = 0.0
+        self._fuzzy_processes: tuple[tuple[int, str], ...] | None = None
+        self._fuzzy_process_check_failed: bool = False
         self._restarting: bool = False
         self._pending: list = []
 
@@ -76,7 +81,15 @@ class PerfharmonyBackend:
             self._pid = self._resolve_pid(package)
         self._stopped = False
         self._deadline = time.monotonic() + duration if duration else None
-        self._last_pid_check = time.monotonic()
+        now = time.monotonic()
+        self._last_pid_check = now
+        self._last_fuzzy_process_check = now
+        self._fuzzy_processes = (
+            self._read_fuzzy_processes()
+            if self._match_mode == "fuzzy" and package
+            else None
+        )
+        self._fuzzy_process_check_failed = False
         self._start_monitor()
 
     def _remaining_duration(self) -> float | None:
@@ -85,7 +98,7 @@ class PerfharmonyBackend:
             return None
         return self._deadline - time.monotonic()
 
-    def _start_monitor(self) -> None:
+    def _start_monitor(self) -> bool:
         """按当前 package/pid 组合启动 Monitor；exact 未命中 PID 时仅采系统指标。
 
         duration 取距离 deadline 的剩余时间：PID 跟随重启不再按全额 timeout
@@ -93,11 +106,11 @@ class PerfharmonyBackend:
         """
         if self._stopped:
             logger.info("鸿蒙采集已停止，跳过 Monitor 重启")
-            return
+            return False
         remaining = self._remaining_duration()
         if remaining is not None and remaining <= 0:
             logger.info("鸿蒙采集已到 timeout，跳过 Monitor 重启")
-            return
+            return False
         perfharmony = self._module()
         self._monitor = perfharmony.Monitor(
             udid=self.udid,
@@ -108,16 +121,89 @@ class PerfharmonyBackend:
             pid=self._pid,
         )
         self._monitor.start()
+        return True
 
     def heartbeat(self) -> None:
-        """精准模式下按 30s 节奏复核 PID；由采集循环在每轮排空前调用。
+        """定期复核目标进程；由 Worker 采集循环按最多 10s 节奏调用。
 
-        PID 出现/变化时：暂存旧样本 → 停旧流 → 以新 PID 重启
-        （新 Monitor 启动前的设备级 -stop 会顺带清掉旧实例）。
+        模糊模式目标进程列表变化、或精准模式 PID 出现/变化时，停止旧流并
+        使用新进程状态重启 SP_daemon；旧流样本保留在待上报队列中。
         """
+        self._check_fuzzy_processes()
         if self._check_pid_due_and_prepare():
             self._start_monitor()
             self._restarting = False
+
+    def _check_fuzzy_processes(self) -> None:
+        """模糊模式按周期检查同包名进程；变化时重启采集流。"""
+        if self._stopped or self._match_mode != "fuzzy" or not self._package:
+            return
+        now = time.monotonic()
+        if now - self._last_fuzzy_process_check < FUZZY_PROCESS_CHECK_INTERVAL_SECS:
+            return
+        self._last_fuzzy_process_check = now
+        current = self._read_fuzzy_processes()
+        if current is None:
+            if not self._fuzzy_process_check_failed:
+                logger.warning(
+                    "鸿蒙模糊采集目标进程列表读取失败: device_sn=%s package=%s",
+                    self.udid,
+                    self._package,
+                )
+            self._fuzzy_process_check_failed = True
+            return
+        self._fuzzy_process_check_failed = False
+        if self._stopped:
+            return
+
+        previous = self._fuzzy_processes
+        if previous is None:
+            self._fuzzy_processes = current
+            return
+        if current == previous:
+            return
+
+        self._restarting = True
+        old = self._monitor
+        if old is not None:
+            old.stop()
+            self._stash_pending(old)
+        self._fuzzy_processes = current
+        started = self._start_monitor()
+        self._restarting = False
+        if not started:
+            return
+        logger.info(
+            "鸿蒙模糊采集检测到目标进程变化，已重启 SP_daemon: "
+            "device_sn=%s package=%s previous=%s current=%s",
+            self.udid,
+            self._package,
+            previous,
+            current,
+        )
+
+    def _read_fuzzy_processes(self) -> tuple[tuple[int, str], ...] | None:
+        """读取目标包名及子进程；排除 SP_daemon 自身，避免重启反馈循环。"""
+        try:
+            processes = self.list_processes()
+        except Exception as error:
+            logger.debug("读取鸿蒙模糊采集进程列表失败: %s", error)
+            return None
+        return tuple(
+            sorted(
+                (int(pid), name)
+                for pid, name in processes
+                if not self._is_sp_daemon_process(name)
+                and self._bundle_base(name) == self._package
+            )
+        )
+
+    @staticmethod
+    def _is_sp_daemon_process(name: str) -> bool:
+        """判断进程显示名是否为 SP_daemon。"""
+        executable = name.strip().split(maxsplit=1)[0] if name.strip() else ""
+        executable = executable.replace("\\", "/").rsplit("/", 1)[-1]
+        return executable.casefold() in {"sp_daemon", "spdaemon"}
 
     def _check_pid_due_and_prepare(self) -> bool:
         """复核 PID 是否出现/变化；变化则做好准备（暂存+停旧+更新 PID）。
@@ -142,8 +228,8 @@ class PerfharmonyBackend:
         # 重启窗口期视为运行中，避免外层采集循环误判终态。
         self._restarting = True
         if old is not None:
-            self._stash_pending(old)
             old.stop()
+            self._stash_pending(old)
         self._pid = pid
         return True
 
@@ -189,7 +275,7 @@ class PerfharmonyBackend:
 
     def buffer_len(self) -> int:
         """返回待上报样本数。"""
-        return self._monitor.buffer_len() if self._monitor else 0
+        return len(self._pending) + (self._monitor.buffer_len() if self._monitor else 0)
 
     def get_result(self) -> Any:
         """读取并排空增量采样结果；含换 PID 前暂存的旧样本。"""
