@@ -198,21 +198,40 @@ class PasteAction(BaseActionExecutor):
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
-        # 检查 pyperclip 是否可用
-        if not PYPERCLIP_AVAILABLE:
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.FAILED,
-                error="pyperclip not available",
-            )
-
         if not action.text:
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="text is required for paste",
+            )
+
+        # Windows 字母和数字直接注入，避免 Ctrl+V 被误识别为普通 V。
+        if getattr(platform, "platform", "") == "windows":
+            try:
+                platform.input_text(action.text, context)
+            except Exception as e:
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.FAILED,
+                    error=f"文本输入失败: {e}",
+                )
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.SUCCESS,
+                output="已输入文本",
+                timestamp=_get_timestamp(),
+            )
+
+        # 非 Windows 平台保留原剪贴板粘贴路径。
+        if not PYPERCLIP_AVAILABLE:
+            return ActionResult(
+                number=0,
+                action_type=self.name,
+                status=ActionStatus.FAILED,
+                error="pyperclip not available",
             )
 
         # 使用剪贴板粘贴（增加异常处理）

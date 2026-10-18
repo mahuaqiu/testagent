@@ -65,6 +65,23 @@ logger = logging.getLogger(__name__)
 # WebSocket 连接计数器
 _ws_connections: dict[str, int] = {}
 
+
+def _release_ws_connection_slot(conn_key: str) -> int:
+    """释放已占用的 WebSocket 连接名额，并返回剩余数量。"""
+    current_count = _ws_connections.get(conn_key)
+    if current_count is None or current_count <= 0:
+        logger.warning("WebSocket 连接计数缺失或无效: key=%s, count=%s", conn_key, current_count)
+        _ws_connections.pop(conn_key, None)
+        return 0
+
+    remaining = current_count - 1
+    if remaining == 0:
+        _ws_connections.pop(conn_key, None)
+    else:
+        _ws_connections[conn_key] = remaining
+    logger.info("WebSocket connection slot released: key=%s, count=%d", conn_key, remaining)
+    return remaining
+
 # 默认 WebSocket 配置（会被 worker.config 覆盖）
 DEFAULT_WS_MAX_CONNECTIONS = 3
 DEFAULT_WS_SEND_TIMEOUT = 30
@@ -1309,6 +1326,12 @@ async def screen_stream(
     current_count = _ws_connections.get(conn_key, 0)
 
     if current_count >= max_connections:
+        logger.warning(
+            "WebSocket connection rejected: key=%s, active=%d, limit=%d",
+            conn_key,
+            current_count,
+            max_connections,
+        )
         # 先完成 WebSocket 握手，再发送可被浏览器读取的结构化拒绝原因。
         # 握手前关闭时浏览器通常只报告 1006，前端无法区分超限与网络故障。
         try:
@@ -1331,11 +1354,7 @@ async def screen_stream(
     try:
         await websocket.accept()
     except Exception:
-        remaining = _ws_connections.get(conn_key, 1) - 1
-        if remaining <= 0:
-            _ws_connections.pop(conn_key, None)
-        else:
-            _ws_connections[conn_key] = remaining
+        _release_ws_connection_slot(conn_key)
         raise
 
     # 日志显示 monitor 参数
@@ -1351,13 +1370,6 @@ async def screen_stream(
     # 实时指针注入器：浏览器逐事件下发 down/move/up/wheel（替代 mouseup 才发
     # 一条 REST 手势）。仅支持的平台创建；线程在连接关闭时补发安全抬起。
     pointer_injector: PointerInjector | None = None
-    if _realtime_input_enabled():
-        pointer_injector = _create_pointer_injector(platform, device_id, monitor)
-        if pointer_injector is not None:
-            pointer_injector.start()
-            logger.info(
-                "实时指针注入已启用: platform=%s, device=%s", platform, log_device
-            )
 
     async def receive_activity() -> None:
         """接收前端活动信号与实时指针事件；推流帧本身不刷新空闲时间。"""
@@ -1426,6 +1438,15 @@ async def screen_stream(
     h264_diag_first_video_at = None
     h264_diag_packet_types: list[str] = []
     try:
+        # 放进主 try/finally：注入器构造或启动失败时也必须释放连接名额。
+        if _realtime_input_enabled():
+            pointer_injector = _create_pointer_injector(platform, device_id, monitor)
+            if pointer_injector is not None:
+                pointer_injector.start()
+                logger.info(
+                    "实时指针注入已启用: platform=%s, device=%s", platform, log_device
+                )
+
         # 获取 ScreenManager
         from worker.screen.manager import get_existing_screen_manager, get_screen_manager
 
@@ -2010,75 +2031,79 @@ async def screen_stream(
         else:
             logger.error(f"WebSocket error: {e}")
     finally:
-        stream_stop_event.set()
-        background_tasks = tuple(
-            task for task in (activity_task, idle_watchdog_task) if task is not None
-        )
-        for background_task in background_tasks:
-            if not background_task.done():
-                background_task.cancel()
-        if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-        # 注入器关闭会排空队列并对按住的按键补发抬起，防止设备端按键卡死
-        if pointer_injector is not None:
-            pointer_injector.close()
-        if h264_queue is not None:
-            logger.info(
-                "鸿蒙 H.264 WebSocket 发送统计: conn_key=%s, packets=%d, bytes=%d, "
-                "first_packet_ms=%s, first_video_ms=%s, first_types=%s",
-                conn_key,
-                h264_diag_sent_packets,
-                h264_diag_sent_bytes,
-                f"{(h264_diag_first_packet_at - h264_diag_started_at) * 1000:.1f}"
-                if h264_diag_started_at is not None and h264_diag_first_packet_at is not None
-                else "none",
-                f"{(h264_diag_first_video_at - h264_diag_started_at) * 1000:.1f}"
-                if h264_diag_started_at is not None and h264_diag_first_video_at is not None
-                else "none",
-                ",".join(h264_diag_packet_types) or "none",
+        try:
+            stream_stop_event.set()
+            background_tasks = tuple(
+                task for task in (activity_task, idle_watchdog_task) if task is not None
             )
-        if h264_subscriber_id and frame_source is not None:
-            try:
-                frame_source.unsubscribe_h264(h264_subscriber_id)
-            except Exception as exc:
-                logger.warning("取消鸿蒙 H.264 订阅失败: %s", exc)
-        if direct_h264_frame_source and frame_source is not None:
-            try:
-                frame_source.stop()
-            except Exception as exc:
-                logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
-        if harmony_remote_session_manager is not None and harmony_remote_session_owner:
-            try:
-                harmony_remote_session_manager.release_official_session(
-                    device_id,
-                    harmony_remote_session_owner,
+            for background_task in background_tasks:
+                if not background_task.done():
+                    background_task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
+            # 注入器关闭会排空队列并对按住的按键补发抬起，防止设备端按键卡死
+            if pointer_injector is not None:
+                pointer_injector.close()
+            if h264_queue is not None:
+                logger.info(
+                    "鸿蒙 H.264 WebSocket 发送统计: conn_key=%s, packets=%d, bytes=%d, "
+                    "first_packet_ms=%s, first_video_ms=%s, first_types=%s",
+                    conn_key,
+                    h264_diag_sent_packets,
+                    h264_diag_sent_bytes,
+                    f"{(h264_diag_first_packet_at - h264_diag_started_at) * 1000:.1f}"
+                    if h264_diag_started_at is not None and h264_diag_first_packet_at is not None
+                    else "none",
+                    f"{(h264_diag_first_video_at - h264_diag_started_at) * 1000:.1f}"
+                    if h264_diag_started_at is not None and h264_diag_first_video_at is not None
+                    else "none",
+                    ",".join(h264_diag_packet_types) or "none",
                 )
-            except Exception as exc:
-                logger.warning("释放远程 WebSocket 鸿蒙官方会话租约失败: %s", exc)
-        # 确保减少连接计数（并发下计数可能已被清理，用 pop 兜底）
-        remaining = _ws_connections.get(conn_key, 1) - 1
+            if h264_subscriber_id and frame_source is not None:
+                try:
+                    frame_source.unsubscribe_h264(h264_subscriber_id)
+                except Exception as exc:
+                    logger.warning("取消鸿蒙 H.264 订阅失败: %s", exc)
+            if direct_h264_frame_source and frame_source is not None:
+                try:
+                    frame_source.stop()
+                except Exception as exc:
+                    logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
+            if harmony_remote_session_manager is not None and harmony_remote_session_owner:
+                try:
+                    harmony_remote_session_manager.release_official_session(
+                        device_id,
+                        harmony_remote_session_owner,
+                    )
+                except Exception as exc:
+                    logger.warning("释放远程 WebSocket 鸿蒙官方会话租约失败: %s", exc)
+        finally:
+            # 即使停止推流、注入器或后台任务清理失败，也不能遗留连接计数。
+            remaining = _release_ws_connection_slot(conn_key)
+            try:
+                # 计数归零时同步关闭帧源；这段与名额释放之间不含 await，
+                # 避免新连接复用 ScreenManager 后被旧连接误关闭。
+                if remaining == 0:
+                    if direct_h264_frame_source:
+                        # 官方 H.264 使用独立帧源，不创建 ScreenManager。
+                        pass
+                    elif platform == "windows":
+                        from worker.screen.windows_sidecar import close_windows_sidecar_manager
 
-        # 当连接计数降至 0 时，关闭 ScreenManager 以停止后台帧捕获线程
-        if remaining <= 0:
-            _ws_connections.pop(conn_key, None)
-            if direct_h264_frame_source:
-                # 官方 H.264 使用独立帧源，不创建 ScreenManager。
-                pass
-            elif platform == "windows":
-                from worker.screen.windows_sidecar import close_windows_sidecar_manager
+                        close_windows_sidecar_manager(conn_key)
+                    else:
+                        # 关闭 ScreenManager（停止后台线程，避免资源泄漏）
+                        from worker.screen.manager import close_screen_manager
 
-                close_windows_sidecar_manager(conn_key)
-            else:
-                # 关闭 ScreenManager（停止后台线程，避免资源泄漏）
-                from worker.screen.manager import close_screen_manager
-
-                close_screen_manager(conn_key)
-            if not direct_h264_frame_source:
+                        close_screen_manager(conn_key)
+                    if not direct_h264_frame_source:
+                        logger.info(
+                            "ScreenManager closed: conn_key=%s, last WebSocket disconnected",
+                            conn_key,
+                        )
+            finally:
                 log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
-                logger.info(f"ScreenManager closed: conn_key={conn_key}, last WebSocket disconnected")
-
-        log_device = f"{device_id}/{monitor}" if platform in ("windows", "mac") else device_id
-        logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
+                logger.info(f"WebSocket connection closed: platform={platform}, device={log_device}")
 
 
 def _realtime_input_enabled() -> bool:

@@ -295,7 +295,10 @@ class WindowsPlatformManager(PlatformManager):
         return convert_to_global_coords(x, y, monitor or self._current_monitor)
 
     def input_text(self, text: str, context: Any = None) -> None:
-        """输入文本（使用剪贴板粘贴，支持特殊字符）。"""
+        """输入文本：字母和数字直接注入，其他字符使用剪贴板。"""
+        if text.isascii() and text.isalnum():
+            pyautogui.write(text, interval=0.01)
+            return
         pyperclip.copy(text)
         pyautogui.hotkey('ctrl', 'v')
 

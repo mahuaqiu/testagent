@@ -652,11 +652,21 @@ class HarmonyOfficialSession:
                         len(packet) - 1,
                     )
                 if frame_type == 0x01:
+                    previous_config = self._latest_h264_config
                     self._latest_h264_config = packet
-                    # 参数集变化后，旧 IDR 可能与新的 SPS/PPS 不匹配，不能跨参数集回放。
-                    self._latest_h264_keyframe = None
+                    if previous_config is not None and previous_config != packet:
+                        # 已有参数集发生变化时，旧 IDR 可能无法用新参数集解码。
+                        self._latest_h264_keyframe = None
+                    # 首组 SPS/PPS 可能晚于 SDK 首个 IDR 回调；此时保留此前的
+                    # IDR，下面会在参数集之后补发，避免静态画面等待下一个 IDR。
+                    pending_keyframe = (
+                        self._latest_h264_keyframe if previous_config is None else None
+                    )
                 elif frame_type == 0x02:
                     self._latest_h264_keyframe = packet
+                    pending_keyframe = None
+                else:
+                    pending_keyframe = None
                 for subscriber in subscribers:
                     if frame_type == 0x03 and (
                         not subscriber.has_config or subscriber.waiting_for_keyframe
@@ -694,6 +704,47 @@ class HarmonyOfficialSession:
                         if frame_type == 0x01:
                             subscriber.has_config = True
                             subscriber.waiting_for_keyframe = True
+                            if pending_keyframe is not None:
+                                try:
+                                    self._enqueue_h264_packet(subscriber, pending_keyframe)
+                                except Full:
+                                    subscriber.queue_full_events += 1
+                                    was_waiting_for_keyframe = subscriber.waiting_for_keyframe
+                                    recovered_keyframe = self._recover_h264_subscriber(
+                                        subscriber,
+                                        0x02,
+                                        pending_keyframe,
+                                    )
+                                    if recovered_keyframe:
+                                        retry_timer = self._h264_idr_retry_timers.pop(
+                                            subscriber.subscriber_id, None
+                                        )
+                                        self._h264_idr_retry_counts.pop(
+                                            subscriber.subscriber_id, None
+                                        )
+                                        if retry_timer:
+                                            cancel_retry_timers.append(retry_timer)
+                                    else:
+                                        request_idr = (
+                                            request_idr or not was_waiting_for_keyframe
+                                        )
+                                else:
+                                    subscriber.waiting_for_keyframe = False
+                                    logger.info(
+                                        "鸿蒙 H.264 首组 SPS/PPS 晚于 IDR，已按解码顺序补发: "
+                                        "serial=%s, subscriber=%s, idr_bytes=%d",
+                                        self.serial,
+                                        subscriber.subscriber_id,
+                                        len(pending_keyframe) - 1,
+                                    )
+                                    retry_timer = self._h264_idr_retry_timers.pop(
+                                        subscriber.subscriber_id, None
+                                    )
+                                    self._h264_idr_retry_counts.pop(
+                                        subscriber.subscriber_id, None
+                                    )
+                                    if retry_timer:
+                                        cancel_retry_timers.append(retry_timer)
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
                             retry_timer = self._h264_idr_retry_timers.pop(
@@ -721,9 +772,12 @@ class HarmonyOfficialSession:
             for packet in packets:
                 frame_type = packet[0]
                 if frame_type == 0x01:
+                    previous_config = self._latest_h264_config
                     self._latest_h264_config = packet
-                    # 参数集变化后，旧 IDR 可能与新的 SPS/PPS 不匹配，不能跨参数集回放。
-                    self._latest_h264_keyframe = None
+                    if previous_config is not None and previous_config != packet:
+                        # 仅在已有参数集确实变化时作废 IDR；首组参数集可能晚于
+                        # 首个关键帧到达，不能把同一会话的起播 IDR 一并清掉。
+                        self._latest_h264_keyframe = None
                 elif frame_type == 0x02:
                     self._latest_h264_keyframe = packet
 
