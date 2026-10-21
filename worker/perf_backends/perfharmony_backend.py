@@ -50,7 +50,7 @@ class PerfharmonyBackend:
         self._stopped: bool = False
         self._last_pid_check: float = 0.0
         self._last_fuzzy_process_check: float = 0.0
-        self._fuzzy_processes: tuple[tuple[int, str], ...] | None = None
+        self._fuzzy_processes: tuple[str, ...] | None = None
         self._fuzzy_process_check_failed: bool = False
         self._restarting: bool = False
         self._pending: list = []
@@ -182,8 +182,8 @@ class PerfharmonyBackend:
             current,
         )
 
-    def _read_fuzzy_processes(self) -> tuple[tuple[int, str], ...] | None:
-        """读取目标包名及子进程；排除 SP_daemon 自身，避免重启反馈循环。"""
+    def _read_fuzzy_processes(self) -> tuple[str, ...] | None:
+        """读取目标包名及子进程名；排除 SP_daemon，忽略同名进程的 PID 轮换。"""
         try:
             processes = self.list_processes()
         except Exception as error:
@@ -191,10 +191,12 @@ class PerfharmonyBackend:
             return None
         return tuple(
             sorted(
-                (int(pid), name)
-                for pid, name in processes
-                if not self._is_sp_daemon_process(name)
-                and self._bundle_base(name) == self._package
+                {
+                    name
+                    for _, name in processes
+                    if not self._is_sp_daemon_process(name)
+                    and self._bundle_base(name) == self._package
+                }
             )
         )
 

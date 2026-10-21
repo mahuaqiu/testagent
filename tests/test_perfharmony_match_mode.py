@@ -179,6 +179,37 @@ def test_fuzzy_mode_heartbeat_is_noop(fake_module):
     assert len(FakeMonitor.created) == 1
 
 
+def test_fuzzy_mode_ignores_pid_churn_and_restarts_for_new_process_name(
+    fake_module, monkeypatch
+):
+    """同名进程 PID 轮换不重启；出现新子进程名时重启采集。"""
+    clock = _install_fake_clock(monkeypatch)
+    FakeMonitor.ps_list = [
+        (12163, "com.app"),
+        (12774, "com.app"),
+        (900, "SP_daemon"),
+    ]
+    backend = PerfharmonyBackend(udid="SN1")
+    backend.start(interval=5, duration=3600, package="com.app", match_mode="fuzzy")
+
+    clock["now"] += 11
+    FakeMonitor.ps_list = [
+        (12163, "com.app"),
+        (12938, "com.app"),
+        (901, "SP_daemon"),
+    ]
+    backend.heartbeat()
+    assert len(FakeMonitor.created) == 1
+    assert FakeMonitor.created[0].stopped is False
+
+    clock["now"] += 11
+    FakeMonitor.ps_list.append((13058, "com.app:gpu"))
+    backend.heartbeat()
+    assert len(FakeMonitor.created) == 2
+    assert FakeMonitor.created[0].stopped is True
+    assert FakeMonitor.created[1].kwargs["package"] == "com.app"
+
+
 
 
 # ---------------------------------------------------------------------------
