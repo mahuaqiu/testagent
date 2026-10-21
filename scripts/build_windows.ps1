@@ -4,7 +4,7 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
-    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.3.1-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
+    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.3.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
     [string]$JavaRuntimePath = "D:\Program Files\jdk",  # JRE/JDK 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
     [string]$JavaCompilerPath = "D:\Program Files\jdk",  # JDK 根目录或 javac.exe 路径；未指定时从 PATH 查找
