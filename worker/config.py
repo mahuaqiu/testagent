@@ -42,7 +42,6 @@ from worker.constants import (
     DEFAULT_WEBSOCKET_IDLE_TIMEOUT_SECONDS,
     DEFAULT_WEBSOCKET_SEND_TIMEOUT_SECONDS,
     DEFAULT_WEBSOCKET_STREAMING_BITRATE,
-    DEFAULT_WEBSOCKET_STREAMING_CODEC,
     DEFAULT_WEBSOCKET_STREAMING_FPS,
     DEFAULT_WEBSOCKET_STREAMING_PROFILE,
     LOG_LEVEL_OPTIONS,
@@ -132,7 +131,6 @@ class WorkerConfig:
     websocket_send_timeout_seconds: int = DEFAULT_WEBSOCKET_SEND_TIMEOUT_SECONDS
     websocket_idle_timeout_seconds: int = DEFAULT_WEBSOCKET_IDLE_TIMEOUT_SECONDS
     websocket_streaming_fps: int = DEFAULT_WEBSOCKET_STREAMING_FPS
-    websocket_streaming_codec: str = DEFAULT_WEBSOCKET_STREAMING_CODEC
     websocket_streaming_bitrate: int = DEFAULT_WEBSOCKET_STREAMING_BITRATE
     websocket_streaming_profile: int = DEFAULT_WEBSOCKET_STREAMING_PROFILE
 
@@ -771,6 +769,7 @@ def merge_config_with_local_protection(
 
     保留字段（不被远程配置覆盖）：
     - worker.ip: 本机 IP 地址
+    - worker.port: 本机 HTTP 服务端口
     - worker.discover_android_devices: Android 设备发现开关
     - worker.discover_ios_devices: iOS 设备发现开关
     - worker.discover_harmony_mobile_devices: 鸿蒙移动设备发现开关
@@ -801,6 +800,7 @@ def merge_config_with_local_protection(
     # 保留字段列表（不被远程配置覆盖）
     preserved_fields = [
         "ip",
+        "port",
         "discover_android_devices",
         "discover_ios_devices",
         "discover_harmony_mobile_devices",

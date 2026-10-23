@@ -791,6 +791,9 @@ def test_session_lease_stops_bridge_after_last_consumer() -> None:
 
     manager = HarmonyOfficialSessionManager("harmony_mobile")
     manager.set_hdc_path("hdc.exe")
+    # 空闲释放只响应 release() 登记的真实计时器线程（_release_idle_session
+    # 校验 current_thread 身份），这里把空闲超时压到下限后等待计时器触发。
+    manager._settings["idle_timeout_seconds"] = 0
     fake = FakeSession()
     manager._sessions["device-1"] = fake  # type: ignore[assignment]
 
@@ -800,31 +803,11 @@ def test_session_lease_stops_bridge_after_last_consumer() -> None:
     manager.release("device-1", "task:1")
     assert fake.stop_count == 0
     manager.release("device-1", "stream:1")
-    manager._release_idle_session("device-1")
+    deadline = time.monotonic() + 2.0
+    while fake.stop_count == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert fake.stop_count == 1
     assert manager.get("device-1") is None
-    manager.stop_all()
-
-
-def test_repeated_prewarm_does_not_extend_idle_timer() -> None:
-    class FakeSession:
-        is_running = True
-
-        def stop(self) -> None:
-            pass
-
-    manager = HarmonyOfficialSessionManager(
-        "harmony_mobile",
-        {"idle_timeout_seconds": 600},
-    )
-    manager.set_hdc_path("hdc.exe")
-    manager._sessions["device-1"] = FakeSession()  # type: ignore[assignment]
-
-    manager.prewarm("device-1")
-    first_timer = manager._idle_timers["device-1"]
-    manager.prewarm("device-1")
-
-    assert manager._idle_timers["device-1"] is first_timer
     manager.stop_all()
 
 

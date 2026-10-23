@@ -594,16 +594,16 @@ class DeviceMonitor:
                 self._faulty_ios_devices.append({"udid": udid, "connection_status": "disconnected"})
 
     def get_all_devices(self) -> dict[str, Any]:
-        """获取所有设备状态。"""
+        """获取所有设备状态（返回列表浅拷贝，隔离监控线程的并发修改）。"""
         return {
-            "android": self._android_devices,
-            "ios": self._ios_devices,
-            "harmony_mobile": self._harmony_mobile_devices,
-            "harmony_pc": self._harmony_pc_devices,
-            "faulty_android": self._faulty_android_devices,
-            "faulty_ios": self._faulty_ios_devices,
-            "faulty_harmony_mobile": self._faulty_harmony_mobile_devices,
-            "faulty_harmony_pc": self._faulty_harmony_pc_devices,
+            "android": list(self._android_devices),
+            "ios": list(self._ios_devices),
+            "harmony_mobile": list(self._harmony_mobile_devices),
+            "harmony_pc": list(self._harmony_pc_devices),
+            "faulty_android": list(self._faulty_android_devices),
+            "faulty_ios": list(self._faulty_ios_devices),
+            "faulty_harmony_mobile": list(self._faulty_harmony_mobile_devices),
+            "faulty_harmony_pc": list(self._faulty_harmony_pc_devices),
         }
 
     def get_known_device_ids(self, platform: str) -> list[str]:

@@ -80,6 +80,7 @@ class PerfharmonyBackend:
         if self._match_mode == "exact" and package:
             self._pid = self._resolve_pid(package)
         self._stopped = False
+        self._restarting = False
         self._deadline = time.monotonic() + duration if duration else None
         now = time.monotonic()
         self._last_pid_check = now
@@ -131,8 +132,10 @@ class PerfharmonyBackend:
         """
         self._check_fuzzy_processes()
         if self._check_pid_due_and_prepare():
-            self._start_monitor()
-            self._restarting = False
+            try:
+                self._start_monitor()
+            finally:
+                self._restarting = False
 
     def _check_fuzzy_processes(self) -> None:
         """模糊模式按周期检查同包名进程；变化时重启采集流。"""
@@ -164,13 +167,15 @@ class PerfharmonyBackend:
             return
 
         self._restarting = True
-        old = self._monitor
-        if old is not None:
-            old.stop()
-            self._stash_pending(old)
-        self._fuzzy_processes = current
-        started = self._start_monitor()
-        self._restarting = False
+        try:
+            old = self._monitor
+            if old is not None:
+                old.stop()
+                self._stash_pending(old)
+            self._fuzzy_processes = current
+            started = self._start_monitor()
+        finally:
+            self._restarting = False
         if not started:
             return
         logger.info(
@@ -227,12 +232,13 @@ class PerfharmonyBackend:
             return False
         logger.info("鸿蒙精准采集 PID 变更: %s -> %s，重启采集流", self._pid, pid)
         old = self._monitor
-        # 重启窗口期视为运行中，避免外层采集循环误判终态。
-        self._restarting = True
         if old is not None:
             old.stop()
             self._stash_pending(old)
         self._pid = pid
+        # 重启窗口期视为运行中，避免外层采集循环误判终态。
+        # 标志放在停流成功之后、return 之前赋值，中途抛错时不会滞留 True。
+        self._restarting = True
         return True
 
     def _resolve_pid(self, package: str) -> int | None:

@@ -969,11 +969,9 @@ class HarmonyOfficialSessionManager:
         "bridge_class_path": DEFAULT_HARMONY_BRIDGE_REL_PATH,
         "startup_timeout_seconds": 35,
         "idle_timeout_seconds": 60,
-        "prewarm_failure_cooldown_seconds": 60,
         "input_ready_delay_seconds": 1.5,
         "reconnect_attempts": 3,
         "reconnect_backoff_seconds": 0.5,
-        "prewarm_on_device_ready": False,
         "frame_queue_capacity": 2,
         "backpressure_log_interval_seconds": H264_BACKPRESSURE_LOG_INTERVAL_SECONDS,
         "image_scale_size": 720,
@@ -990,23 +988,18 @@ class HarmonyOfficialSessionManager:
         # 才开始计算空闲释放时间，避免截图任务误杀正在推流的会话。
         self._owners: dict[str, set[str]] = {}
         self._idle_timers: dict[str, threading.Timer] = {}
-        self._prewarm_threads: dict[str, threading.Thread] = {}
-        self._prewarm_failure_until: dict[str, float] = {}
-        self._prewarm_generation = 0
+        # 管理器停机代次：stop_all 递增，作废所有正在进行的冷启动，
+        # 防止停机/升级期间启动完成的会话又被装回会话表。
+        self._stop_generation = 0
         # 单设备代次用于作废正在启动的会话；显式断开时，未完成的冷启动不得
         # 在断开接口返回后又被装回会话表。
         self._session_generations: dict[str, int] = {}
         self._stopping_sessions: set[str] = set()
         # per-serial 启动锁：start()（最长 startup_timeout×重试次数）在锁外执行，
-        # 只串行同一设备的并发启动，不阻塞其他设备的 acquire/订阅/预热。
+        # 只串行同一设备的并发启动，不阻塞其他设备的 acquire/订阅。
         self._start_locks: dict[str, threading.Lock] = {}
         self._device_lock_checker: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
-
-    @property
-    def prewarm_on_device_ready(self) -> bool:
-        """设备服务上线后是否后台预热官方 Java 会话。"""
-        return bool(self._settings["prewarm_on_device_ready"])
 
     def set_hdc_path(self, hdc_path: str | None) -> None:
         self._hdc_path = hdc_path
@@ -1041,11 +1034,11 @@ class HarmonyOfficialSessionManager:
 
         全局锁只保护会话字典的读写；耗时的 ``session.start()`` 在 per-serial
         启动锁下锁外执行，一台设备的启动（最长 startup_timeout×重试次数）不再
-        阻塞其他设备的 acquire/订阅/预热操作。
+        阻塞其他设备的 acquire/订阅操作。
         """
         try:
             with self._lock:
-                generation = self._prewarm_generation
+                generation = self._stop_generation
                 serial_generation = self._session_generations.get(serial, 0)
                 if serial in self._stopping_sessions:
                     return None
@@ -1058,13 +1051,13 @@ class HarmonyOfficialSessionManager:
             with self._lock:
                 current = self._sessions.get(serial)
                 if (
-                    generation == self._prewarm_generation
+                    generation == self._stop_generation
                     and serial_generation == self._session_generations.get(serial, 0)
                     and serial not in self._stopping_sessions
                     and current
                     and current.is_running
                 ):
-                    # 预热会话只需 Bridge 仍在运行即可复用；视频数据由真实的
+                    # 已运行的会话只需 Bridge 仍在运行即可复用；视频数据由真实的
                     # WebSocket 订阅消费，不能在这里阻塞等待消费者。
                     self._claim_owner_locked(serial, owner)
                     return current
@@ -1074,7 +1067,7 @@ class HarmonyOfficialSessionManager:
             with start_lock:
                 with self._lock:
                     if (
-                        generation != self._prewarm_generation
+                        generation != self._stop_generation
                         or serial_generation != self._session_generations.get(serial, 0)
                     ):
                         return None
@@ -1133,7 +1126,7 @@ class HarmonyOfficialSessionManager:
                         )
                         with self._lock:
                             invalidated = (
-                                generation != self._prewarm_generation
+                                generation != self._stop_generation
                                 or serial_generation
                                 != self._session_generations.get(serial, 0)
                             )
@@ -1145,7 +1138,7 @@ class HarmonyOfficialSessionManager:
                     with self._lock:
                         existing = self._sessions.get(serial)
                         if existing and existing.is_running:
-                            # 另一线程（如预热）已抢先装入新会话，丢弃本次重复启动。
+                            # 另一线程已抢先装入新会话，丢弃本次重复启动。
                             logger.debug(
                                 "鸿蒙官方会话已被并发启动，丢弃重复实例: serial=%s", serial
                             )
@@ -1160,7 +1153,7 @@ class HarmonyOfficialSessionManager:
                             self._claim_owner_locked(serial, owner)
                             return existing
                         if (
-                            generation != self._prewarm_generation
+                            generation != self._stop_generation
                             or serial_generation != self._session_generations.get(serial, 0)
                         ):
                             # 会话代次失效后，不把新会话装回字典。
@@ -1193,109 +1186,6 @@ class HarmonyOfficialSessionManager:
             session = self._sessions.get(serial)
             return session if session and session.is_running else None
 
-    def prewarm(self, serial: str, owner: str | None = None) -> None:
-        """后台预热官方会话，不阻塞当前鸿蒙动作。"""
-        if not self._hdc_path:
-            return
-        if self._is_device_locked(serial):
-            logger.debug("鸿蒙设备处于锁屏状态，跳过官方会话预热: serial=%s", serial)
-            return
-
-        with self._lock:
-            retry_after = self._prewarm_failure_until.get(serial, 0.0)
-            now = time.monotonic()
-            if retry_after > now:
-                logger.debug(
-                    "鸿蒙官方会话预热处于失败冷却，跳过本次启动: serial=%s, retry_after=%.1fs",
-                    serial,
-                    retry_after - now,
-                )
-                return
-            if owner:
-                self._owners.setdefault(serial, set()).add(owner)
-                self._cancel_idle_timer_locked(serial)
-            current = self._sessions.get(serial)
-            if current and current.is_running:
-                if not self._owners.get(serial):
-                    # 设备监控会周期性调用预热检查；已有空闲计时器时不能重复
-                    # 续期，否则“10 分钟无调用释放”会永远不会触发。
-                    if serial not in self._idle_timers:
-                        self._schedule_idle_release_locked(serial)
-                return
-            thread = self._prewarm_threads.get(serial)
-            if thread and thread.is_alive():
-                return
-            generation = self._prewarm_generation
-
-            def _run() -> None:
-                try:
-                    with self._lock:
-                        if generation != self._prewarm_generation:
-                            return
-                    # 预热只把 Java Bridge 启动到 SDK_READY。没有消费者时仍保持
-                    # 采集并丢弃视频数据，真正订阅到来时再从新的 IDR 起播。
-                    session = self.get_or_start(
-                        serial,
-                        retry_attempts=1,
-                    )
-                    if session is not None:
-                        stale_session = False
-                        with self._lock:
-                            self._prewarm_failure_until.pop(serial, None)
-                            if generation != self._prewarm_generation:
-                                stale_session = self._sessions.get(serial) is session
-                                if stale_session:
-                                    self._sessions.pop(serial, None)
-                                    self._owners.pop(serial, None)
-                            elif not self._owners.get(serial):
-                                self._schedule_idle_release_locked(serial)
-                        if stale_session:
-                            session.stop()
-                            return
-                        logger.info("鸿蒙官方会话后台预热完成: %s", serial)
-                    else:
-                        cooldown = max(
-                            0.0,
-                            float(self._settings["prewarm_failure_cooldown_seconds"]),
-                        )
-                        with self._lock:
-                            self._prewarm_failure_until[serial] = time.monotonic() + cooldown
-                        logger.warning(
-                            "鸿蒙官方会话后台预热未建立，%.0fs 内不再自动重试: serial=%s",
-                            cooldown,
-                            serial,
-                        )
-                        if owner:
-                            self.release(serial, owner)
-                except Exception as exc:
-                    # 预热失败不影响当前动作；短暂冷却避免设备维护重复拉起 Java。
-                    cooldown = max(
-                        0.0,
-                        float(self._settings["prewarm_failure_cooldown_seconds"]),
-                    )
-                    with self._lock:
-                        self._prewarm_failure_until[serial] = time.monotonic() + cooldown
-                    logger.warning(
-                        "鸿蒙官方会话后台预热失败，%.0fs 内不再自动重试: serial=%s, error=%s",
-                        cooldown,
-                        serial,
-                        exc,
-                    )
-                    if owner:
-                        self.release(serial, owner)
-                finally:
-                    with self._lock:
-                        if self._prewarm_threads.get(serial) is threading.current_thread():
-                            self._prewarm_threads.pop(serial, None)
-
-            thread = threading.Thread(
-                target=_run,
-                name=f"harmony-official-prewarm-{serial}",
-                daemon=True,
-            )
-            self._prewarm_threads[serial] = thread
-            thread.start()
-
     def acquire(
         self,
         serial: str,
@@ -1326,7 +1216,6 @@ class HarmonyOfficialSessionManager:
             self._stopping_sessions.add(serial)
             self._cancel_idle_timer_locked(serial)
             self._owners.pop(serial, None)
-            self._prewarm_failure_until.pop(serial, None)
             start_lock = self._start_locks.setdefault(serial, threading.Lock())
         # 与该设备的冷启动串行化，避免旧会话 stop 与新 SDK 启动重叠。
         with start_lock:
@@ -1390,7 +1279,6 @@ class HarmonyOfficialSessionManager:
                 if owners_set:
                     return {"stopped": False, "owners": sorted(owners_set)}
                 session = self._sessions.pop(serial, None)
-                self._prewarm_failure_until.pop(serial, None)
             if session:
                 logger.info("平台调试页断开，立即停止鸿蒙官方会话: serial=%s", serial)
                 session.stop()
@@ -1404,12 +1292,10 @@ class HarmonyOfficialSessionManager:
         with self._lock:
             sessions = list(self._sessions.values())
             timers = list(self._idle_timers.values())
-            self._prewarm_generation += 1
+            self._stop_generation += 1
             self._sessions.clear()
             self._owners.clear()
             self._idle_timers.clear()
-            self._prewarm_threads.clear()
-            self._prewarm_failure_until.clear()
         for timer in timers:
             timer.cancel()
         for session in sessions:

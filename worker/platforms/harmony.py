@@ -410,10 +410,6 @@ class HarmonyPlatformManager(PlatformManager):
         """升级或退出前立即停止本平台的 Java Bridge。"""
         self._official_sessions.stop_all()
 
-    def prewarm_official_session(self, udid: str, owner: str | None = None) -> None:
-        """后台预热官方 Java/采集链路，让后续截图或推流直接复用。"""
-        self._official_sessions.prewarm(udid, owner=owner)
-
     def _get_official_session_for_client(
         self,
         client: Any,
