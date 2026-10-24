@@ -449,16 +449,20 @@ def test_harmony_display_and_state_parse_real_had_w32_output() -> None:
     assert parse_harmony_screen_state("powerStatus=POWER_STATUS_OFF") == "SLEEP"
 
 
-def test_harmony_input_action_uses_located_coordinates() -> None:
+def test_harmony_input_action_clicks_focuses_then_types(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
-    calls: list[tuple[int, int, str]] = []
+    sleeps: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda seconds: sleeps.append(seconds))
+    calls: list[tuple[str, object]] = []
     client = SimpleNamespace(
-        input_text_at=lambda x, y, text: calls.append((x, y, text)) or True
+        tap=lambda x, y: calls.append(("tap", (x, y))) or True,
+        input_text=lambda text: calls.append(("input_text", text)) or True,
     )
 
     manager.input_text_at(23, 45, "中文 input", context=client)
 
-    assert calls == [(23, 45, "中文 input")]
+    assert calls == [("tap", (23, 45)), ("input_text", "中文 input")]
+    assert sleeps == [0.3]
 
 
 def test_harmony_device_info_uses_public_platform_type() -> None:

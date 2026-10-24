@@ -686,8 +686,10 @@ class HarmonyPlatformManager(PlatformManager):
         """文本输入。
 
         坐标 (0, 0) 作为哨兵：前端远程输入固定发送 (0, 0)+text，表示
-        "输入到当前聚焦框"，此时走 uitest uiInput text（焦点注入）；
-        有真实坐标时用 uitest uiInput inputText x y（坐标点输入）。
+        "输入到当前聚焦框"，此时直接走 uitest uiInput text（焦点注入）。
+        有真实坐标时与 Windows 平台行为一致：先点击聚焦，等待 0.3s 后
+        再走 uitest uiInput text 往聚焦框注入；不用 inputText <x> <y>
+        单步坐标注入（会把焦点重定向到坐标点，非输入框位置丢文本）。
         """
         client = context or self._device_clients.get(self._current_device)
         if not client:
@@ -697,7 +699,9 @@ class HarmonyPlatformManager(PlatformManager):
             if not client.input_text(text):
                 raise HarmonyError("HDC 文本输入失败（聚焦框）")
             return
-        if not client.input_text_at(x, y, text):
+        self.click(x, y, context=client)
+        time.sleep(0.3)
+        if not client.input_text(text):
             raise HarmonyError(f"HDC 文本输入失败: ({x}, {y})")
 
     def press(self, key: str, context=None) -> None:
