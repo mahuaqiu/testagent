@@ -51,3 +51,20 @@ def test_delete_root_rejected(client):
 def test_delete_missing(client):
     resp = client.delete("/files", params={"path": "nope"})
     assert resp.status_code == 404
+
+
+def test_delete_locked_file_409(client, monkeypatch):
+    """文件正被下载/占用(Windows unlink 拒绝访问)时返回 409 而非 500。"""
+    import pathlib
+
+    f = _root_of(client) / "busy.log"
+    f.write_text("x")
+
+    def _raise(self, missing_ok=False):
+        raise PermissionError(5, "拒绝访问")
+
+    monkeypatch.setattr(pathlib.Path, "unlink", _raise)
+    resp = client.delete("/files", params={"path": "busy.log"})
+    assert resp.status_code == 409
+    assert "占用" in resp.json()["detail"]
+    assert f.exists()

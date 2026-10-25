@@ -10,7 +10,7 @@ def test_files_defaults():
     assert cfg.files_upload_rate_limit_mb == 1.0
     assert cfg.files_max_concurrent_downloads == 2
     assert cfg.files_max_concurrent_uploads == 2
-    assert cfg.files_max_upload_size_mb == 1000
+    assert cfg.files_max_upload_size_mb == 1024
 
 
 def test_files_settings_in_yaml_are_ignored(tmp_path):
@@ -35,7 +35,7 @@ files:
     assert cfg.files_upload_rate_limit_mb == 1.0
     assert cfg.files_max_concurrent_downloads == 2
     assert cfg.files_max_concurrent_uploads == 2
-    assert cfg.files_max_upload_size_mb == 1000
+    assert cfg.files_max_upload_size_mb == 1024
 
 
 def test_set_files_config_creates_missing_root(tmp_path):
@@ -76,4 +76,22 @@ def test_set_files_config_clamps_invalid_values(tmp_path):
     assert settings.upload_rate_limit_mb == 0.0
     assert settings.max_concurrent_downloads == 1
     assert settings.max_concurrent_uploads == 1
-    assert settings.max_upload_size_mb == 1000
+    assert settings.max_upload_size_mb == 1024
+
+
+def test_set_files_config_sweeps_orphan_part_files(tmp_path):
+    """启动清扫:上次崩溃残留的 .part 会被清掉(含子目录),正常文件不受影响。"""
+    from worker.files_api import set_files_config
+
+    root = tmp_path / "collected"
+    root.mkdir()
+    (root / "orphan.abcdef.part").write_bytes(b"x")
+    sub = root / "sub"
+    sub.mkdir()
+    (sub / "orphan2.123456.part").write_bytes(b"y")
+    (root / "keep.log").write_bytes(b"ok")
+
+    set_files_config(WorkerConfig(files_root=str(root)))
+
+    assert list(root.rglob("*.part")) == []
+    assert (root / "keep.log").read_bytes() == b"ok"

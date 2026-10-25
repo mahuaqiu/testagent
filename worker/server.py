@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from PIL import Image
@@ -418,6 +419,15 @@ app = FastAPI(
 
 # 启用 GZip 压缩（超过 1KB 的响应自动压缩）
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# 平台前端直连 /files/upload 上传(不经平台转发),浏览器跨域需放行预检。
+# worker 本就只服务内网且 /files/* 无鉴权,放开来源不改变信任边界。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Worker 实例（在 main.py 中初始化）
 worker: Worker | None = None

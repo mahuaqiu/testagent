@@ -67,6 +67,15 @@ def set_files_config(config: WorkerConfig, *, create_root: bool = True) -> None:
             root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.warning("文件根目录创建失败 %s: %s", root, e)
+        else:
+            # 清扫上次进程崩溃/断电残留的 .part 临时文件:正常异常路径都会
+            # 自清,能留下来的都是孤儿;进程启动时不可能有进行中的上传。
+            # 残留 .part 会出现在列表里且导致所在目录"非空"删不掉
+            for part in root.rglob("*.part"):
+                try:
+                    part.unlink()
+                except OSError as e:
+                    logger.warning("清理残留 .part 失败 %s: %s", part, e)
     upload_size_mb = config.files_max_upload_size_mb
     if upload_size_mb <= 0:
         logger.warning(
@@ -127,12 +136,15 @@ def _validate_filename(name: str) -> str:
         or name in (".", "..")
         or "/" in name
         or "\\" in name
-        or ".." in name
         or ":" in name
         or "\0" in name
+        or name != name.rstrip(" .")
+        or len(name) > 255
     ):
         # "." 经 pathlib 会被折叠为目录本身,replace 时报 PermissionError
-        # 并泄漏 .part;\0 则会让 resolve() 抛 ValueError 变 500
+        # 并泄漏 .part;\0 则会让 resolve() 抛 ValueError 变 500;
+        # 末尾的 . 和空格会被 Windows 静默剥掉导致落盘名与请求名不一致;
+        # 文件名不含路径分隔符,内部 ".." 子串无害,无需拒绝
         raise HTTPException(status_code=400, detail="非法文件名")
     return name
 
@@ -169,7 +181,11 @@ def _scan_dir(target: Path) -> tuple[list[dict], bool]:
     truncated = len(items) > MAX_LIST_ENTRIES
     entries = []
     for item in items[:MAX_LIST_ENTRIES]:
-        st = item.stat()
+        try:
+            st = item.stat()
+        except OSError:
+            # 条目在遍历间隙被删除:跳过而非 500
+            continue
         entries.append(
             {
                 "name": item.name,
@@ -248,6 +264,9 @@ async def upload_file(
         raise HTTPException(status_code=404, detail="目标目录不存在")
     filename = _validate_filename(name)
     dest = target_dir / filename
+    if dest.is_dir():
+        # 目录不能被文件覆盖(replace 报 PermissionError 变 500),提前给出语义
+        raise HTTPException(status_code=400, detail="同名目录已存在,不能上传同名文件")
 
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     # 按请求声明的体积预检；未知长度的流在实际写入时由磁盘错误兜底。
@@ -286,7 +305,15 @@ async def upload_file(
                     if delay > 0:
                         await asyncio.sleep(delay)
             if overwrite:
-                tmp.replace(dest)
+                try:
+                    tmp.replace(dest)
+                except PermissionError as exc:
+                    # Windows 上目标文件正被下载(open 不带 FILE_SHARE_DELETE)
+                    # 或被其他程序占用时,replace 拒绝访问
+                    raise HTTPException(
+                        status_code=409,
+                        detail="目标文件正被占用(可能正在被下载),无法覆盖,请稍后重试",
+                    ) from exc
             else:
                 try:
                     # 硬链接以原子方式占用目标名，消除预检查与发布之间的覆盖竞态。
@@ -315,7 +342,19 @@ async def delete_file(path: str = Query(...)):
     if target.is_dir():
         if any(target.iterdir()):
             raise HTTPException(status_code=400, detail="目录非空,无法删除")
-        await asyncio.to_thread(target.rmdir)
+        try:
+            await asyncio.to_thread(target.rmdir)
+        except PermissionError as exc:
+            # 目录内文件被打开(如正在下载)时 Windows 拒绝删除目录
+            raise HTTPException(
+                status_code=409, detail="目录正被占用,无法删除,请稍后重试"
+            ) from exc
     else:
-        await asyncio.to_thread(target.unlink)
+        try:
+            await asyncio.to_thread(target.unlink)
+        except PermissionError as exc:
+            # Windows 上文件正被下载或被其他程序占用时删除被拒
+            raise HTTPException(
+                status_code=409, detail="文件正被占用,无法删除,请稍后重试"
+            ) from exc
     return {"deleted": path}

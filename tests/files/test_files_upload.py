@@ -59,9 +59,26 @@ def test_upload_too_large_413(client):
 
 
 def test_upload_bad_name(client):
-    for bad in ["../x", "a/b", "a\\b", "..", ".", "", "a\0b"]:
+    # "a " 会被 strip 规范化为 "a"(落盘名与响应名一致,放行);
+    # 末尾的点无法规范化(Windows 会静默剥掉导致名字不一致),拒绝
+    for bad in ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", "a.", "...", "x" * 256]:
         resp = client.post("/files/upload", params={"name": bad}, content=b"x")
         assert resp.status_code == 400, bad
+
+
+def test_upload_name_with_inner_double_dot_ok(client):
+    """文件名内部含 .. 子串(如 a..b.txt)无害,不应被拒。"""
+    resp = client.post("/files/upload", params={"name": "a..b.txt"}, content=b"x")
+    assert resp.status_code == 200
+    assert (_root_of(client) / "a..b.txt").read_bytes() == b"x"
+
+
+def test_upload_same_name_as_dir_400(client):
+    (_root_of(client) / "logs").mkdir()
+    resp = client.post("/files/upload", params={"name": "logs", "overwrite": "true"}, content=b"x")
+    assert resp.status_code == 400
+    assert "同名目录" in resp.json()["detail"]
+    assert (_root_of(client) / "logs").is_dir()
 
 
 def test_upload_target_dir_missing(client):
@@ -79,6 +96,26 @@ def test_upload_disk_full_507(client, monkeypatch):
     resp = client.post("/files/upload", params={"name": "x.bin"}, content=b"x")
     assert resp.status_code == 507
     assert not list(_root_of(client).glob("x.bin*"))
+
+
+def test_upload_overwrite_locked_file_409(client, monkeypatch):
+    """目标正被下载/占用时(Windows replace 拒绝访问),返回 409 而非 500。"""
+    import pathlib
+
+    (_root_of(client) / "lock.txt").write_bytes(b"old")
+
+    def _raise(self, target):
+        raise PermissionError(5, "拒绝访问")
+
+    monkeypatch.setattr(pathlib.Path, "replace", _raise)
+    resp = client.post(
+        "/files/upload", params={"name": "lock.txt", "overwrite": "true"}, content=b"new"
+    )
+    assert resp.status_code == 409
+    assert "占用" in resp.json()["detail"]
+    # 失败后不能发布新内容,也不能残留 .part
+    assert (_root_of(client) / "lock.txt").read_bytes() == b"old"
+    assert not list(_root_of(client).glob("lock.txt*.part"))
 
 
 def test_concurrent_same_name_overwrite_not_corrupted(tmp_path):
