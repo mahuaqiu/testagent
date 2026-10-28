@@ -138,7 +138,9 @@ class GoIOSClient:
         """启动 go-ios agent（后台进程，使用 userspace TUN 模式避免 IPv6 问题）。"""
         cmd = [self._go_ios_path, "tunnel", "start", "--userspace"]
         cwd = os.path.dirname(self._go_ios_path)
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_NO_WINDOW 与 DETACHED_PROCESS 互斥且 DETACHED 生效，DETACHED 下
+        # 派生的控制台子程序会自行分配可见控制台导致黑框闪现，故只用 NO_WINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         process = popen_cmd(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -309,7 +311,8 @@ class GoIOSClient:
         cmd = [self._go_ios_path] + args
         cwd = os.path.dirname(self._go_ios_path)
         logger.info(f"WDA command: {' '.join(cmd)}")
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # 同 start_agent：CREATE_NO_WINDOW 替代 DETACHED_PROCESS，避免互斥标志组合
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
 
         process = popen_cmd(
             cmd,
@@ -349,7 +352,8 @@ class GoIOSClient:
         cmd = [self._go_ios_path] + args
         cwd = os.path.dirname(self._go_ios_path)
         logger.info(f"Forward command: {' '.join(cmd)}")
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # 同 start_agent：CREATE_NO_WINDOW 替代 DETACHED_PROCESS，避免互斥标志组合
+        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         process = popen_cmd(
             cmd,
             stdin=subprocess.DEVNULL,
