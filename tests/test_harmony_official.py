@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import subprocess
 import threading
@@ -154,6 +155,106 @@ def test_hos1_rejects_truncated_payload() -> None:
         list(iter_messages(io.BytesIO(payload)))
 
 
+class _ShortReadStream:
+    """模拟 bufsize=0 管道的任意短读：每次 read 最多返回 chunk_size 字节。"""
+
+    def __init__(self, data: bytes, chunk_size: int) -> None:
+        self._data = data
+        self._pos = 0
+        self._chunk_size = max(1, chunk_size)
+
+    def read(self, size: int) -> bytes:
+        if size <= 0 or self._pos >= len(self._data):
+            return b""
+        end = min(self._pos + self._chunk_size, self._pos + size, len(self._data))
+        chunk = self._data[self._pos : end]
+        self._pos = end
+        return chunk
+
+
+def test_hos1_resyncs_past_native_stdout_pollution() -> None:
+    """复现现场故障：SDK native 库在 JVM 极早期直写 fd 1 的诊断文本混入流首。
+
+    现场 magic 无效报错为 b'[0.0'，即 [0.000s] 时间戳行的前 4 字节。
+    """
+    stream = _ShortReadStream(
+        b"[0.000s] HOScrcpy native diag\n" + encode_message(BridgeMessageType.READY, b"serial=test"),
+        chunk_size=7,
+    )
+
+    messages = list(iter_messages(stream))
+
+    assert [message.message_type for message in messages] == [BridgeMessageType.READY]
+    assert messages[0].text == "serial=test"
+
+
+def test_hos1_resync_between_messages() -> None:
+    """流中段混入诊断文本时同样跳过并重新对齐，两条消息都完整解析。"""
+    ready = encode_message(BridgeMessageType.READY, b"serial=test")
+    h264 = encode_message(BridgeMessageType.H264, b"\x00\x00\x00\x01\x67")
+    stream = _ShortReadStream(ready + b"[0.123s] mid-stream noise\n" + h264, chunk_size=13)
+
+    messages = list(iter_messages(stream))
+
+    assert [message.message_type for message in messages] == [
+        BridgeMessageType.READY,
+        BridgeMessageType.H264,
+    ]
+
+
+def test_hos1_resync_partial_magic_across_reads() -> None:
+    """MAGIC 前缀被拆到多次短读中时，滑动窗口不得误丢对齐点。"""
+    ready = encode_message(BridgeMessageType.READY, b"serial=test")
+    stream = _ShortReadStream(b"noise noise HO" + ready, chunk_size=3)
+
+    messages = list(iter_messages(stream))
+
+    assert [message.message_type for message in messages] == [BridgeMessageType.READY]
+
+
+def test_hos1_resync_magic_inside_consumed_header() -> None:
+    """MAGIC 整个落在已消费的 10 字节失败 header 内时仍可恢复对齐。"""
+    ready = encode_message(BridgeMessageType.READY, b"serial=test")
+    stream = _ShortReadStream(b"[0.0" + ready, chunk_size=4)
+
+    messages = list(iter_messages(stream))
+
+    assert [message.message_type for message in messages] == [BridgeMessageType.READY]
+
+
+def test_hos1_resync_eof_without_magic_raises() -> None:
+    """流中只有非协议数据且已 EOF 时必须报错，不得误判为正常 EOF。"""
+    stream = _ShortReadStream(b"[0.000s] fatal native crash\n", chunk_size=100)
+
+    with pytest.raises(BridgeProtocolError, match="magic 无效"):
+        list(iter_messages(stream))
+
+
+def test_hos1_resync_logs_skipped_data(caplog) -> None:
+    """重新对齐必须留下 WARNING 日志，含跳过字节与内容预览供现场取证。"""
+    stream = _ShortReadStream(
+        b"[0.000s] HOScrcpy native diag\n" + encode_message(BridgeMessageType.READY, b"serial=test"),
+        chunk_size=64,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="worker.platforms.harmony_official.protocol"):
+        list(iter_messages(stream))
+
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings, "重新对齐事件必须留下 WARNING 日志"
+    assert "非协议数据" in warnings[0].getMessage()
+    assert "[0.000s]" in warnings[0].getMessage()
+
+
+def test_hos1_version_check_after_resync_still_enforced() -> None:
+    """对齐后仍严格校验版本：文本里的伪 HOS1 或协议漂移不得被静默跳过。"""
+    bad = b"HOS1" + bytes([9, 1]) + b"\x00\x00\x00\x00"
+    stream = _ShortReadStream(b"[0.0s] noise\n" + bad, chunk_size=16)
+
+    with pytest.raises(BridgeProtocolError, match="协议版本"):
+        list(iter_messages(stream))
+
+
 def test_bridge_runtime_error_is_logged_once(caplog) -> None:
     session = HarmonyOfficialSession(
         serial="device-1",
@@ -163,9 +264,7 @@ def test_bridge_runtime_error_is_logged_once(caplog) -> None:
     )
     session._ready_event.set()
 
-    session._on_bridge_message(
-        BridgeMessage(BridgeMessageType.ERROR, b"H264_EXCEPTION encoder failed")
-    )
+    session._on_bridge_message(BridgeMessage(BridgeMessageType.ERROR, b"H264_EXCEPTION encoder failed"))
 
     errors = [record.getMessage() for record in caplog.records if "H264_EXCEPTION" in record.getMessage()]
     assert errors == ["鸿蒙官方 Java Bridge 运行时报错(device-1): H264_EXCEPTION encoder failed"]
@@ -189,11 +288,7 @@ def test_packaged_java_runtime_overrides_stale_development_path(tmp_path, monkey
 
 
 def test_h264_websocket_packets_split_config_and_idr() -> None:
-    payload = (
-        b"\x00\x00\x00\x01\x67\x01"
-        b"\x00\x00\x00\x01\x68\x02"
-        b"\x00\x00\x00\x01\x65\x03"
-    )
+    payload = b"\x00\x00\x00\x01\x67\x01" b"\x00\x00\x00\x01\x68\x02" b"\x00\x00\x00\x01\x65\x03"
 
     packets = _h264_websocket_packets(payload)
 
@@ -258,10 +353,7 @@ def test_h264_first_subscription_without_cache_waits_for_fresh_keyframe() -> Non
     assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
 
     # 新的参数集/关键帧到达后才允许后续 P 帧进入订阅队列。
-    session._broadcast_h264(
-        b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02"
-        b"\x00\x00\x01\x65\x03"
-    )
+    session._broadcast_h264(b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02" b"\x00\x00\x01\x65\x03")
     assert queue.get_nowait()[0] == 0x01
     assert queue.get_nowait()[0] == 0x02
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
@@ -451,10 +543,7 @@ def test_h264_subscription_stops_idr_retry_after_success(monkeypatch) -> None:
     assert queue.empty()
     assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
 
-    session._broadcast_h264(
-        b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02"
-        b"\x00\x00\x01\x65\x03"
-    )
+    session._broadcast_h264(b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02" b"\x00\x00\x01\x65\x03")
 
     time.sleep(0.05)
     assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
@@ -506,9 +595,7 @@ def test_h264_broadcast_without_subscribers_updates_startup_cache() -> None:
     )
     session._broadcast_h264(b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps")
     session._broadcast_h264(b"\x00\x00\x00\x01\x65idrdata")
-    assert session._latest_h264_config == (
-        b"\x01\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps"
-    )
+    assert session._latest_h264_config == (b"\x01\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps")
     assert session._latest_h264_keyframe == b"\x02\x00\x00\x00\x01\x65idrdata"
 
     # P 帧不进缓存
@@ -840,6 +927,7 @@ def test_stop_session_if_idle_stops_session_without_owners() -> None:
 
 def test_stop_session_if_idle_waits_for_stream_owner_release() -> None:
     """HTTP 释放请求可能先于 WS 关闭的租约释放到达，需要短暂等待。"""
+
     class FakeSession:
         is_running = True
 

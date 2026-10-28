@@ -11,7 +11,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from common.utils import SUBPROCESS_HIDE_WINDOW, popen_cmd
-from worker.platforms.harmony_official.protocol import BridgeMessage, iter_messages
+from worker.platforms.harmony_official.protocol import (
+    BridgeMessage,
+    ProtocolStreamReader,
+    iter_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,24 +170,37 @@ class JavaBridgeProcess:
 
     def _stdout_loop(self, stream: object) -> None:
         close_reason = "stdout EOF"
+        reader = ProtocolStreamReader(stream)  # type: ignore[arg-type]
         try:
-            for message in iter_messages(stream):
+            for message in iter_messages(reader):
                 self._on_message(message)
         except Exception as exc:
             close_reason = f"HOS1 读取失败: {exc}"
             logger.error("读取鸿蒙官方 Java Bridge stdout 失败: %s", exc)
         finally:
+            if reader.skipped_bytes:
+                logger.warning(
+                    "HOS1 stdout 曾混入非协议数据: serial=%s, 累计跳过=%d 字节, 重对齐次数=%d",
+                    self.serial,
+                    reader.skipped_bytes,
+                    reader.resync_count,
+                )
             self._on_closed(close_reason)
 
     def _stderr_loop(self, stream: object) -> None:
         # Java 每帧/每事件都可能写 stderr，逐行 INFO 会刷屏；仅关键
         # 生命周期与异常关键字保留 INFO，其余降为 DEBUG。
         important_markers = (
-            "SDK_READY", "STREAM_START", "STREAM_STOP", "ERROR",
-            "Exception", "FATAL",
+            "SDK_READY",
+            "STREAM_START",
+            "STREAM_STOP",
+            "ERROR",
+            "Exception",
+            "FATAL",
             # 起播诊断关键事件：WAKE_STREAM / REQUEST_IDR 是否真正送达执行
             # 是首帧超时排查的核心证据（含 *_FAILED 变体）。
-            "WAKE_STREAM", "REQUEST_IDR",
+            "WAKE_STREAM",
+            "REQUEST_IDR",
         )
         try:
             for raw_line in iter(stream.readline, b""):
