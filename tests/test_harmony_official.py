@@ -945,12 +945,176 @@ def test_get_or_start_reuses_running_session_without_cleanup(monkeypatch) -> Non
     assert events == []
 
 
-def test_harmony_action_runtime_error_falls_back_to_hdc(
-    monkeypatch,
-    caplog,
-) -> None:
-    import logging
+def test_get_or_start_aborts_remaining_attempts_when_cancelled(monkeypatch) -> None:
+    """取消标志置位后，重试循环在 attempt 边界放弃，不再发起新启动。"""
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager._settings["reconnect_attempts"] = 3
+    manager._settings["reconnect_backoff_seconds"] = 0.01
+    manager.set_hdc_path("hdc.exe")
+    monkeypatch.setattr(manager, "_clean_up_hdc_fport", lambda serial: None)
+    monkeypatch.setattr(manager, "_clean_up_device_processes", lambda serial: None)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
 
+    cancel = threading.Event()
+    attempts: list[int] = []
+
+    def fail_start(self) -> None:
+        attempts.append(len(attempts) + 1)
+        cancel.set()
+        raise OSError("java executable failed")
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", fail_start)
+
+    assert manager.get_or_start("device-1", cancel_event=cancel) is None
+    assert attempts == [1]
+
+
+def test_get_or_start_cancelled_while_waiting_start_lock(monkeypatch) -> None:
+    """前一个启动占住 per-serial 锁时，取消能让等待方尽快退出而不是无限排队。"""
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    holder = manager._start_locks.setdefault("device-1", threading.Lock())
+    assert holder.acquire()
+
+    cancel = threading.Event()
+    entered = threading.Event()
+    results: list = []
+
+    def waiting_get_or_start() -> None:
+        entered.set()
+        results.append(manager.get_or_start("device-1", cancel_event=cancel))
+
+    thread = threading.Thread(target=waiting_get_or_start, daemon=True)
+    thread.start()
+    assert entered.wait(1.0)
+    time.sleep(0.3)
+    cancel.set()
+    thread.join(timeout=3.0)
+
+    assert not thread.is_alive()
+    assert results == [None]
+    holder.release()
+    manager.stop_all()
+
+
+def test_official_frame_source_subscribe_passes_cancel_event() -> None:
+    """帧源把取消标志透传给会话管理器的 acquire。"""
+    fake_session = SimpleNamespace(
+        subscribe_h264=lambda subscriber_id: "queue-1",
+    )
+    captured: list = []
+
+    class Manager:
+        def acquire_official_session(self, device_id, owner, cancel_event=None):
+            captured.append(cancel_event)
+            return fake_session
+
+        def is_device_locked(self, device_id) -> bool:
+            return False
+
+    source = HarmonyOfficialFrameSource("device-1", Manager())
+    cancel = threading.Event()
+
+    assert source.subscribe_h264("subscriber-1", cancel) == "queue-1"
+    assert captured == [cancel]
+
+
+def test_teardown_harmony_h264_source_unsubscribes_and_stops() -> None:
+    events: list[tuple] = []
+    frame_source = SimpleNamespace(
+        unsubscribe_h264=lambda subscriber_id: events.append(("unsub", subscriber_id)),
+        stop=lambda: events.append(("stop",)),
+    )
+
+    from worker.server import _teardown_harmony_h264_source
+
+    _teardown_harmony_h264_source(frame_source, "sub-1", True)
+    assert events == [("unsub", "sub-1"), ("stop",)]
+
+    events.clear()
+    _teardown_harmony_h264_source(frame_source, "sub-1", False)
+    assert events == [("unsub", "sub-1")]
+
+
+async def test_subscribe_h264_with_deadline_returns_queue_on_success() -> None:
+    import asyncio as asyncio_module
+
+    from worker.server import _subscribe_h264_with_deadline
+
+    stop_event = asyncio_module.Event()
+    cancel = threading.Event()
+    seen: list = []
+
+    def subscribe(subscriber_id, cancel_event):
+        seen.append((subscriber_id, cancel_event))
+        return "queue-1"
+
+    frame_source = SimpleNamespace(subscribe_h264=subscribe)
+
+    queue = await _subscribe_h264_with_deadline(
+        frame_source, "sub-1", cancel, stop_event
+    )
+
+    assert queue == "queue-1"
+    assert seen == [("sub-1", cancel)]
+    assert not cancel.is_set()
+
+
+async def test_subscribe_h264_with_deadline_times_out_and_cancels(monkeypatch) -> None:
+    import asyncio as asyncio_module
+
+    from worker import server as server_module
+
+    monkeypatch.setattr(
+        server_module, "DEFAULT_HARMONY_H264_SUBSCRIBE_TIMEOUT", 0.05
+    )
+    stop_event = asyncio_module.Event()
+    cancel = threading.Event()
+    release = threading.Event()
+
+    def slow_subscribe(subscriber_id, cancel_event):
+        release.wait(2.0)
+        return "queue-1"
+
+    frame_source = SimpleNamespace(subscribe_h264=slow_subscribe)
+
+    with pytest.raises(server_module.HarmonyH264SubscribeTimeoutError):
+        await server_module._subscribe_h264_with_deadline(
+            frame_source, "sub-1", cancel, stop_event
+        )
+
+    assert cancel.is_set()
+    release.set()
+
+
+async def test_subscribe_h264_with_deadline_raises_closed_on_disconnect() -> None:
+    import asyncio as asyncio_module
+
+    from worker import server as server_module
+
+    stop_event = asyncio_module.Event()
+    stop_event.set()
+    cancel = threading.Event()
+    release = threading.Event()
+
+    def subscribe(subscriber_id, cancel_event):
+        release.wait(2.0)
+        return "queue-1"
+
+    frame_source = SimpleNamespace(subscribe_h264=subscribe)
+
+    with pytest.raises(server_module.WebSocketClosedError):
+        await server_module._subscribe_h264_with_deadline(
+            frame_source, "sub-1", cancel, stop_event
+        )
+
+    # 取消标志由调用方的 WebSocketClosedError 分支置位，helper 本身不置位。
+    assert not cancel.is_set()
+    release.set()
+
+
+def test_harmony_action_skips_official_session_and_uses_hdc(monkeypatch) -> None:
+    """用例动作统一走 HDC：移动端不再启动/租借官方会话。"""
     manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
     hdc_calls: list[tuple[int, int]] = []
     client = SimpleNamespace(
@@ -958,31 +1122,14 @@ def test_harmony_action_runtime_error_falls_back_to_hdc(
         tap=lambda x, y: hdc_calls.append((x, y)) or True,
     )
 
-    class FailingOfficialSession:
-        def tap(self, x: int, y: int, duration: int) -> None:
-            raise RuntimeError("official command failed")
+    def fail_acquire(*args, **kwargs):
+        raise AssertionError("task actions must not acquire the official session")
 
-    monkeypatch.setattr(
-        manager,
-        "acquire_official_session",
-        lambda serial, owner: FailingOfficialSession(),
-    )
-    monkeypatch.setattr(
-        manager._official_sessions,
-        "stop_session",
-        lambda serial: None,
-    )
+    monkeypatch.setattr(manager, "acquire_official_session", fail_acquire)
 
     manager.click(10, 20, context=client)
 
     assert hdc_calls == [(10, 20)]
-    assert any(
-        record.levelno == logging.ERROR
-        and "即将执行 HDC 回退" in record.message
-        and "点击" in record.message
-        and "device-1" in record.message
-        for record in caplog.records
-    )
 
 
 def test_official_frame_source_stop_releases_lease_when_unsubscribe_fails() -> None:

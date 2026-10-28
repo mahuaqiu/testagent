@@ -1,14 +1,15 @@
 """
 鸿蒙平台执行引擎。
 
-以官方 HOScrcpy Java 会话作为低延迟视频和输入主通道，HDC 保留为
-设备发现、按键、文本、应用管理和故障回退通道。
+用例动作统一走 HDC（uinput/uitest），官方 HOScrcpy Java 会话只服务
+远程调试页：H.264 推流与远程实时输入，不再参与用例动作执行。
 """
 
 import io
 import logging
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -31,8 +32,6 @@ from worker.platforms.harmony_keycodes import (
     resolve_harmony_key,
 )
 from worker.platforms.harmony_official import (
-    HarmonyOfficialError,
-    HarmonyOfficialPartialActionError,
     HarmonyOfficialSession,
     HarmonyOfficialSessionManager,
 )
@@ -45,7 +44,8 @@ class HarmonyPlatformManager(PlatformManager):
     """
     鸿蒙平台管理器。
 
-    使用官方 Java 会话控制视频、触摸和鼠标，HDC 提供兼容能力。
+    用例动作全部通过 HDC 注入；官方 Java 会话仅作为远程调试页的
+    H.264 推流/实时输入通道，由 WS 层按连接获取租约。
     """
 
     # 鸿蒙没有 sidecar，因此录屏、实时窗口流和宿主机命令不加入白名单。
@@ -308,8 +308,8 @@ class HarmonyPlatformManager(PlatformManager):
                 logger.info(f"关闭设备会话: {serial}")
             self._official_sessions.stop_session(serial)
         else:
-            # HDC 客户端可复用；官方 Java 会话释放任务租约后进入 10 分钟空闲保活。
-            self._official_sessions.release(context.serial, f"task:{id(context)}")
+            # HDC 客户端可复用；任务动作不占用官方会话租约，
+            # 官方 Java 会话由远程调试 WS 和 H.264 推流按连接持有。
             logger.debug(f"保持设备客户端用于复用: {context.serial}")
 
     # ========== 基础操作方法 ==========
@@ -377,11 +377,17 @@ class HarmonyPlatformManager(PlatformManager):
         self,
         udid: str,
         owner: str,
+        cancel_event: threading.Event | None = None,
     ) -> HarmonyOfficialSession | None:
-        """获取一份带生命周期租约的官方会话。"""
+        """获取一份带生命周期租约的官方会话。
+
+        ``cancel_event`` 透传给会话管理器做协作式取消，供 H.264 订阅在
+        预算耗尽或客户端断开后放弃仍在进行的冷启动。
+        """
         return self._official_sessions.acquire(
             udid,
             owner,
+            cancel_event=cancel_event,
         )
 
     def is_device_locked(self, udid: str) -> bool:
@@ -410,90 +416,19 @@ class HarmonyPlatformManager(PlatformManager):
         """升级或退出前立即停止本平台的 Java Bridge。"""
         self._official_sessions.stop_all()
 
-    def _get_official_session_for_client(
+    def _execute_hdc_action(
         self,
         client: Any,
-    ) -> tuple[str | None, HarmonyOfficialSession | None]:
-        """为真实 HDC 上下文获取官方会话，兼容轻量测试上下文。
-
-        平台层历史上允许测试和扩展传入只实现动作方法的上下文对象；这类对象
-        没有 ``serial`` 时继续直接执行 HDC 回退。
-        """
-        serial = getattr(client, "serial", None)
-        if not serial:
-            return None, None
-        return serial, self.acquire_official_session(
-            serial,
-            f"task:{id(client)}",
-        )
-
-    def _handle_official_failure(
-        self,
-        udid: str,
-        operation: str,
-        exc: Exception,
-    ) -> None:
-        """记录官方链路运行期故障，停用会话并返回回退决策信息。"""
-        if not isinstance(exc, HarmonyOfficialError):
-            exc = HarmonyOfficialError(str(exc))
-        self._official_sessions.stop_session(udid)
-        if isinstance(exc, HarmonyOfficialPartialActionError):
-            # 手势已开始执行于设备：回退 HDC 重放同一动作会造成动作二次执行。
-            logger.error(
-                "鸿蒙官方%s已部分执行，放弃 HDC 回退: device=%s, error=%s",
-                operation,
-                udid,
-                exc,
-            )
-            return
-        logger.error(
-            "鸿蒙官方%s失败，即将执行 HDC 回退: "
-            "device=%s, error_type=%s, error=%s",
-            operation,
-            udid,
-            type(exc).__name__,
-            exc,
-        )
-
-    def _execute_with_official_fallback(
-        self,
-        client: Any,
-        operation: str,
-        official_fn: Callable[[HarmonyOfficialSession], None] | None,
         hdc_fn: Callable[[Any], bool],
         hdc_error: str,
     ) -> None:
-        """执行设备动作；Harmony PC 固定走 HDC，移动端保留官方会话回退。
+        """执行 HDC 注入动作；注入失败抛 HarmonyError。
 
-        鸿蒙移动端官方手势已部分执行（HarmonyOfficialPartialActionError）时
-        放弃 HDC 回退并抛错，避免同一动作在设备上执行两次；会话已在
-        _handle_official_failure 中停用，后续动作自然走 HDC 直连。
-        official_fn 传 None 表示该动作在当前设备类型下无官方实现。
+        用例动作统一走 HDC：官方会话只服务远程调试页（H.264 推流/实时
+        输入），不参与任务动作，避免冷启动和会话锁拖慢用例执行。
         """
-        if self._device_type == "harmony_pc":
-            if not hdc_fn(client):
-                raise HarmonyError(hdc_error)
-            return
-
-        owner = f"task:{id(client)}"
-        serial, official_session = self._get_official_session_for_client(client)
-        try:
-            if official_session and official_fn is not None:
-                try:
-                    official_fn(official_session)
-                    return
-                except HarmonyOfficialPartialActionError as exc:
-                    self._handle_official_failure(serial, operation, exc)
-                    raise HarmonyError(
-                        f"鸿蒙官方{operation}已部分执行，放弃 HDC 回退以免动作重复"
-                    ) from exc
-                except Exception as exc:
-                    self._handle_official_failure(serial, operation, exc)
-            if not hdc_fn(client):
-                raise HarmonyError(hdc_error)
-        finally:
-            if serial:
-                self.release_official_session(serial, owner)
+        if not hdc_fn(client):
+            raise HarmonyError(hdc_error)
 
     def click(self, x: int, y: int, duration: int = 0, context=None) -> None:
         """
@@ -508,10 +443,8 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "点击",
-            lambda session: session.tap(x, y, duration),
             lambda c: c.long_tap(x, y, duration) if duration > 0 else c.tap(x, y),
             f"HDC 点击失败: ({x}, {y})",
         )
@@ -521,26 +454,20 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "双击",
-            lambda session: session.double_click(x, y),
             lambda c: c.double_tap(x, y),
             f"HDC 双击失败: ({x}, {y})",
         )
 
     def right_click(self, x: int, y: int, context=None) -> None:
-        """鸿蒙 PC 右键：uitest 无鼠标右键命令，但长按（longClick）会触发
+        """鸿蒙右键：uitest 无鼠标右键命令，但长按（longClick）会触发
         上下文菜单，真机实测等价于右键，故用 long_tap 映射。"""
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "右键",
-            (lambda session: session.right_click(x, y))
-            if self._device_type == "harmony_pc"
-            else None,
             lambda c: c.long_tap(x, y),
             f"HDC 右键（长按）失败: ({x}, {y})",
         )
@@ -568,23 +495,14 @@ class HarmonyPlatformManager(PlatformManager):
             speed = max(200, min(speed, 40000))
             return c.swipe(start_x, start_y, end_x, end_y, speed)
 
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "滑动",
-            lambda session: session.swipe(
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                duration,
-                steps,
-            ),
             _hdc_swipe,
             "HDC 滑动失败",
         )
 
     def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, duration: int = 500, steps: int | None = None, context=None) -> None:
-        """鸿蒙 PC 拖拽优先使用官方鼠标按键保持轨迹。"""
+        """拖拽：从起点按下拖到终点再抬起。移动端与滑动等价，直接复用 swipe。"""
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
@@ -598,10 +516,8 @@ class HarmonyPlatformManager(PlatformManager):
             speed = max(200, min(speed, 40000))
             return c.swipe(start_x, start_y, end_x, end_y, speed)
 
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "拖拽",
-            lambda session: session.drag(start_x, start_y, end_x, end_y, duration, steps),
             _hdc_drag,
             "HDC 拖拽失败",
         )
@@ -618,13 +534,8 @@ class HarmonyPlatformManager(PlatformManager):
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
-        # 官方会话只提供鸿蒙 PC 鼠标事件；移动端统一复用 HDC uinput 移动指针。
-        self._execute_with_official_fallback(
+        self._execute_hdc_action(
             client,
-            "鼠标移动",
-            (lambda session: session.move_mouse(x, y))
-            if self._device_type == "harmony_pc"
-            else None,
             lambda c: c.move_mouse(x, y),
             f"HDC 鼠标移动失败: ({x}, {y})",
         )
@@ -663,8 +574,8 @@ class HarmonyPlatformManager(PlatformManager):
                     return False
             return True
 
-        # 官方 SDK 滚轮无效机型问题，直接走 HDC uinput，不走官方会话。
-        self._execute_with_official_fallback(client, "滚轮", None, _hdc_scroll, "HDC 滚轮注入失败")
+        # 官方 SDK 滚轮无效机型问题，直接走 HDC uinput。
+        self._execute_hdc_action(client, _hdc_scroll, "HDC 滚轮注入失败")
 
     def input_text(self, text: str, context=None) -> None:
         """

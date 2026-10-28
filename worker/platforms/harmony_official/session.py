@@ -1071,18 +1071,40 @@ class HarmonyOfficialSessionManager:
         """返回设备当前是否处于锁屏状态，供 H.264 等待逻辑使用。"""
         return self._is_device_locked(serial)
 
+    @staticmethod
+    def _acquire_start_lock(
+        start_lock: threading.Lock,
+        cancel_event: threading.Event | None,
+    ) -> bool:
+        """获取 per-serial 启动锁；等待期间周期性检查取消标志。
+
+        前一个启动方（如已断开的 WebSocket 订阅）可能在锁内执行最长
+        startup_timeout 的冷启动；后到的 get_or_start 若不响应取消，
+        会在锁上无反馈地排队同样长的时间，阻塞新连接。
+        """
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            if start_lock.acquire(timeout=0.25):
+                return True
+
     def get_or_start(
         self,
         serial: str,
         *,
         retry_attempts: int | None = None,
         owner: str | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> HarmonyOfficialSession | None:
         """返回可用官方会话；失败时返回 ``None``，由调用方回退 HDC。
 
         全局锁只保护会话字典的读写；耗时的 ``session.start()`` 在 per-serial
         启动锁下锁外执行，一台设备的启动（最长 startup_timeout×重试次数）不再
         阻塞其他设备的 acquire/订阅操作。
+
+        ``cancel_event`` 提供协作式取消：在 attempt 边界和启动锁等待期间检查，
+        已取消的调用尽快返回 ``None``。正在执行的 ``session.start()``（单次
+        startup_timeout）无法中断，因此取消后锁至多再被占用一次启动预算。
         """
         try:
             with self._lock:
@@ -1112,7 +1134,12 @@ class HarmonyOfficialSessionManager:
 
             with self._lock:
                 start_lock = self._start_locks.setdefault(serial, threading.Lock())
-            with start_lock:
+            if not self._acquire_start_lock(start_lock, cancel_event):
+                logger.info(
+                    "鸿蒙官方会话启动在等待 per-serial 启动锁时被取消: serial=%s", serial
+                )
+                return None
+            try:
                 with self._lock:
                     if (
                         generation != self._stop_generation
@@ -1144,6 +1171,14 @@ class HarmonyOfficialSessionManager:
                 )
                 last_error = ""
                 for attempt in range(1, attempts + 1):
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info(
+                            "鸿蒙官方会话启动被取消: serial=%s, attempt=%d/%d",
+                            serial,
+                            attempt,
+                            attempts,
+                        )
+                        return None
                     # 上次 Java Bridge 可能被 taskkill /F 强杀，SDK 的
                     # stopCaptureScreen 没机会执行；启动前主动兜底清理残留的
                     # fport 规则和设备端 singleness/uitest 进程，避免
@@ -1230,6 +1265,8 @@ class HarmonyOfficialSessionManager:
                         self._claim_owner_locked(serial, owner)
                         return session
                 return self._handle_start_failure(last_error)
+            finally:
+                start_lock.release()
         except Exception as exc:
             # 官方链路是可选加速路径，任何启动阶段异常都必须交给调用方回退 HDC。
             detail = str(exc) or type(exc).__name__
@@ -1244,13 +1281,15 @@ class HarmonyOfficialSessionManager:
         self,
         serial: str,
         owner: str,
+        cancel_event: threading.Event | None = None,
     ) -> HarmonyOfficialSession | None:
         """获取一份官方会话租约；同一 owner 重复获取不会增加引用。
 
         get_or_start 可能耗时数十秒（冷启动/重试），期间不能持有全局锁，
-        否则会阻塞其他设备的所有会话操作（H-2）。
+        否则会阻塞其他设备的所有会话操作（H-2）。``cancel_event`` 用于
+        推流订阅方在预算耗尽或客户端断开后放弃仍在进行的冷启动。
         """
-        return self.get_or_start(serial, owner=owner)
+        return self.get_or_start(serial, owner=owner, cancel_event=cancel_event)
 
     def release(self, serial: str, owner: str) -> None:
         """释放官方会话租约；没有活动租约时启动空闲释放倒计时。"""

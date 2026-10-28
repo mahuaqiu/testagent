@@ -494,14 +494,19 @@ class HarmonyOfficialFrameSource:
         """官方会话可直接输出 Annex-B H.264；旧帧源不具备此能力。"""
         return True
 
-    def start(self) -> None:
-        """获取官方会话；官方不可用时交给 WebSocket 层处理降级。"""
+    def start(self, cancel_event: threading.Event | None = None) -> None:
+        """获取官方会话；官方不可用时交给 WebSocket 层处理降级。
+
+        ``cancel_event`` 透传给会话管理器：订阅预算耗尽或客户端断开后，
+        仍在进行的冷启动在 attempt 边界放弃，尽快释放 per-serial 启动锁。
+        """
         with self._start_lock:
             if self._session is not None:
                 return
             self._session = self.manager.acquire_official_session(
                 self.device_id,
                 self._owner,
+                cancel_event=cancel_event,
             )
             if self._session is not None:
                 logger.info("HarmonyOfficialFrameSource 官方推流已启动: %s", self.device_id)
@@ -510,11 +515,15 @@ class HarmonyOfficialFrameSource:
                 raise ConnectionError("鸿蒙设备处于锁屏状态，等待解锁后启动 H.264 会话")
             raise ConnectionError("鸿蒙官方 H.264 会话不可用")
 
-    def subscribe_h264(self, subscriber_id: str):
+    def subscribe_h264(
+        self,
+        subscriber_id: str,
+        cancel_event: threading.Event | None = None,
+    ):
         """订阅官方会话的 H.264 WebSocket 帧。"""
         with self._start_lock:
             if self._session is None:
-                self.start()
+                self.start(cancel_event)
             session = self._session
             if session is None:
                 raise ConnectionError("鸿蒙官方 H.264 会话不可用")

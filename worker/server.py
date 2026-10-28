@@ -97,6 +97,11 @@ DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
 # 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
 DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
 DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT = 10.0
+# 鸿蒙 H.264 订阅建立预算（含官方会话冷启动）。取值不大于一次
+# startup_timeout（默认 35s）：超时后通过取消标志让 get_or_start 在
+# attempt 边界放弃，per-serial 启动锁至多再被占用一次启动预算，而不是
+# 等满 startup_timeout×重试次数（≈105s）。
+DEFAULT_HARMONY_H264_SUBSCRIBE_TIMEOUT = 30.0
 # 降采样长边上限：流开头已通过 meta 文本帧把真机分辨率下发给前端做坐标
 # 基准（与推流尺寸解耦），故此处缩小不会影响坐标；<=0 表示不缩放。
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
@@ -104,6 +109,76 @@ DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
 
 class WebSocketClosedError(RuntimeError):
     """WebSocket 已关闭，当前推流应按正常断开处理。"""
+
+
+class HarmonyH264SubscribeTimeoutError(TimeoutError):
+    """鸿蒙官方 H.264 订阅建立超出预算（含官方会话冷启动）。"""
+
+
+async def _subscribe_h264_with_deadline(
+    frame_source: Any,
+    subscriber_id: str,
+    cancel_event: threading.Event,
+    stop_event: asyncio.Event,
+) -> Any:
+    """在预算内建立鸿蒙官方 H.264 订阅。
+
+    ``subscribe_h264`` 可能触发官方会话冷启动（失败重试最长
+    startup_timeout×attempts ≈ 105s），且 ``asyncio.to_thread`` 中的线程
+    无法中断。这里把订阅放到独立任务并设置预算：超时或客户端断开立即
+    抛出，由调用方发送 codec_fallback 降级 JPEG；``cancel_event`` 通知
+    get_or_start 在 attempt 边界放弃，per-serial 启动锁至多再被占用一次
+    启动预算，不再阻塞同设备的新连接。
+    """
+    subscribe_task = asyncio.create_task(
+        asyncio.to_thread(frame_source.subscribe_h264, subscriber_id, cancel_event)
+    )
+    stop_task = asyncio.create_task(stop_event.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {subscribe_task, stop_task},
+            timeout=DEFAULT_HARMONY_H264_SUBSCRIBE_TIMEOUT,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        if not stop_task.done():
+            stop_task.cancel()
+    if subscribe_task in done:
+        return subscribe_task.result()
+    # 订阅线程无法取消，泄漏到后台自然结束；主动取走结果避免
+    # "Task exception was never retrieved" 噪音。
+    subscribe_task.add_done_callback(
+        lambda task: None if task.cancelled() else task.exception()
+    )
+    if stop_task in done:
+        raise WebSocketClosedError("client disconnected during h264 subscribe")
+    cancel_event.set()
+    raise HarmonyH264SubscribeTimeoutError(
+        f"鸿蒙官方 H.264 订阅建立超时({DEFAULT_HARMONY_H264_SUBSCRIBE_TIMEOUT:.0f}s)，"
+        "已请求取消后台启动并降级 JPEG"
+    )
+
+
+def _teardown_harmony_h264_source(
+    frame_source: Any,
+    subscriber_id: str,
+    stop_source: bool,
+) -> None:
+    """在工作线程中清理鸿蒙 H.264 帧源。
+
+    清理会拿帧源 ``_start_lock``：订阅超时后后台启动线程可能仍持锁
+    （至多再占用一次启动预算），绝不能在事件循环上同步等待，否则会
+    卡住所有 WebSocket 和 HTTP 响应。
+    """
+    try:
+        frame_source.unsubscribe_h264(subscriber_id)
+    except Exception as exc:
+        logger.warning("取消鸿蒙 H.264 订阅失败: %s", exc)
+    if stop_source:
+        try:
+            frame_source.stop()
+        except Exception as exc:
+            logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
 
 
 def _log_harmony_h264_timeout_diagnosis(
@@ -1436,8 +1511,6 @@ async def screen_stream(
 
     frame_source = None
     screen_manager = None
-    harmony_remote_session_manager = None
-    harmony_remote_session_owner: str | None = None
     direct_h264_frame_source = is_harmony and codec == "h264"
     h264_subscriber_id = None
     h264_queue = None
@@ -1499,32 +1572,14 @@ async def screen_stream(
                     await websocket.close(code=1008, reason=f"Harmony device not available: {device_id}")
                     return
 
-            # 实时远程操作按连接获取官方会话租约；同一设备上的多个 WebSocket
-            # 复用管理器中的会话。会话不可用时，指针分发器仍可回退 HDC。
-            if pointer_injector is not None:
-                remote_owner = f"remote-websocket:{id(websocket)}"
-                try:
-                    session = await asyncio.to_thread(
-                        harmony_manager.acquire_official_session,
-                        device_id,
-                        remote_owner,
-                    )
-                except Exception as exc:
-                    session = None
-                    logger.warning(
-                        "远程 WebSocket 启动鸿蒙官方会话失败，输入将回退 HDC: device=%s, error=%s",
-                        device_id,
-                        exc,
-                    )
-                if session is not None:
-                    harmony_remote_session_manager = harmony_manager
-                    harmony_remote_session_owner = remote_owner
-                    logger.info("远程 WebSocket 已获取鸿蒙官方会话: device=%s", device_id)
-                else:
-                    logger.info("鸿蒙官方会话暂不可用，远程输入回退 HDC: device=%s", device_id)
+            # 官方会话只由 H.264 订阅按需启动，并在帧源上持有租约；远程实时
+            # 输入通过 peek 复用已运行的会话，官方不可用时指针分发器回退 HDC。
+            # 不在这里阻塞冷启动租借：此时 receive_activity 尚未运行，客户端
+            # 断开无法被感知，启动失败重试会长时间占住 per-serial 启动锁，
+            # 阻塞同设备的新连接。
 
-        # 在 Harmony 设备检查和官方会话按需启动完成后再读取输入，避免首个
-        # WebSocket 事件抢在 Java 启动前落入 HDC 回退路径。
+        # 设备检查完成后再读取输入；H.264 冷启动期间的输入事件走合帧 HDC
+        # 回退，与官方会话未就绪时的既有行为一致。
         activity_task = asyncio.create_task(receive_activity())
         idle_watchdog_task = asyncio.create_task(close_when_idle())
 
@@ -1600,16 +1655,29 @@ async def screen_stream(
                 )
                 return
             h264_subscriber_id = f"{conn_key}/h264/{id(websocket)}"
+            # 订阅预算耗尽或客户端断开时通知 get_or_start 放弃冷启动，
+            # 避免 per-serial 启动锁在无消费者的情况下继续阻塞新连接。
+            h264_subscribe_cancel = threading.Event()
             h264_wait_deadline = time.monotonic() + DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT
             h264_wait_logged = False
             h264_wait_notified = False
             while not stream_stop_event.is_set():
                 try:
-                    h264_queue = await asyncio.to_thread(
-                        frame_source.subscribe_h264,
+                    h264_queue = await _subscribe_h264_with_deadline(
+                        frame_source,
                         h264_subscriber_id,
+                        h264_subscribe_cancel,
+                        stream_stop_event,
                     )
                     break
+                except WebSocketClosedError:
+                    # 客户端在订阅建立期间断开：取消后台冷启动后直接清理。
+                    h264_subscribe_cancel.set()
+                    return
+                except HarmonyH264SubscribeTimeoutError as exc:
+                    h264_subscribe_cancel.set()
+                    await _send_harmony_h264_fallback(websocket, str(exc), stream_stop_event)
+                    return
                 except ConnectionError as exc:
                     if (
                         getattr(frame_source, "h264_waiting_for_unlock", lambda: False)()
@@ -2070,23 +2138,19 @@ async def screen_stream(
                     ",".join(h264_diag_packet_types) or "none",
                 )
             if h264_subscriber_id and frame_source is not None:
-                try:
-                    frame_source.unsubscribe_h264(h264_subscriber_id)
-                except Exception as exc:
-                    logger.warning("取消鸿蒙 H.264 订阅失败: %s", exc)
-            if direct_h264_frame_source and frame_source is not None:
-                try:
-                    frame_source.stop()
-                except Exception as exc:
-                    logger.debug("停止鸿蒙 H.264 帧源失败: %s", exc)
-            if harmony_remote_session_manager is not None and harmony_remote_session_owner:
-                try:
-                    harmony_remote_session_manager.release_official_session(
-                        device_id,
-                        harmony_remote_session_owner,
-                    )
-                except Exception as exc:
-                    logger.warning("释放远程 WebSocket 鸿蒙官方会话租约失败: %s", exc)
+                # 清理会拿帧源 _start_lock：订阅超时后后台启动线程可能仍持锁
+                # （至多再占用一次启动预算），放到守护线程执行，事件循环和
+                # 连接名额都不等待，新连接可立即接入。
+                threading.Thread(
+                    target=_teardown_harmony_h264_source,
+                    args=(
+                        frame_source,
+                        h264_subscriber_id,
+                        bool(direct_h264_frame_source),
+                    ),
+                    name=f"harmony-h264-teardown-{conn_key}",
+                    daemon=True,
+                ).start()
         finally:
             # 即使停止推流、注入器或后台任务清理失败，也不能遗留连接计数。
             remaining = _release_ws_connection_slot(conn_key)

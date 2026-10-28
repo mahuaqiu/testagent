@@ -95,7 +95,6 @@ class JavaBridgeProcess:
             str(self.image_scale_size),
             str(self.frame_rate),
             str(self.bit_rate),
-            "video",
         ]
         logger.info(
             "启动鸿蒙官方 Java Bridge: serial=%s, type=%s, fps=%s, bitrate=%s",
