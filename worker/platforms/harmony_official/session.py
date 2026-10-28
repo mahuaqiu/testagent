@@ -13,6 +13,7 @@ from queue import Empty, Full, Queue
 from typing import Any
 
 from common.packaging import get_base_dir, is_packaged
+from common.utils import run_cmd
 from worker.constants import (
     DEFAULT_HARMONY_BRIDGE_REL_PATH,
     DEFAULT_HARMONY_BUNDLED_JAVA_REL_PATH,
@@ -38,6 +39,53 @@ logger = logging.getLogger(__name__)
 H264_IDR_RETRY_DELAYS_SECONDS = (0.8, 2.0, 4.0)
 
 H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 600.0
+
+# Java Bridge 被 taskkill /F 强杀（或 Worker 进程直接退出）时，SDK 的
+# stopCaptureScreen 没机会执行：宿主机会残留 fport 转发规则，设备端会残留
+# singleness/uitest 采集进程（scrcpy 服务的宿主），下次 startCaptureScreen
+# 可能端口冲突报 "can not find scrcpy pid"。兜底清理按这些命令行特征识别残留。
+_HDC_CLEANUP_TIMEOUT_SECONDS = 10.0
+_HDC_DEVICE_KILL_PATTERNS = ("uitest start-daemon", "libscrcpy", "libscreen_casting")
+
+
+def _parse_fport_rules(output: str) -> list[tuple[str, str]]:
+    """解析 ``hdc fport ls`` 输出，返回 (本地, 远端) 转发规则列表。
+
+    每条规则形如 ``tcp:50000 tcp:8012    [Forward]``：取行内含冒号的两个
+    token（tcp:/localabstract:/localfilesystem: 等）。[Empty]、[Reverse]
+    和无法解析的行忽略。
+    """
+    rules: list[tuple[str, str]] = []
+    for raw_line in (output or "").splitlines():
+        if "[Reverse]" in raw_line:
+            continue
+        tokens = [
+            token
+            for token in raw_line.split()
+            if ":" in token and not token.startswith("[")
+        ]
+        if len(tokens) == 2:
+            rules.append((tokens[0], tokens[1]))
+    return rules
+
+
+def _find_residual_device_pids(output: str) -> list[str]:
+    """从设备端 ``ps -ef`` 输出中找出残留采集进程的 PID。
+
+    命令行命中 _HDC_DEVICE_KILL_PATTERNS 即视为残留；PID 取第二列，与
+    HarmonyScreenCapture 的 daemon 清理保持一致。
+    """
+    pids: list[str] = []
+    for raw_line in (output or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not any(pattern in line for pattern in _HDC_DEVICE_KILL_PATTERNS):
+            continue
+        columns = line.split()
+        if len(columns) > 1 and columns[1].isdigit() and columns[1] not in pids:
+            pids.append(columns[1])
+    return pids
 
 
 @dataclass
@@ -1096,6 +1144,12 @@ class HarmonyOfficialSessionManager:
                 )
                 last_error = ""
                 for attempt in range(1, attempts + 1):
+                    # 上次 Java Bridge 可能被 taskkill /F 强杀，SDK 的
+                    # stopCaptureScreen 没机会执行；启动前主动兜底清理残留的
+                    # fport 规则和设备端 singleness/uitest 进程，避免
+                    # startCaptureScreen 端口冲突报 "can not find scrcpy pid"。
+                    self._clean_up_hdc_fport(serial)
+                    self._clean_up_device_processes(serial)
                     session = HarmonyOfficialSession(
                         serial=serial,
                         device_type=self.device_type,
@@ -1346,6 +1400,105 @@ class HarmonyOfficialSessionManager:
         message = f"鸿蒙官方 HOScrcpy 不可用: {detail}"
         logger.warning("%s；将回退 HDC 路径", message)
         return None
+
+    def _clean_up_hdc_fport(self, serial: str) -> None:
+        """清理 Java Bridge 被强杀后遗留的 fport 转发规则（best-effort）。
+
+        SDK 正常停止时会自行 fport rm；taskkill /F 绕过 stopCaptureScreen 后，
+        残留规则（如 tcp:<随机端口> -> localabstract:scrcpy_grpc_socket）会随
+        每次冷启动累积。这里全量清理该设备的 forward 规则，失败不阻断启动。
+        """
+        hdc_path = self._hdc_path
+        if not hdc_path or not Path(hdc_path).is_file():
+            return
+        try:
+            result = run_cmd(
+                [hdc_path, "-t", serial, "fport", "ls"],
+                timeout=_HDC_CLEANUP_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "查询鸿蒙 fport 规则失败，跳过残留清理: serial=%s, error=%s", serial, exc
+            )
+            return
+        rules = _parse_fport_rules(result.stdout or "")
+        logger.debug("鸿蒙冷启动兜底清理 fport: serial=%s, rules=%d", serial, len(rules))
+        for local, remote in rules:
+            try:
+                removed = run_cmd(
+                    [hdc_path, "-t", serial, "fport", "rm", local, remote],
+                    timeout=_HDC_CLEANUP_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "清理鸿蒙 fport 规则异常: serial=%s, rule=%s %s, error=%s",
+                    serial,
+                    local,
+                    remote,
+                    exc,
+                )
+                continue
+            output = (removed.stdout or removed.stderr or "").strip()
+            if removed.returncode == 0 and "success" in output.lower():
+                logger.info(
+                    "已清理鸿蒙残留 fport 规则: serial=%s, rule=%s %s", serial, local, remote
+                )
+            else:
+                logger.warning(
+                    "清理鸿蒙 fport 规则失败（继续启动）: serial=%s, rule=%s %s, output=%s",
+                    serial,
+                    local,
+                    remote,
+                    output,
+                )
+
+    def _clean_up_device_processes(self, serial: str) -> None:
+        """清理 Java Bridge 被强杀后设备端残留的 singleness/uitest 进程。
+
+        残留的 ``uitest start-daemon singleness``（scrcpy 服务宿主）会让下次
+        startCaptureScreen 端口冲突报 "can not find scrcpy pid"。清理方式与
+        SDK 自身停止路径一致（ps -ef 后 kill -9），best-effort，失败不阻断启动。
+        """
+        hdc_path = self._hdc_path
+        if not hdc_path or not Path(hdc_path).is_file():
+            return
+        try:
+            result = run_cmd(
+                [hdc_path, "-t", serial, "shell", "ps -ef"],
+                timeout=_HDC_CLEANUP_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "查询鸿蒙设备进程失败，跳过残留进程清理: serial=%s, error=%s", serial, exc
+            )
+            return
+        pids = _find_residual_device_pids(result.stdout or "")
+        logger.debug(
+            "鸿蒙冷启动兜底清理设备进程: serial=%s, residual_pids=%s", serial, pids
+        )
+        for pid in pids:
+            try:
+                killed = run_cmd(
+                    [hdc_path, "-t", serial, "shell", f"kill -9 {pid}"],
+                    timeout=_HDC_CLEANUP_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "终止鸿蒙设备残留进程异常: serial=%s, pid=%s, error=%s",
+                    serial,
+                    pid,
+                    exc,
+                )
+                continue
+            if killed.returncode == 0:
+                logger.info("已终止鸿蒙设备残留进程: serial=%s, pid=%s", serial, pid)
+            else:
+                logger.warning(
+                    "终止鸿蒙设备残留进程失败（继续启动）: serial=%s, pid=%s, output=%s",
+                    serial,
+                    pid,
+                    (killed.stdout or killed.stderr or "").strip(),
+                )
 
     def _build_settings(self, config: dict[str, Any]) -> dict[str, Any]:
         settings = dict(self.DEFAULTS)

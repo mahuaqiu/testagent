@@ -37,7 +37,9 @@ from worker.platforms.harmony_official.protocol import (
 from worker.platforms.harmony_official.session import (
     HarmonyOfficialSession,
     HarmonyOfficialSessionManager,
+    _find_residual_device_pids,
     _h264_websocket_packets,
+    _parse_fport_rules,
 )
 from worker.screen.frame_source import HarmonyOfficialFrameSource
 from worker.screen.mjpeg_proxy import MJPEGProxy
@@ -767,6 +769,180 @@ def test_locked_device_does_not_start_official_java() -> None:
 
     assert manager.get_or_start("device-1") is None
     assert manager.get("device-1") is None
+
+
+def test_parse_fport_rules_extracts_forward_rules() -> None:
+    output = (
+        "[Forward]\n"
+        "tcp:59275 localabstract:scrcpy_grpc_socket    [Forward]\n"
+        "tcp:50000 tcp:8012    [Forward]\n"
+        "\n"
+        "tcp:60001 localabstract:uitest_socket    [Forward]\n"
+        "tcp:1234 tcp:5678    [Reverse]\n"
+        "[Empty]\n"
+    )
+
+    assert _parse_fport_rules(output) == [
+        ("tcp:59275", "localabstract:scrcpy_grpc_socket"),
+        ("tcp:50000", "tcp:8012"),
+        ("tcp:60001", "localabstract:uitest_socket"),
+    ]
+
+
+def test_find_residual_device_pids_matches_sdk_daemon_lines() -> None:
+    output = (
+        "UID            PID  PPID ELAPSED ARGS\n"
+        "root          1234     1 1-02:00 uitest start-daemon singleness &\n"
+        "root          5678     1 1-02:00"
+        " /data/local/tmp/libscrcpy/libscrcpy_server_emulator.z.so\n"
+        "root          9999     1 1-02:00"
+        " snapshot_display -f /data/local/tmp/screen.jpeg\n"
+    )
+
+    assert _find_residual_device_pids(output) == ["1234", "5678"]
+
+
+def test_clean_up_hdc_fport_removes_enumerated_rules(tmp_path, monkeypatch) -> None:
+    hdc_path = tmp_path / "hdc.exe"
+    hdc_path.write_bytes(b"fake-hdc")
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path(str(hdc_path))
+    executed: list[list[str]] = []
+
+    def fake_run_cmd(cmd, timeout=None, **kwargs):
+        executed.append(list(cmd))
+        if cmd[-1] == "ls":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "tcp:50000 tcp:8012    [Forward]\n"
+                    "tcp:59275 localabstract:scrcpy_grpc_socket    [Forward]\n"
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"Remove forward ruler success, ruler:{cmd[-2]} {cmd[-1]}",
+            stderr="",
+        )
+
+    import worker.platforms.harmony_official.session as session_module
+
+    monkeypatch.setattr(session_module, "run_cmd", fake_run_cmd)
+
+    manager._clean_up_hdc_fport("device-1")
+
+    assert executed == [
+        [str(hdc_path), "-t", "device-1", "fport", "ls"],
+        [str(hdc_path), "-t", "device-1", "fport", "rm", "tcp:50000", "tcp:8012"],
+        [
+            str(hdc_path),
+            "-t",
+            "device-1",
+            "fport",
+            "rm",
+            "tcp:59275",
+            "localabstract:scrcpy_grpc_socket",
+        ],
+    ]
+
+
+def test_clean_up_device_processes_kills_residual_pids(tmp_path, monkeypatch) -> None:
+    hdc_path = tmp_path / "hdc.exe"
+    hdc_path.write_bytes(b"fake-hdc")
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path(str(hdc_path))
+    executed: list[list[str]] = []
+
+    def fake_run_cmd(cmd, timeout=None, **kwargs):
+        executed.append(list(cmd))
+        if cmd[-1] == "ps -ef":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    "UID            PID  PPID ELAPSED ARGS\n"
+                    "root          1234     1 1-02:00 uitest start-daemon singleness &\n"
+                    "root          9999     1 1-02:00"
+                    " snapshot_display -f /data/local/tmp/x.jpeg\n"
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    import worker.platforms.harmony_official.session as session_module
+
+    monkeypatch.setattr(session_module, "run_cmd", fake_run_cmd)
+
+    manager._clean_up_device_processes("device-1")
+
+    assert executed == [
+        [str(hdc_path), "-t", "device-1", "shell", "ps -ef"],
+        [str(hdc_path), "-t", "device-1", "shell", "kill -9 1234"],
+    ]
+
+
+def test_clean_up_methods_tolerate_hdc_failures(tmp_path, monkeypatch) -> None:
+    hdc_path = tmp_path / "hdc.exe"
+    hdc_path.write_bytes(b"fake-hdc")
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path(str(hdc_path))
+
+    import worker.platforms.harmony_official.session as session_module
+
+    def raising_run_cmd(cmd, timeout=None, **kwargs):
+        raise OSError("hdc disappeared")
+
+    monkeypatch.setattr(session_module, "run_cmd", raising_run_cmd)
+
+    manager._clean_up_hdc_fport("device-1")
+    manager._clean_up_device_processes("device-1")
+
+
+def test_get_or_start_cleans_residue_before_each_start_attempt(monkeypatch) -> None:
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    # _build_settings 只消费 java_path，重试参数直接改运行时配置。
+    manager._settings["reconnect_attempts"] = 2
+    manager.set_hdc_path("hdc.exe")
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        manager, "_clean_up_hdc_fport", lambda serial: events.append(("fport", serial))
+    )
+    monkeypatch.setattr(
+        manager,
+        "_clean_up_device_processes",
+        lambda serial: events.append(("processes", serial)),
+    )
+
+    def fail_start(self) -> None:
+        raise OSError("java executable failed")
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", fail_start)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+    assert manager.get_or_start("device-1") is None
+    assert events == [
+        ("fport", "device-1"),
+        ("processes", "device-1"),
+        ("fport", "device-1"),
+        ("processes", "device-1"),
+    ]
+
+
+def test_get_or_start_reuses_running_session_without_cleanup(monkeypatch) -> None:
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    running = SimpleNamespace(is_running=True)
+    manager._sessions["device-1"] = running
+    events: list[str] = []
+    monkeypatch.setattr(
+        manager, "_clean_up_hdc_fport", lambda serial: events.append("fport")
+    )
+    monkeypatch.setattr(
+        manager, "_clean_up_device_processes", lambda serial: events.append("processes")
+    )
+
+    assert manager.get_or_start("device-1") is running
+    assert events == []
 
 
 def test_harmony_action_runtime_error_falls_back_to_hdc(
