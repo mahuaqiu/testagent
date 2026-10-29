@@ -158,7 +158,7 @@ class UnlockScreenAction(ActionExecutor):
 
             # 有密码场景：输入密码
             if platform.platform == "harmony_pc":
-                # 鸿蒙 PC 锁屏是文本密码框：点击聚焦后整串输入并回车
+                # 鸿蒙 PC 锁屏是文本密码框：点击聚焦 → 清空残留 → 整串输入 → 回车
                 self._input_password_pc(platform, context, password)
             else:
                 # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
@@ -558,7 +558,12 @@ class UnlockScreenAction(ActionExecutor):
                 logger.info("Harmony PC unlock via swipe up")
 
     def _input_password_pc(self, platform: "PlatformManager", context: object, password: str) -> None:
-        """鸿蒙 PC 锁屏密码输入：点击密码框聚焦 → 整串输入 → 回车确认。"""
+        """鸿蒙 PC 锁屏密码输入：点击密码框聚焦 → Ctrl+A 全选 → BackSpace 清空 → 整串输入 → 回车确认。
+
+        密码框可能有上次输入残留，输入前先全选清空。Ctrl+A 组合键与
+        BackSpace 走 uinput -K 通道（uitest keyEvent 在鸿蒙 PC 上不支持
+        修饰键组合）。
+        """
         hdc = context or platform._device_clients.get(platform._current_device)
         if not hdc:
             raise RuntimeError("No Harmony PC device context for password input")
@@ -570,13 +575,20 @@ class UnlockScreenAction(ActionExecutor):
         hdc.tap(x, y)
         time.sleep(0.5)
 
-        # 在密码框坐标整串输入密码
-        hdc.input_text_at(x, y, password)
+        # Ctrl+A 全选 → BackSpace 清空残留内容
+        platform.press("ctrl+a", hdc)
+        time.sleep(0.3)
+        platform.press("BACKSPACE", hdc)
+        time.sleep(0.3)
+
+        # 向聚焦的密码框整串输入密码
+        if not hdc.input_text(password):
+            raise RuntimeError(f"Harmony PC password input failed at ({x}, {y})")
         time.sleep(0.5)
 
         # 回车确认
         hdc.press_key("ENTER")
-        logger.info(f"Harmony PC password entered at ({x}, {y}) and confirmed with ENTER")
+        logger.info(f"Harmony PC password cleared, entered at ({x}, {y}) and confirmed with ENTER")
 
     def _tap_digit(self, platform: "PlatformManager", context: object, x: int, y: int, scale_factor: int = 1) -> None:
         """点击密码数字（配置使用物理坐标，点击时转换）。"""

@@ -872,15 +872,20 @@ def test_harmony_wakeup_uses_power_shell_and_falls_back_to_power_key() -> None:
 
 def test_harmony_unlock_pc_branch_swipes_and_inputs_password() -> None:
     action = UnlockScreenAction()
-    platform = SimpleNamespace(platform="harmony_pc", _unlock_config={})
+    pressed_keys: list[str] = []
+    platform = SimpleNamespace(
+        platform="harmony_pc",
+        _unlock_config={},
+        press=lambda key, context=None: pressed_keys.append(key),
+    )
     swipes: list[tuple[int, int, int, int]] = []
     taps: list[tuple[int, int]] = []
-    texts: list[tuple[int, int, str]] = []
+    texts: list[str] = []
     keys: list[str] = []
     client = SimpleNamespace(
         swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
         tap=lambda x, y: taps.append((x, y)),
-        input_text_at=lambda x, y, text: texts.append((x, y, text)),
+        input_text=lambda text: texts.append(text) or True,
         press_key=lambda key: keys.append(key),
     )
 
@@ -890,7 +895,8 @@ def test_harmony_unlock_pc_branch_swipes_and_inputs_password() -> None:
     assert swipes == [(1560, 1600, 1560, 600)]
     box = UnlockScreenAction.DEFAULT_HARMONY_PC_PASSWORD_BOX
     assert taps == [(box["x"], box["y"])]
-    assert texts == [(box["x"], box["y"], "123456")]
+    assert pressed_keys == ["ctrl+a", "BACKSPACE"]
+    assert texts == ["123456"]
     assert keys == ["ENTER"]
 
 
