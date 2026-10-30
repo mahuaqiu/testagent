@@ -127,7 +127,7 @@ DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
 DEFAULT_HARMONY_STREAMING_MAX_LONG_EDGE = 1600
 
 # 鸿蒙官方 Bridge 固定随程序发布；仅开发环境的 Java 可执行文件允许配置。
-DEFAULT_HARMONY_JAR_REL_PATH = "tools/harmony/hosScrcpy-1.0.15-beta.jar"
+DEFAULT_HARMONY_JAR_REL_PATH = "tools/harmony/hosScrcpy-1.0.18-beta.jar"
 DEFAULT_HARMONY_BRIDGE_REL_PATH = "tools/harmony/bridge"
 DEFAULT_HARMONY_BUNDLED_JAVA_REL_PATH = "tools/jre/bin/java.exe"
 
