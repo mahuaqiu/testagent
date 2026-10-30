@@ -553,6 +553,23 @@ class HarmonyOfficialFrameSource:
         with self._start_lock:
             return bool(self._session and self._session.is_running)
 
+    def wake_h264_stream(self) -> None:
+        """唤醒静止画面并补一个新关键帧（前端解码管线软重建后调用）。
+
+        静止画面下设备编码器不产帧，软重建后的浏览器只能靠新 IDR 重新出画。
+        """
+        with self._start_lock:
+            session = self._session
+        if session is None:
+            return
+        try:
+            session.wake_stream()
+            session.request_idr(force=True)
+        except Exception as exc:
+            logger.debug(
+                "唤醒鸿蒙官方 H.264 流失败: device=%s, error=%s", self.device_id, exc
+            )
+
     def h264_startup_diagnosis(self) -> dict:
         """首帧超时诊断快照（转发给官方会话；会话缺失时显式标注）。"""
         with self._start_lock:

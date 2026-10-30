@@ -1479,6 +1479,13 @@ async def screen_stream(
                 continue
             if payload.get("type") == "activity":
                 last_activity_at = time.monotonic()
+            elif payload.get("type") == "wake":
+                # 前端 MSE 解码管线软重建后请求一次唤醒+新关键帧，静止画面下
+                # 也能尽快恢复出画；同时视为用户活动刷新空闲计时。
+                last_activity_at = time.monotonic()
+                wake_stream = getattr(frame_source, "wake_h264_stream", None)
+                if callable(wake_stream):
+                    await asyncio.to_thread(wake_stream)
             elif payload.get("type") == "input" and pointer_injector is not None:
                 # 指针事件同样是用户活动：刷新空闲计时，避免操作中被空闲回收。
                 last_activity_at = time.monotonic()
