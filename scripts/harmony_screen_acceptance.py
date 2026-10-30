@@ -5,7 +5,7 @@
 2. 设备形态分类（device_category → mobile/pc）
 3. 分辨率解析（真机 hidumper 输出格式）
 4. snapshot_display 截图（轮询兜底路径的底座）
-5. uitest 帧流启动（agent 部署 + daemon 重启 + fport + startCaptureScreen）
+5. uitest 帧流启动（daemon 重启 + fport + startCaptureScreen，agent.so 由官方 SDK 安装）
 6. 帧率与帧质量（JPEG 合法性、fps、帧尺寸与 display_size 一致性）
 7. 停止清理（fport 规则无残留）
 8. 帧流失败自动降级轮询（HarmonyFrameSource）
@@ -126,19 +126,11 @@ def check_screenshot(hdc: HarmonyHdcWrapper):
     return True, f"JPEG {len(data)} 字节, 尺寸 {jpeg_size(data)}"
 
 
-def start_capture_with_agent_trace(hdc: HarmonyHdcWrapper):
-    """启动帧流并记录实际生效的 agent 版本。"""
+def start_capture(hdc: HarmonyHdcWrapper):
+    """启动帧流（agent.so 由官方 HOScrcpy SDK 引导安装，本脚本不再推送）。"""
     capture = HarmonyScreenCapture(hdc)
-    used_agents: list[str] = []
-    original = capture._setup_device_agent
-
-    def traced(path: str) -> None:
-        used_agents.append(os.path.basename(path))
-        original(path)
-
-    capture._setup_device_agent = traced
     capture.start()
-    return capture, (used_agents[-1] if used_agents else "?")
+    return capture
 
 
 @check("6. 帧率与帧质量")
@@ -184,8 +176,15 @@ def check_cleanup(hdc: HarmonyHdcWrapper, capture: HarmonyScreenCapture):
 
 @check("8. 帧流失败自动降级轮询")
 def check_fallback(hdc: HarmonyHdcWrapper):
-    saved = harmony_capture.AGENT_CANDIDATES
-    harmony_capture.AGENT_CANDIDATES = ("__nonexistent_agent__.so",)
+    class FailingCapture:
+        def __init__(self, hdc):
+            pass
+
+        def start(self):
+            raise HarmonyCaptureError("forced failure for acceptance check")
+
+    saved = harmony_capture.HarmonyScreenCapture
+    harmony_capture.HarmonyScreenCapture = FailingCapture
     try:
         source = HarmonyFrameSource(hdc.serial, hdc)
         source.start()
@@ -194,7 +193,7 @@ def check_fallback(hdc: HarmonyHdcWrapper):
         frame = source.get_frame()
         source.stop()
     finally:
-        harmony_capture.AGENT_CANDIDATES = saved
+        harmony_capture.HarmonyScreenCapture = saved
     if not is_valid_jpeg(frame):
         return False, "轮询模式产出非合法 JPEG"
     return True, f"轮询模式出帧 {len(frame)} 字节"
@@ -259,8 +258,8 @@ def main() -> int:
     # 5+6+7: 帧流全链路
     capture = None
     try:
-        capture, agent_name = start_capture_with_agent_trace(hdc)
-        record("PASS", "5. uitest 帧流启动", f"生效 agent: {agent_name}")
+        capture = start_capture(hdc)
+        record("PASS", "5. uitest 帧流启动", "agent.so 由官方 HOScrcpy SDK 引导安装")
     except HarmonyCaptureError as exc:
         record("FAIL", "5. uitest 帧流启动", f"{exc}（PC 形态可能属预期，走轮询降级）")
     if capture is not None:

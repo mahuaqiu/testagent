@@ -1017,53 +1017,55 @@ def test_split_jpeg_frames_discards_dirty_data_before_frame_start() -> None:
 
 
 # ============================================================================
-# 投屏帧流：agent 版本回退
+# 投屏帧流：握手失败重试（agent.so 由官方 SDK 安装，本模块不再推送）
 # ============================================================================
 
 
-def _make_stub_capture(monkeypatch: pytest.MonkeyPatch, failing_agents: set[str]):
-    """构造内部步骤全部打桩的 HarmonyScreenCapture，记录尝试的 agent。"""
+def _make_stub_capture(monkeypatch: pytest.MonkeyPatch, failing_attempts: int):
+    """构造内部步骤全部打桩的 HarmonyScreenCapture，前 N 次握手失败。"""
     capture = HarmonyScreenCapture(SimpleNamespace(serial="dev-001"))
-    attempted: list[str] = []
+    attempts: list[int] = []
+    state = {"count": 0}
 
-    def fake_setup_agent(path: str) -> None:
-        name = os.path.basename(path)
-        attempted.append(name)
-        if name in failing_agents:
-            raise HarmonyCaptureError(f"{name} incompatible")
+    def failing_start_capture_screen() -> None:
+        state["count"] += 1
+        attempts.append(state["count"])
+        if state["count"] <= failing_attempts:
+            raise HarmonyCaptureError("daemon not ready")
 
-    monkeypatch.setattr(capture, "_setup_device_agent", fake_setup_agent)
+    monkeypatch.setattr(capture, "_warn_if_agent_missing", lambda: None)
     for step in ("_restart_uitest_daemon", "_setup_fport", "_connect_sock",
-                 "_start_capture_screen", "_cleanup", "_recv_worker"):
+                 "_cleanup", "_recv_worker"):
         monkeypatch.setattr(capture, step, lambda: None)
-    return capture, attempted
+    monkeypatch.setattr(
+        capture, "_start_capture_screen", failing_start_capture_screen
+    )
+    return capture, attempts
 
 
-def test_harmony_capture_start_falls_back_to_older_agent(
+def test_harmony_capture_start_retries_after_forced_daemon_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture, attempted = _make_stub_capture(
-        monkeypatch, failing_agents={"uitest_agent_v1.2.2.so"}
-    )
+    capture, attempts = _make_stub_capture(monkeypatch, failing_attempts=1)
 
     capture.start()
 
-    # 新版失败后回退旧版，且按 AGENT_CANDIDATES 顺序尝试
-    assert attempted == list(harmony_capture.AGENT_CANDIDATES)
-    assert attempted == ["uitest_agent_v1.2.2.so", "uitest_agent_v1.1.0.so"]
+    # 首次握手失败 → 强制重启 daemon → 重试成功
+    assert attempts == [1, 2]
+    assert capture._force_daemon_restart is False
 
 
-def test_harmony_capture_start_raises_when_all_agents_fail(
+def test_harmony_capture_start_raises_when_both_attempts_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture, attempted = _make_stub_capture(
-        monkeypatch, failing_agents=set(harmony_capture.AGENT_CANDIDATES)
-    )
+    capture, attempts = _make_stub_capture(monkeypatch, failing_attempts=2)
 
     with pytest.raises(HarmonyCaptureError):
         capture.start()
 
-    assert attempted == list(harmony_capture.AGENT_CANDIDATES)
+    assert attempts == [1, 2]
+    # 全部失败保留强制重启标记，下一次 start 先清理僵死 daemon
+    assert capture._force_daemon_restart is True
 
 
 # ============================================================================

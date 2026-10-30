@@ -389,6 +389,7 @@ def test_h264_second_subscription_can_replay_active_keyframe() -> None:
         skipped_p_packets=0,
         queue_full_events=0,
         peak_queue_size=0,
+        resync_log_count=0,
     )
 
     queue = session.subscribe_h264("subscriber-2")
@@ -425,6 +426,7 @@ def test_h264_subscription_waits_for_idr_when_only_config_is_cached() -> None:
         skipped_p_packets=0,
         queue_full_events=0,
         peak_queue_size=0,
+        resync_log_count=0,
     )
 
     queue = session.subscribe_h264("subscriber-2")
@@ -464,6 +466,7 @@ def test_h264_slow_subscriber_drops_only_its_p_frame_and_requests_idr() -> None:
         skipped_p_packets=0,
         queue_full_events=0,
         peak_queue_size=0,
+        resync_log_count=0,
     )
     fast_queue = Queue(maxsize=4)
     session._h264_subscribers["fast"] = SimpleNamespace(  # type: ignore[assignment]
@@ -477,6 +480,7 @@ def test_h264_slow_subscriber_drops_only_its_p_frame_and_requests_idr() -> None:
         skipped_p_packets=0,
         queue_full_events=0,
         peak_queue_size=0,
+        resync_log_count=0,
     )
     session._broadcast_h264(b"\x00\x00\x01\x41\x09")
 
@@ -484,7 +488,8 @@ def test_h264_slow_subscriber_drops_only_its_p_frame_and_requests_idr() -> None:
     assert slow.dropped_p_packets == 1
     assert slow.waiting_for_keyframe is True
     assert fast_queue.get_nowait() == b"\x03\x00\x00\x01\x41\x09"
-    assert sent_commands == [b"REQUEST_IDR\n"]
+    # 溢出恢复先唤醒静止画面（保证收敛到新关键帧），再补 IDR 请求
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
     session.stop()
 
 
@@ -512,6 +517,7 @@ def test_h264_slow_subscriber_clears_stale_packets_and_keeps_config() -> None:
         skipped_p_packets=0,
         queue_full_events=0,
         peak_queue_size=0,
+        resync_log_count=0,
     )
 
     session._broadcast_h264(b"\x00\x00\x01\x41new-p")

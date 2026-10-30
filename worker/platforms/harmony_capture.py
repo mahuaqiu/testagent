@@ -3,7 +3,8 @@
 
 agent.so 来自华为官方 Hypium（DevEco Testing）投屏插件，协议参考
 hmdriver2/hmnextauto 的实现（不集成其代码）：
-1. 推送 agent.so 到设备（MD5 比对，按需更新；新版不兼容时自动回退旧版）；
+1. 设备上的 agent.so 由官方 HOScrcpy SDK（Java 官方连接 startCaptureScreen
+   引导）负责安装/更新，本模块不推送、直接使用设备上已有版本；
 2. 按需重启 uitest start-daemon singleness 守护进程（监听设备 8012 端口；
    端口已在监听时跳过重启，避免打断同设备其他 uitest 自动化）；
 3. hdc fport 转发本地空闲端口到设备 8012；
@@ -11,10 +12,8 @@ hmdriver2/hmnextauto 的实现（不集成其代码）：
    成功后同一连接持续收取 JPEG 字节流，按 JPEG 段结构切帧（约 10fps）。
 """
 
-import hashlib
 import json
 import logging
-import os
 import socket
 import threading
 import time
@@ -26,14 +25,8 @@ logger = logging.getLogger(__name__)
 
 # uitest daemon 在设备侧监听的固定端口
 UITEST_SERVICE_PORT = 8012
-# agent.so 在设备上的固定部署路径
+# agent.so 在设备上的固定部署路径（由官方 HOScrcpy SDK 引导时安装/更新）
 REMOTE_AGENT_PATH = "/data/local/tmp/agent.so"
-# 内置 agent.so 资产目录（取自官方 Hypium 投屏插件）
-AGENT_ASSETS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "harmony_assets"
-)
-# 候选 agent 版本，新版优先；启动失败时自动回退旧版（两版协议一致）
-AGENT_CANDIDATES = ("uitest_agent_v1.2.2.so", "uitest_agent_v1.1.0.so")
 SOCKET_TIMEOUT = 20
 # 单次 recv 的缓冲大小（JPEG 帧较大，用大缓冲减少系统调用）
 RECV_BUFF_SIZE = 4096 * 1024
@@ -149,10 +142,8 @@ class HarmonyScreenCapture:
         capture.stop()
     """
 
-    def __init__(self, hdc: HarmonyHdcWrapper, agent_path: str | None = None):
+    def __init__(self, hdc: HarmonyHdcWrapper):
         self.hdc = hdc
-        # 显式指定 agent 路径时只用该版本，否则按 AGENT_CANDIDATES 依次尝试
-        self.agent_path = agent_path
         self.local_port: int | None = None
         self.sock: socket.socket | None = None
 
@@ -184,24 +175,18 @@ class HarmonyScreenCapture:
 
     def start(self) -> None:
         """
-        建立帧流。逐个尝试候选 agent 版本，全部失败抛
+        建立帧流。不再推送 agent.so（由官方 HOScrcpy SDK 引导安装）；握手
+        失败且疑似 daemon 僵死时强制重启重试一次，仍失败抛
         HarmonyCaptureError（调用方降级轮询）。
         """
-        if self.agent_path:
-            agent_paths = [self.agent_path]
-        else:
-            agent_paths = [
-                os.path.join(AGENT_ASSETS_DIR, name) for name in AGENT_CANDIDATES
-            ]
-
         with self._frame_cond:
             # 复用实例重开流时丢弃上一轮残留的流前缀
             self._pending_stream_prefix = bytearray()
 
+        self._warn_if_agent_missing()
         last_error: Exception | None = None
-        for agent_path in agent_paths:
+        for _attempt in (1, 2):
             try:
-                self._setup_device_agent(agent_path)
                 self._restart_uitest_daemon()
                 self._setup_fport()
                 self._connect_sock()
@@ -213,12 +198,10 @@ class HarmonyScreenCapture:
                 last_error = exc
                 # daemon 端口在监听但握手失败，说明实例已僵死，下一轮强制重启
                 self._force_daemon_restart = True
-                logger.warning(
-                    f"agent {os.path.basename(agent_path)} 启动帧流失败: {exc}"
-                )
+                logger.warning(f"uitest 帧流启动失败: {exc}")
         else:
             raise HarmonyCaptureError(
-                f"启动 uitest 帧流失败（已尝试 {len(agent_paths)} 个 agent 版本）: {last_error}"
+                f"启动 uitest 帧流失败: {last_error}"
             ) from last_error
 
         self._stop_event.clear()
@@ -303,37 +286,22 @@ class HarmonyScreenCapture:
     # 内部实现
     # ------------------------------------------------------------------
 
-    def _setup_device_agent(self, agent_path: str) -> None:
-        """按 MD5 比对推送 agent.so 并赋执行权限。"""
-        if not os.path.isfile(agent_path):
-            raise HarmonyCaptureError(f"agent.so 资产不存在: {agent_path}")
-
-        exists = "exists" in self.hdc.shell(
-            f"[ -f {REMOTE_AGENT_PATH} ] && echo exists || echo missing"
-        ).output
-        if exists:
-            local_md5 = self._local_md5(agent_path)
-            remote_output = self.hdc.shell(f"md5sum {REMOTE_AGENT_PATH}").output.strip()
-            remote_md5 = remote_output.split()[0] if remote_output else ""
-            if local_md5 == remote_md5:
-                self.hdc.shell(f"chmod +x {REMOTE_AGENT_PATH}")
-                return
-            self.hdc.shell(f"rm -f {REMOTE_AGENT_PATH}")
-
-        if not self.hdc.push_file(agent_path, REMOTE_AGENT_PATH):
-            raise HarmonyCaptureError("推送 agent.so 到设备失败")
-        self.hdc.shell(f"chmod +x {REMOTE_AGENT_PATH}")
-        logger.info(
-            f"agent 已更新到设备: {self.hdc.serial} ({os.path.basename(agent_path)})"
-        )
-
-    @staticmethod
-    def _local_md5(file_path: str) -> str:
-        hash_md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
+    def _warn_if_agent_missing(self) -> None:
+        """设备上没有 agent.so 时打告警（它由官方 HOScrcpy Java 连接安装）。"""
+        try:
+            exists = "exists" in self.hdc.shell(
+                f"[ -f {REMOTE_AGENT_PATH} ] && echo exists || echo missing"
+            ).output
+        except Exception as exc:
+            logger.debug("探测设备 agent.so 失败: %s", exc)
+            return
+        if not exists:
+            logger.warning(
+                "设备 %s 上不存在 %s（由官方 HOScrcpy Java 连接安装），"
+                "uitest 帧流可能无法启动，将降级 snapshot_display 轮询",
+                self.hdc.serial,
+                REMOTE_AGENT_PATH,
+            )
 
     def _daemon_port_listening(self) -> bool:
         """探测设备侧 uitest 端口是否处于监听状态（探测失败按未监听处理）。"""
