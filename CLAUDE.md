@@ -77,7 +77,7 @@ PlatformManager (抽象基类)
 
 设备检测间隔、服务重试参数、动作间隔、iOS 工具路径和 Web 浏览器固定运行参数由代码默认值管理，不放入 YAML 或平台下发配置。
 
-鸿蒙 HDC、HOScrcpy JAR 和 Bridge 类目录由程序从安装/项目根目录自动定位，不放在 YAML 中。`harmony_official.java_path` 仅供开发环境指定 Java；打包安装后固定使用 `tools/jre/bin/java.exe`，不会读取开发配置中的路径。
+鸿蒙 HDC、HOScrcpy JAR 和 Bridge 类目录由程序从安装/项目根目录自动定位，不放在 YAML 中。`harmony_official.java_path` 仅供开发环境指定 Java；打包安装后固定使用 `tools/jre/bin/java.exe`，不会读取开发配置中的路径。设备上的鸿蒙投屏 agent（`/data/local/tmp/agent.so`）由 HOScrcpy SDK 在 Java 官方连接引导时自动安装/更新，JPEG 帧流（`harmony_capture.py`）不推送、直接使用设备上已有版本；仓库不再携带 agent SO 文件。
 
 ## 平台支持策略
 
