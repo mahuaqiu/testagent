@@ -987,6 +987,14 @@ class Worker:
                 )
 
         context = None
+        # 任务执行期间标记设备忙：官方会话的自动触摸唤醒（wake_stream）在此
+        # 期间降级为仅请求 IDR，避免 uinput 滑动干扰自动化手势。手动远程
+        # 操作不打此标记。
+        mark_busy = getattr(manager, "mark_device_busy", None)
+        device_busy_marked = False
+        if callable(mark_busy) and task.device_id:
+            mark_busy(task.device_id, True)
+            device_busy_marked = True
         try:
             # 检查是否只需要关闭会话（stop_app 动作不需要 context）
             needs_context = self._needs_context(task)
@@ -1051,6 +1059,14 @@ class Worker:
                     manager.close_context(context, close_session=False)
                 except Exception as e:
                     logger.warning(f"Failed to close context: {e}\n{traceback.format_exc()}")
+
+            if device_busy_marked and callable(mark_busy):
+                try:
+                    mark_busy(task.device_id, False)
+                except Exception as exc:
+                    logger.warning(
+                        f"清除设备任务忙标记失败: device_id={task.device_id}, {exc}"
+                    )
     def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:
         """登记动作产生的截图和录屏文件。"""
         references: list[dict[str, Any]] = []

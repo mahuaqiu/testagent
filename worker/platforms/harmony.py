@@ -99,6 +99,11 @@ class HarmonyPlatformManager(PlatformManager):
             official_config,
         )
         self._official_sessions.set_device_lock_checker(self._is_device_locked_for_official)
+        # 任务执行中的设备标记：官方会话的自动触摸唤醒（wake_stream）在此期间
+        # 降级为仅请求 IDR，避免 uinput 滑动干扰自动化手势。
+        self._task_busy_devices: set[str] = set()
+        self._task_busy_lock = threading.Lock()
+        self._official_sessions.set_wake_poke_gate(self._is_device_task_busy)
 
     @property
     def platform(self) -> str:
@@ -213,6 +218,18 @@ class HarmonyPlatformManager(PlatformManager):
         """供官方会话管理器判断设备是否可启动屏幕采集。"""
         client = self._device_clients.get(udid)
         return self._is_locked_client(client) if client is not None else False
+
+    def mark_device_busy(self, udid: str, busy: bool) -> None:
+        """标记/清除设备任务执行状态（任务期间自动触摸唤醒降级为仅请求 IDR）。"""
+        with self._task_busy_lock:
+            if busy:
+                self._task_busy_devices.add(udid)
+            else:
+                self._task_busy_devices.discard(udid)
+
+    def _is_device_task_busy(self, udid: str) -> bool:
+        with self._task_busy_lock:
+            return udid in self._task_busy_devices
 
     def mark_device_faulty(self, udid: str) -> None:
         """

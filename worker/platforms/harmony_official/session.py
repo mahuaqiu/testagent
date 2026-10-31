@@ -198,6 +198,8 @@ class HarmonyOfficialSession:
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
         self._state_lock = threading.RLock()
+        # 触摸唤醒门控：任务执行中返回 True，wake_stream 跳过 uinput 触摸注入
+        self._wake_poke_gate: Callable[[str], bool] | None = None
         self._input_lock = threading.Lock()
         self._startup_error = ""
         self._closed_reason = ""
@@ -392,8 +394,19 @@ class HarmonyOfficialSession:
                 ),
             }
 
+    def set_wake_poke_gate(self, gate: Callable[[str], bool] | None) -> None:
+        """设置触摸唤醒门控：返回 True 表示任务执行中，wake_stream 跳过 uinput 触摸。"""
+        self._wake_poke_gate = gate
+
     def wake_stream(self) -> None:
-        """请求官方 SDK 让静止画面产生一次新的 H.264 回调。"""
+        """请求官方 SDK 让静止画面产生一次新的 H.264 回调。
+
+        任务执行期间跳过 uinput 触摸注入（滑动可能干扰自动化手势），由调用方
+        随后补发的 IDR 请求出帧——任务中画面活跃，仅 IDR 即可产出关键帧。
+        """
+        if self._wake_poke_gate is not None and self._wake_poke_gate(self.serial):
+            logger.info("任务执行中，触摸唤醒降级为仅请求 IDR: serial=%s", self.serial)
+            return
         try:
             self._send(command_wake_stream())
         except HarmonyOfficialError:
@@ -1091,6 +1104,8 @@ class HarmonyOfficialSessionManager:
         # 只串行同一设备的并发启动，不阻塞其他设备的 acquire/订阅。
         self._start_locks: dict[str, threading.Lock] = {}
         self._device_lock_checker: Callable[[str], bool] | None = None
+        # 触摸唤醒门控（任务执行中跳过 uinput 触摸），传播给每个新建会话
+        self._wake_poke_gate: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
 
     def set_hdc_path(self, hdc_path: str | None) -> None:
@@ -1099,6 +1114,10 @@ class HarmonyOfficialSessionManager:
     def set_device_lock_checker(self, checker: Callable[[str], bool] | None) -> None:
         """设置设备锁屏状态查询器，锁屏时不启动官方视频会话。"""
         self._device_lock_checker = checker
+
+    def set_wake_poke_gate(self, gate: Callable[[str], bool] | None) -> None:
+        """设置触摸唤醒门控（任务忙时 wake_stream 跳过 uinput 触摸）。"""
+        self._wake_poke_gate = gate
 
     def _is_device_locked(self, serial: str) -> bool:
         checker = self._device_lock_checker
@@ -1235,6 +1254,7 @@ class HarmonyOfficialSessionManager:
                         hdc_path=self._hdc_path,
                         settings=self._settings_for_serial(serial),
                     )
+                    session.set_wake_poke_gate(self._wake_poke_gate)
                     try:
                         # start() 持 per-serial 启动锁在全局锁外执行。
                         session.start()

@@ -530,6 +530,32 @@ def test_h264_slow_subscriber_clears_stale_packets_and_keeps_config() -> None:
     session.stop()
 
 
+def test_wake_stream_skips_touch_poke_while_task_busy() -> None:
+    sent_commands: list[bytes] = []
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+
+    # 任务执行中：跳过 uinput 触摸注入（防干扰自动化手势）
+    session.set_wake_poke_gate(lambda serial: True)
+    session.wake_stream()
+    assert sent_commands == []
+
+    # 空闲：正常发送触摸唤醒
+    session.set_wake_poke_gate(lambda serial: False)
+    session.wake_stream()
+    assert sent_commands == [b"WAKE_STREAM\n"]
+    session.stop()
+
+
 def test_h264_subscription_stops_idr_retry_after_success(monkeypatch) -> None:
     sent_commands: list[bytes] = []
     monkeypatch.setattr(
