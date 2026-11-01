@@ -1581,6 +1581,202 @@ def test_harmony_create_context_reuses_client_without_online_probe() -> None:
     assert manager._current_device == "device-001"
 
 
+SCREENLOCK_DUMP = (
+    "----------------------------------ScreenlockService-----------------------"
+    "-----------\n"
+    " Screenlock system state\tValue\t\tDescription\n"
+    " * screenState  \ttrue\t\tscreen on / off status\n"
+    " * interactiveState  \t2\t\tscreen interaction status\n"
+    " * deviceLocked  \ttrue\t\t100\n"
+    " * screenLocked  \tfalse\t\t100\n"
+)
+
+
+def test_screenlock_status_single_dump_parses_locked_and_interactive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """合并 dump：一次 ScreenlockService 查询同时解析锁屏+交互状态。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_calls: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: shell_calls.append(command)
+        or CommandResult(SCREENLOCK_DUMP, "", 0),
+    )
+
+    status = wrapper.screenlock_status()
+
+    assert status == {"locked": False, "interactive_state": 2}
+    assert shell_calls == ["hidumper -s 3704 -a -all"]
+
+
+def test_screenlock_status_falls_back_to_service_name_and_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """数字服务 ID dump 不出内容时按服务名回退，并缓存可用变体。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_calls: list[str] = []
+
+    def shell(command, timeout=30):
+        shell_calls.append(command)
+        if "3704" in command:
+            return CommandResult("", "[fail] dump failed", 1)
+        return CommandResult(SCREENLOCK_DUMP, "", 0)
+
+    monkeypatch.setattr(wrapper, "shell", shell)
+
+    assert wrapper.screenlock_status() == {"locked": False, "interactive_state": 2}
+    assert shell_calls == [
+        "hidumper -s 3704 -a -all",
+        "hidumper -s ScreenlockService -a -all",
+    ]
+
+    # 命中缓存后不再重演必败的数字 ID 尝试
+    shell_calls.clear()
+    assert wrapper.screenlock_status() == {"locked": False, "interactive_state": 2}
+    assert shell_calls == ["hidumper -s ScreenlockService -a -all"]
+
+
+def test_screenlock_status_all_variants_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """两个 dump 变体都失败：字段全部返回 None，由调用方按兜底语义处理。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: CommandResult("", "dump failed", 1),
+    )
+
+    assert wrapper.screenlock_status() == {"locked": None, "interactive_state": None}
+
+
+def test_device_info_merges_param_and_screen_dumps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """device_info：产品参数一条 shell 批量读，屏幕状态+分辨率共用一次 dump。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_calls: list[str] = []
+
+    def shell(command, timeout=30):
+        shell_calls.append(command)
+        if command.startswith("echo "):
+            return CommandResult(
+                "model=ALN-AL00\nproduct=HUAWEI Mate 60 Pro\napi=24\n"
+                "sysver=ALN-AL00 6.1.0.146\n",
+                "",
+                0,
+            )
+        if "-s 10" in command:
+            return CommandResult(
+                "screen[0]: id=0, powerStatus=POWER_STATUS_ON, "
+                "render resolution=1260x2720",
+                "",
+                0,
+            )
+        return CommandResult("", "unexpected", 1)
+
+    monkeypatch.setattr(wrapper, "shell", shell)
+
+    info = wrapper.device_info()
+
+    assert info["model"] == "ALN-AL00"
+    assert info["product_name"] == "HUAWEI Mate 60 Pro"
+    assert info["sdk_version"] == "24"
+    assert info["sys_version"] == "ALN-AL00 6.1.0.146"
+    assert info["display_size"] == (1260, 2720)
+    assert info["screen_on"] is True
+    assert info["screen_state"] == "AWAKE"
+    # 参数批量 1 次 + 屏幕 dump 1 次（原先 param ×4 + 屏幕 dump ×2）
+    assert sum(1 for c in shell_calls if c.startswith("echo ")) == 1
+    assert sum(1 for c in shell_calls if "-s 10" in c) == 1
+
+
+def test_harmony_unlock_merged_screenlock_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """解锁初始检测走合并 dump：ScreenlockService 一次，交互态不再单独查。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    screenlock_calls: list[int] = []
+    lock_verifies: list[int] = []
+    taps: list[tuple[int, int]] = []
+    swipes: list[tuple[int, int, int, int]] = []
+
+    client = SimpleNamespace(
+        screenlock_status=lambda: screenlock_calls.append(1)
+        or {"locked": True, "interactive_state": 2},
+        is_locked=lambda: lock_verifies.append(1) or False,
+        display_size=lambda: (1260, 2720),
+        swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
+        tap=lambda x, y: taps.append((x, y)),
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen", value="123456"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert screenlock_calls == [1]
+    assert lock_verifies == [1]  # 只有最终验证单独查锁屏
+    assert swipes == [HARMONY_MOBILE_UNLOCK_SWIPE]
+    keypad = HARMONY_KEYPAD_COORDINATES["1260x2720"]
+    assert taps == [(keypad[d]["x"], keypad[d]["y"]) for d in "123456"]
+
+
+def test_harmony_unlock_refreshes_screenlock_after_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """熄屏唤醒后刷新合并 dump：唤醒后仍是 AOD 则执行 suspend+wakeup 一轮。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    screenlock_results = iter([
+        {"locked": True, "interactive_state": 0},  # 初始：AOD 非交互
+        {"locked": True, "interactive_state": 0},  # 唤醒后：仍是 AOD
+    ])
+    screenlock_calls: list[int] = []
+    screen_on_states = iter([False, True])
+    wakeups: list[int] = []
+    suspends: list[int] = []
+    taps: list[tuple[int, int]] = []
+
+    client = SimpleNamespace(
+        screenlock_status=lambda: screenlock_calls.append(1)
+        or next(screenlock_results),
+        is_screen_on=lambda: next(screen_on_states),
+        is_locked=lambda: False,
+        is_interactive=lambda: (_ for _ in ()).throw(
+            AssertionError("应使用合并 dump 的交互态")
+        ),
+        wakeup=lambda: wakeups.append(1) or True,
+        suspend=lambda: suspends.append(1) or True,
+        display_size=lambda: (1260, 2720),
+        swipe=lambda *args: None,
+        tap=lambda x, y: taps.append((x, y)),
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen", value="123456"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert screenlock_calls == [1, 1]
+    assert wakeups == [1, 1]  # 唤醒屏幕 1 次 + AOD 循环 wakeup 1 次
+    assert suspends == [1]
+    assert len(taps) == 6
+
+
 # ============================================================================
 # press 按键/组合键（对齐官方 HOScrcpy DEMO 的 uinput -K 注入通道）
 # ============================================================================

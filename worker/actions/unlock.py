@@ -93,8 +93,16 @@ class UnlockScreenAction(ActionExecutor):
             logger.info(f"Scale factor for coordinate conversion: {scale_factor}")
 
         try:
-            # 1. 检测锁屏状态
-            is_locked = self._check_locked(platform, context)
+            # 1. 检测锁屏状态（鸿蒙用合并 dump：锁屏+可交互一次拿齐，
+            #    亮屏判断因 ScreenlockService 的 screenState 不可靠仍走
+            #    RenderService，见 HarmonyHdcWrapper.screenlock_status）
+            harmony_status = None
+            if platform.platform in self.HARMONY_PLATFORMS:
+                harmony_status = self._harmony_screenlock_status(platform, context)
+            if harmony_status is not None and harmony_status.get("locked") is not None:
+                is_locked = harmony_status["locked"]
+            else:
+                is_locked = self._check_locked(platform, context)
             logger.info(f"Screen locked status: {is_locked}")
 
             # 2. 检测屏幕亮度（判断是否熄屏）
@@ -133,10 +141,20 @@ class UnlockScreenAction(ActionExecutor):
                         error="Screen still off after wake attempt",
                     )
 
+                # 唤醒改变了屏幕状态，刷新合并 dump 供 AOD 交互判断
+                if platform.platform in self.HARMONY_PLATFORMS:
+                    harmony_status = self._harmony_screenlock_status(platform, context)
+
             # 3.5 鸿蒙手机 AOD（熄屏时钟）：亮屏但合成触摸被静默忽略，
             # 需 suspend+wakeup 一轮才能到达可交互的锁屏界面（真机验证）
             if platform.platform == "harmony_mobile":
-                self._ensure_interactive(platform, context)
+                self._ensure_interactive(
+                    platform,
+                    context,
+                    interactive_state=harmony_status.get("interactive_state")
+                    if harmony_status is not None
+                    else None,
+                )
 
             # 截止时间检查点：进入滑动/解锁方式触发前
             self._checkpoint(action)
@@ -511,23 +529,47 @@ class UnlockScreenAction(ActionExecutor):
                 logger.info("Harmony screen awakened via power-shell wakeup")
                 time.sleep(0.5)  # 等待屏幕点亮
 
-    def _ensure_interactive(self, platform: "PlatformManager", context: object) -> None:
+    def _harmony_screenlock_status(self, platform: "PlatformManager", context: object) -> dict | None:
+        """鸿蒙合并屏幕状态：一次 ScreenlockService dump 拿 锁屏/可交互。"""
+        hdc = context or platform._device_clients.get(platform._current_device)
+        if not hdc or not hasattr(hdc, "screenlock_status"):
+            return None
+        try:
+            return hdc.screenlock_status()
+        except Exception as e:
+            logger.warning(f"Failed to dump Harmony screen status: {e}")
+            return None
+
+    def _ensure_interactive(
+        self,
+        platform: "PlatformManager",
+        context: object,
+        interactive_state: int | None = None,
+    ) -> None:
         """确认鸿蒙设备处于可交互状态，AOD 息屏时钟则 suspend+wakeup 一轮。
 
+        interactive_state 由调用方从合并 dump 传入，未传时退回单独查询。
         AOD 亮屏（is_screen_on 为 True）但不接受合成触摸，且 wakeup 对已
         处于 AOD 的设备是空操作；suspend → wakeup 才能到达可交互的锁屏
         界面（真机实测 interactiveState 0=非交互，2=可交互）。执行到此处
         时设备已确认锁屏或熄屏，suspend 不会打断正在进行的操作。
         """
         hdc = context or platform._device_clients.get(platform._current_device)
-        if not hdc or not hasattr(hdc, "is_interactive"):
+        if not hdc:
             return
-        try:
-            if hdc.is_interactive():
+        if interactive_state is None:
+            if not hasattr(hdc, "is_interactive"):
                 return
-        except Exception as e:
-            logger.warning(f"Failed to check Harmony interactive state: {e}")
+            try:
+                if hdc.is_interactive():
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to check Harmony interactive state: {e}")
+                return
+        elif interactive_state == 2:
             return
+        elif interactive_state != 0:
+            logger.warning(f"未知的交互状态值: {interactive_state}，按非交互处理")
 
         logger.warning(
             "Harmony device in AOD (non-interactive) state, "

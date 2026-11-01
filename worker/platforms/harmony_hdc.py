@@ -678,6 +678,9 @@ class HarmonyHdcWrapper:
         self.serial = serial
         # 分辨率是设备不变量，display_size 首次成功查询后缓存
         self._display_size: tuple[int, int] | None = None
+        # ScreenlockService dump 可用变体缓存（部分 OS 版本按数字服务 ID
+        # dump 不出内容，需按服务名重试；命中后不再重演必败尝试）
+        self._screenlock_dump_cmd: str | None = None
 
         # 查找 HDC 工具
         if hdc_path is None:
@@ -1248,6 +1251,9 @@ class HarmonyHdcWrapper:
         """
         获取屏幕状态。
 
+        同一份 RenderService dump 还含 render resolution，顺手喂给
+        display_size 缓存；device_info 因此只需一次屏幕 dump。
+
         Returns:
             str: 屏幕状态
                 - "AWAKE": 屏幕亮起
@@ -1260,7 +1266,12 @@ class HarmonyHdcWrapper:
             logger.warning(f"获取屏幕状态失败: {result.error}")
             return "UNKNOWN"
 
-        return parse_harmony_screen_state(result.output)
+        state = parse_harmony_screen_state(result.output)
+        if getattr(self, "_display_size", None) is None:
+            size = parse_harmony_display_size(result.output)
+            if size != (0, 0):
+                self._display_size = size
+        return state
 
     def is_screen_on(self) -> bool:
         """
@@ -1282,18 +1293,57 @@ class HarmonyHdcWrapper:
         Returns:
             Optional[bool]: True 已锁屏，False 未锁屏，None 无法判断
         """
-        for dump_cmd in (
-            "hidumper -s 3704 -a -all",
-            "hidumper -s ScreenlockService -a -all",
-        ):
+        for dump_cmd in self._screenlock_dump_variants():
             result = self.shell(dump_cmd, timeout=10)
             if result.exit_code != 0:
                 continue
             state = parse_harmony_lock_state(result.output)
             if state is not None:
+                self._screenlock_dump_cmd = dump_cmd
                 return state
         logger.warning("未能从 ScreenlockService 解析锁屏状态")
         return None
+
+    def _screenlock_dump_variants(self) -> list[str]:
+        """ScreenlockService dump 命令候选，命中过的变体排最前。
+
+        部分 OS 版本按数字服务 ID dump 不出内容，需按服务名重试；
+        按设备缓存可用变体，避免每次查询都重演必败尝试。
+        """
+        variants = [
+            "hidumper -s 3704 -a -all",
+            "hidumper -s ScreenlockService -a -all",
+        ]
+        cached = getattr(self, "_screenlock_dump_cmd", None)
+        if cached and cached in variants:
+            variants.remove(cached)
+            variants.insert(0, cached)
+        return variants
+
+    def screenlock_status(self) -> dict:
+        """一次 hidumper ScreenlockService dump 同时解析 锁屏/可交互 两态。
+
+        解锁链路原先对 ScreenlockService（服务 ID 3704）dump 两次（锁屏
+        一次、交互状态一次），合并后每次检查只跑一条命令。注意不要用本
+        dump 的 screenState 判断亮屏：真机实测熄屏后该字段仍为 true，
+        亮屏判断须走 RenderService（hidumper -s 10）的 powerStatus。
+
+        Returns:
+            Dict: {"locked": bool | None, "interactive_state": int | None}
+                  字段解析失败为 None，调用方按各自兜底语义处理
+        """
+        for dump_cmd in self._screenlock_dump_variants():
+            result = self.shell(dump_cmd, timeout=10)
+            if result.exit_code != 0:
+                continue
+            locked = parse_harmony_lock_state(result.output)
+            interactive = parse_harmony_interactive_state(result.output)
+            if locked is None and interactive is None:
+                continue
+            self._screenlock_dump_cmd = dump_cmd
+            return {"locked": locked, "interactive_state": interactive}
+        logger.warning("未能从 ScreenlockService 解析屏幕状态")
+        return {"locked": None, "interactive_state": None}
 
     def is_locked(self) -> bool:
         """
@@ -1454,23 +1504,71 @@ class HarmonyHdcWrapper:
 
         return result.output.strip()
 
+    def _device_params(self) -> dict:
+        """一条 shell 批量读取入池用的产品参数（原先 4 次 param get 分开跑）。
+
+        param get 不支持多键，用带标签的 echo 包装在设备端串行执行，
+        宿主只起一次 hdc 进程；每条命令仍各自解析，互不影响。
+
+        Returns:
+            Dict: {"model": str, "product_name": str, "sdk_version": str,
+                   "sys_version": str}，缺失的键不出现在结果里
+        """
+        cmd = (
+            "echo model=$(param get const.product.model);"
+            "echo product=$(param get const.product.name);"
+            "echo api=$(param get const.ohos.apiversion);"
+            "echo sysver=$(param get const.product.software.version)"
+        )
+        result = self.shell(cmd, timeout=10)
+        if result.exit_code != 0:
+            logger.warning(f"批量读取设备参数失败: {result.error or result.output}")
+            return {}
+        matched: dict[str, str] = {}
+        for key, label in (
+            ("model", "model"),
+            ("product_name", "product"),
+            ("sdk_version", "api"),
+            ("sys_version", "sysver"),
+        ):
+            m = re.search(rf"^{label}=(.*)$", result.output, re.MULTILINE | re.IGNORECASE)
+            if m:
+                matched[key] = m.group(1).strip()
+        return matched
+
     def device_info(self) -> dict:
         """
         获取设备信息字典。
 
+        产品参数合并为一条 shell 批量读取；亮屏状态与屏幕状态共用同一次
+        RenderService dump（原先 is_screen_on/screen_state 各 dump 一次）。
+
         Returns:
             Dict: 设备信息字典，包含型号、产品名称、SDK版本、系统版本等
         """
-        return {
+        params = self._device_params()
+        state = self.screen_state()
+        info = {
             "serial": self.serial,
-            "model": self.model(),
-            "product_name": self.product_name(),
-            "sdk_version": self.sdk_version(),
-            "sys_version": self.sys_version(),
+            "model": params.get("model", ""),
+            "product_name": params.get("product_name", ""),
+            "sdk_version": params.get("sdk_version", ""),
+            "sys_version": params.get("sys_version", ""),
             "display_size": self.display_size(),
-            "screen_on": self.is_screen_on(),
-            "screen_state": self.screen_state(),
+            "screen_on": state in ("AWAKE", "INACTIVE"),
+            "screen_state": state,
         }
+        # 批量读取缺失的项退回逐项查询（非标输出/老版本兜底）
+        if len(params) < 4:
+            if "model" not in params:
+                info["model"] = self.model()
+            if "product_name" not in params:
+                info["product_name"] = self.product_name()
+            if "sdk_version" not in params:
+                info["sdk_version"] = self.sdk_version()
+            if "sys_version" not in params:
+                info["sys_version"] = self.sys_version()
+        return info
 
     # ========================================================================
     # 应用管理
