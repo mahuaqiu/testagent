@@ -113,3 +113,43 @@ def test_download_content_length_survives_real_gzip_middleware(client):
     assert resp.content == content
     assert resp.headers["content-length"] == str(len(content))
     assert resp.headers.get("content-encoding") == "identity"
+
+
+def test_download_dir_as_zip(client):
+    import io
+    import zipfile as zipfile_mod
+
+    root = _root_of(client)
+    (root / "logs").mkdir()
+    (root / "logs" / "a.log").write_bytes(b"AAA")
+    (root / "logs" / "sub").mkdir()
+    (root / "logs" / "sub" / "b.log").write_bytes(b"BBB")
+    resp = client.get("/files/download", params={"path": "logs", "zip": "true"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/zip")
+    assert "logs.zip" in resp.headers["content-disposition"]
+    zf = zipfile_mod.ZipFile(io.BytesIO(resp.content))
+    assert sorted(zf.namelist()) == ["logs/a.log", "logs/sub/b.log"]
+    assert zf.read("logs/a.log") == b"AAA"
+    assert zf.read("logs/sub/b.log") == b"BBB"
+
+
+def test_download_zip_on_file_rejected(client):
+    (_root_of(client) / "a.log").write_bytes(b"x")
+    resp = client.get("/files/download", params={"path": "a.log", "zip": "true"})
+    assert resp.status_code == 400
+
+
+def test_download_zip_temp_cleaned(client):
+    root = _root_of(client)
+    (root / "logs").mkdir()
+    (root / "logs" / "a.log").write_bytes(b"AAA")
+    resp = client.get("/files/download", params={"path": "logs", "zip": "true"})
+    assert resp.status_code == 200
+    # 临时 zip 写在根目录同级(data/),响应结束后不留残留
+    leftovers = [
+        p.name
+        for p in root.parent.iterdir()
+        if p.name.startswith("zq_files_")
+    ]
+    assert leftovers == []

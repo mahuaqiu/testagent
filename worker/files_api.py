@@ -12,6 +12,8 @@ import heapq
 import logging
 import os
 import shutil
+import tempfile
+import zipfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,8 +219,8 @@ async def list_files(path: str | None = Query(default=None)) -> dict:
 
 
 @router.get("/download")
-async def download_file(path: str = Query(...)):
-    """流式下载单文件。
+async def download_file(path: str = Query(...), zip: bool = Query(default=False)):
+    """流式下载单文件;zip=true 时目录打包为 zip 下载。
 
     Content-Length 在开始流式前定格:若文件仍被运行中的任务写入,实际
     字节数可能超出声明值,客户端会报传输错误——产物文件应在任务结束后
@@ -228,6 +230,10 @@ async def download_file(path: str = Query(...)):
     target = resolve_under_root(path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
+    if zip:
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="不是目录,无法打包下载")
+        return await _download_dir_as_zip(target)
     if not target.is_file():
         raise HTTPException(status_code=400, detail="不是文件")
 
@@ -252,6 +258,75 @@ async def download_file(path: str = Query(...)):
         "Content-Encoding": "identity",
     }
     return StreamingResponse(chunk_iter(), media_type="application/octet-stream", headers=headers)
+
+
+async def _download_dir_as_zip(target: Path) -> StreamingResponse:
+    """目录打 zip 流式下载。
+
+    先在同卷临时文件落盘再流式发送:zipfile 的中央目录要回写,管道式
+    流输出需要手写 zip 格式,不值得;代价是打包期间多占一份磁盘,打包前
+    按源目录大小做磁盘预检。临时文件在响应结束(含客户端断开)后删除。
+    """
+    settings = get_files_settings()
+
+    def _sum_files() -> int:
+        return sum(p.stat().st_size for p in target.rglob("*") if p.is_file())
+
+    try:
+        total_size = await asyncio.to_thread(_sum_files)
+    except OSError:
+        # 遍历间隙文件被删/不可读:放弃预检,交给打包与磁盘写入自然兜底
+        total_size = 0
+    free = (await asyncio.to_thread(shutil.disk_usage, str(settings.root))).free
+    if free < total_size:
+        raise HTTPException(status_code=507, detail="磁盘空间不足,无法打包下载")
+
+    fd, tmp_name = tempfile.mkstemp(
+        suffix=".zip", prefix="zq_files_", dir=str(settings.root.parent)
+    )
+    os.close(fd)
+    zip_path = Path(tmp_name)
+
+    def build() -> None:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in sorted(target.rglob("*")):
+                if p.is_file():
+                    # arcname 以目录名为根:下载 logs 得到 logs/... 结构
+                    zf.write(p, arcname=str(p.relative_to(target.parent)))
+
+    try:
+        await asyncio.to_thread(build)
+    except BaseException:
+        zip_path.unlink(missing_ok=True)
+        raise
+
+    async def chunk_iter() -> AsyncIterator[bytes]:
+        try:
+            # 与单文件下载一致:并发槽 + 限速节奏
+            async with _download_slots():
+                with open(zip_path, "rb") as f:
+                    while True:
+                        chunk = await asyncio.to_thread(f.read, CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        yield chunk
+                        delay = _pacing_delay(
+                            len(chunk), settings.download_rate_limit_mb
+                        )
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+        finally:
+            zip_path.unlink(missing_ok=True)
+
+    headers = {
+        "Content-Length": str(zip_path.stat().st_size),
+        "Content-Disposition": _content_disposition(f"{target.name}.zip"),
+        # 声明 identity 阻止 GZipMiddleware 重压缩二进制流(会丢 Content-Length)
+        "Content-Encoding": "identity",
+    }
+    return StreamingResponse(
+        chunk_iter(), media_type="application/zip", headers=headers
+    )
 
 
 @router.post("/upload")
