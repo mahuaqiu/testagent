@@ -96,3 +96,13 @@ def test_delete_locked_file_409(client, monkeypatch):
     assert resp.status_code == 409
     assert "占用" in resp.json()["detail"]
     assert f.exists()
+
+
+def test_delete_traversal_rejected(client, tmp_path):
+    """根目录之外(路径穿越/绝对路径)一律 400:删除只作用于根目录内。"""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x")
+    for bad in ["../outside.txt", "a/../../outside.txt", "C:/Windows/notepad.exe"]:
+        resp = client.delete("/files", params={"path": bad})
+        assert resp.status_code == 400, bad
+    assert outside.exists()
