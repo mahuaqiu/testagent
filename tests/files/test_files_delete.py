@@ -32,14 +32,42 @@ def test_delete_file(client):
     assert not f.exists()
 
 
-def test_delete_empty_dir_ok_nonempty_rejected(client):
+def test_delete_empty_dir_ok_nonempty_recursive(client):
+    """空目录直接删;非空目录连同全部内容递归删除(平台端有确认弹窗兜底)。"""
     d = _root_of(client) / "d"
     d.mkdir()
     assert client.delete("/files", params={"path": "d"}).status_code == 200
     d.mkdir()
     (d / "inner").write_text("x")
+    (d / "sub").mkdir()
+    (d / "sub" / "deep.log").write_text("y")
     resp = client.delete("/files", params={"path": "d"})
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": "d"}
+    assert not d.exists()
+
+
+def test_delete_nonempty_dir_locked_409(client, monkeypatch):
+    """递归删除中目录被占用(Windows rmtree 拒绝访问)时返回 409。"""
+    import shutil as _shutil
+
+    d = _root_of(client) / "busy_dir"
+    (d / "sub").mkdir(parents=True)
+    (d / "sub" / "x.log").write_text("x")
+
+    real_rmtree = _shutil.rmtree
+
+    def _raise(path, *args, **kwargs):
+        from pathlib import Path
+
+        if Path(path).name == "busy_dir":
+            raise PermissionError(5, "拒绝访问")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("worker.files_api.shutil.rmtree", _raise)
+    resp = client.delete("/files", params={"path": "busy_dir"})
+    assert resp.status_code == 409
+    assert "占用" in resp.json()["detail"]
     assert d.exists()
 
 

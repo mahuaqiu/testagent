@@ -425,15 +425,17 @@ async def delete_file(path: str = Query(...)):
     if not target.exists():
         raise HTTPException(status_code=404, detail="路径不存在")
     if target.is_dir():
-        if any(target.iterdir()):
-            raise HTTPException(status_code=400, detail="目录非空,无法删除")
+        # 目录连同全部内容递归删除:产物目录动辄成百上千个文件,
+        # 平台端删除前已有确认弹窗兜底,这里不再要求目录为空
         try:
-            await asyncio.to_thread(target.rmdir)
+            await asyncio.to_thread(shutil.rmtree, target)
         except PermissionError as exc:
-            # 目录内文件被打开(如正在下载)时 Windows 拒绝删除目录
+            # 目录内文件被打开(如正在下载/打包)时 Windows 拒绝删除
             raise HTTPException(
                 status_code=409, detail="目录正被占用,无法删除,请稍后重试"
             ) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail="目录删除失败") from exc
     else:
         try:
             await asyncio.to_thread(target.unlink)
