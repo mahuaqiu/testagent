@@ -73,7 +73,7 @@ PlatformManager (抽象基类)
 - 平台特定参数（browser_type、wda_base_port 等）
 - 解锁密码（`unlock.password`）
 
-文件管理、录屏、任务清理、升级超时以及日志文件和轮转参数由 `worker/constants.py` 统一维护，不再放入 YAML 或平台下发配置。日志级别由设置界面修改，单独保存在本机 `config/.log_level`；WebSocket 推流参数也由该代码文件维护。
+文件管理、录屏、任务清理、升级超时以及日志文件和轮转参数由 `worker/constants.py` 统一维护，不再放入 YAML 或平台下发配置。日志级别由设置界面修改，单独保存在本机 `config/.log_level`；WebSocket 推流参数也由该代码文件维护。日志统一写入运行根目录 `logs/`（与 `data` 平级，不参与 data 的清理；`worker.log` 轮转、GUI 早期错误 `startup_error.log`），HDC server 日志与锁文件通过注入 TMP/TEMP 收拢到 `logs/hdc/`；托盘「日志」菜单直接打开该目录。
 
 设备检测间隔、服务重试参数、动作间隔、iOS 工具路径和 Web 浏览器固定运行参数由代码默认值管理，不放入 YAML 或平台下发配置。
 

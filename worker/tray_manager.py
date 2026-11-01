@@ -146,12 +146,17 @@ class TrayManager:
     def _on_log_click(self):
         """日志菜单点击。"""
         logger.info("Menu clicked: log")
-        # 获取日志文件所在目录（与日志文件同级）
-        app_dir = get_base_dir()
+        # 日志统一收拢在 data/logs（worker.log、startup_error.log、hdc server 日志）
+        from worker.logger import get_log_dir
 
-        # 日志文件在根目录（worker.log），直接打开根目录
+        log_dir = get_log_dir()
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError:
+            pass
+
         if sys.platform == "win32":
-            os.startfile(app_dir)
+            os.startfile(log_dir)
 
     def _on_settings_click(self):
         """设置菜单点击。"""

@@ -204,6 +204,8 @@ Function KillProcessesAndCleanup
   NoPlaywright:
 
   ; 6. Delete data directory (clear worker.db and artifacts on upgrade install)
+  ;    进程日志在 $INSTDIR\logs（与 data 平级），不受 data 清理影响；
+  ;    卸载段的 RMDir /r "$INSTDIR\logs" 负责最终清理。
   IfFileExists "$INSTDIR\data\*.*" 0 NoData
     DetailPrint "Removing old data directory (worker.db and artifacts)..."
     ; Wait for killed processes to release SQLite file handles (WAL locks)

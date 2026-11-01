@@ -15,6 +15,7 @@ worker.log
 /data/browser_cache
 /data/chrome_profile
 /data
+/logs
 worker/_version.py
 /build_env_nuitka
 selfIdentity.plist

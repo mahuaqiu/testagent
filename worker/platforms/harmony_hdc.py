@@ -14,9 +14,12 @@ import uuid
 import weakref
 from dataclasses import dataclass
 
+import psutil
+
 from common.packaging import get_base_dir
 from common.utils import popen_cmd, run_cmd
 from worker.platforms.harmony_hdc_process import (
+    _normalise_path,
     capture_hdc_processes_before_launch,
     cleanup_stale_records,
     register_launched_processes,
@@ -251,6 +254,27 @@ def _is_readonly_hdc_command(args: list[str]) -> bool:
     return pair in _HDC_RETRYABLE_HDC_PAIRS
 
 
+def _hdc_process_env() -> dict[str, str] | None:
+    """构造 HDC 子进程环境，把 TMP/TEMP 指向 data/logs/hdc。
+
+    hdc server 的日志（hdc.log）与互斥锁文件（.HDCServer.pid）固定写在
+    进程的临时目录（GetTempPathW），不重定向就会散落到系统 TEMP，且
+    普通权限与提权进程创建的锁文件互不可访问，导致 server 无法拉起。
+    """
+    try:
+        from worker.constants import DEFAULT_HDC_LOG_DIR_REL
+
+        target = os.path.join(get_base_dir(), *DEFAULT_HDC_LOG_DIR_REL.split("/"))
+        os.makedirs(target, exist_ok=True)
+        env = dict(os.environ)
+        env["TMP"] = target
+        env["TEMP"] = target
+        return env
+    except Exception as exc:
+        logger.debug(f"构建 HDC 日志目录失败，使用默认环境: {exc}")
+        return None
+
+
 def _execute_hdc_command(
     hdc_path: str,
     args: list[str],
@@ -282,6 +306,7 @@ def _execute_hdc_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
+                env=_hdc_process_env(),
             )
             try:
                 register_process(process, hdc_path)
@@ -346,6 +371,59 @@ def _execute_hdc_command(
     return last_result
 
 
+def _kill_foreign_hdc_server(hdc_path: str) -> bool:
+    """结束占用 HDC 端口的外来 hdc server，返回是否有进程被结束。
+
+    hdc 的 start -r / kill 依赖 pid 文件识别 server；server 由不同的
+    TMP/TEMP 环境启动（如手工在系统 TEMP 下启动过）时 pid 文件对不上，
+    hdc 会拒绝操作（E002101），新环境的 server 永远无法接管端口。
+    只结束可执行路径与当前 hdc 一致的监听进程，避免误伤其它程序。
+    """
+    try:
+        port = int(os.environ.get("OHOS_HDC_SERVER_PORT") or "8710")
+    except ValueError:
+        port = 8710
+    expected_path = _normalise_path(hdc_path)
+
+    try:
+        connections = psutil.net_connections(kind="inet")
+    except psutil.Error as exc:
+        logger.warning("扫描 HDC server 端口失败: %s", exc)
+        return False
+
+    victims: list[int] = []
+    for connection in connections:
+        if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+            continue
+        if int(connection.laddr.port) != port or not connection.pid:
+            continue
+        try:
+            process = psutil.Process(int(connection.pid))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError) as exc:
+            logger.warning("无法确认端口 %s 占用进程身份: pid=%s, %s", port, connection.pid, exc)
+            continue
+        if _normalise_path(process.exe()) != expected_path:
+            logger.warning("端口 %s 被非本项目 HDC 进程占用，跳过: pid=%s", port, connection.pid)
+            continue
+        victims.append(int(connection.pid))
+
+    killed = False
+    for pid in victims:
+        try:
+            psutil.Process(pid).kill()
+            killed = True
+            logger.warning("已结束异环境 HDC server: pid=%s", pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError) as exc:
+            logger.error("结束异环境 HDC server 失败（提权启动的需在任务管理器手工结束）: pid=%s, %s", pid, exc)
+    return killed
+
+
+def _has_unmanaged_server_marker(result: CommandResult) -> bool:
+    """判断 HDC 输出是否为 pid 文件不匹配导致的 server 操作失败。"""
+    combined = f"{result.output}\n{result.error}"
+    return "E002101" in combined or "Read pid file failed" in combined
+
+
 def restart_hdc_server(hdc_path: str) -> CommandResult:
     """重启 HDC server，并把命令输出写入 Worker 日志。"""
     with _HDC_RESTART_LOCK:
@@ -356,6 +434,15 @@ def restart_hdc_server(hdc_path: str) -> CommandResult:
             timeout=30,
             retries=0,
         )
+        if _has_unmanaged_server_marker(result):
+            logger.warning("HDC start -r 遇到异环境残留 server，按端口回收后重启: %r", result.output)
+            if _kill_foreign_hdc_server(hdc_path):
+                result = _execute_hdc_command(
+                    hdc_path,
+                    ["start"],
+                    timeout=30,
+                    retries=0,
+                )
         logger.info(
             "HDC start -r 结果: exit_code=%s, stdout=%r, stderr=%r",
             result.exit_code,
@@ -487,7 +574,11 @@ def parse_target_lines(output: str) -> list[HdcTarget]:
     return targets
 
 
-def list_target_info(hdc_path: str | None = None) -> list[HdcTarget]:
+def list_target_info(
+    hdc_path: str | None = None,
+    retries: int = 2,
+    timeout: int = 30,
+) -> list[HdcTarget]:
     """列出可用状态的 HDC target（排除 UART 串口，避免把 COM 口当设备）。"""
     hdc_path = _find_hdc_path(hdc_path)
     if hdc_path is None:
@@ -495,7 +586,8 @@ def list_target_info(hdc_path: str | None = None) -> list[HdcTarget]:
     result = _execute_hdc_command(
         hdc_path,
         ["list", "targets", "-v"],
-        retries=2,
+        timeout=timeout,
+        retries=retries,
     )
     if _has_connect_server_failure(result):
         logger.warning(
@@ -525,12 +617,18 @@ def list_target_info(hdc_path: str | None = None) -> list[HdcTarget]:
     ]
 
 
-def list_devices(hdc_path: str | None = None) -> list[str]:
+def list_devices(
+    hdc_path: str | None = None,
+    retries: int = 2,
+    timeout: int = 30,
+) -> list[str]:
     """
     列出所有在线的鸿蒙设备。
 
     Args:
         hdc_path: HDC 工具路径（可选，默认自动查找）
+        retries: 瞬态失败重试次数（设备发现用默认值，在线探测传 0）
+        timeout: 单次命令超时（秒）
 
     Returns:
         List[str]: 设备序列号列表
@@ -538,7 +636,7 @@ def list_devices(hdc_path: str | None = None) -> list[str]:
     Raises:
         HdcCommandError: HDC 命令执行失败
     """
-    return [target.udid for target in list_target_info(hdc_path)]
+    return [target.udid for target in list_target_info(hdc_path, retries=retries, timeout=timeout)]
 
 
 # ============================================================================
@@ -574,6 +672,8 @@ class HarmonyHdcWrapper:
             DeviceNotFoundError: 设备未在线
         """
         self.serial = serial
+        # 分辨率是设备不变量，display_size 首次成功查询后缓存
+        self._display_size: tuple[int, int] | None = None
 
         # 查找 HDC 工具
         if hdc_path is None:
@@ -625,11 +725,14 @@ class HarmonyHdcWrapper:
         """
         检查设备是否在线。
 
+        在线探测只做单次短超时尝试：失败由调用方走重建/标异常流程，
+        不值得在探测上花多轮重试（设备异常时每轮最长 30s）。
+
         Returns:
             bool: True 表示设备在线，False 表示离线
         """
         try:
-            devices = list_devices(self.hdc_path)
+            devices = list_devices(self.hdc_path, retries=0, timeout=10)
             return self.serial in devices
         except Exception as e:
             logger.warning(f"检查设备在线状态失败: {e}")
@@ -1232,12 +1335,20 @@ class HarmonyHdcWrapper:
         """
         获取屏幕分辨率。
 
+        分辨率是设备不变量：成功查询一次后缓存在客户端实例上，
+        device_info 入池、推流 meta、解锁坐标查表共用同一份结果；
+        查询失败不缓存，下次调用重新查询。
+
         优先用 RenderService 数字服务 ID（PC 真机已验证），失败时兼容
         按服务名 dump 的版本（手机输出 activeMode: WxH）。
 
         Returns:
             Tuple[int, int]: (宽度, 高度)
         """
+        cached = getattr(self, "_display_size", None)
+        if cached is not None:
+            return cached
+
         for dump_cmd in (
             "hidumper -s 10 -a screen",
             "hidumper -s RenderService -a screen",
@@ -1248,6 +1359,7 @@ class HarmonyHdcWrapper:
                 continue
             size = parse_harmony_display_size(result.output)
             if size != (0, 0):
+                self._display_size = size
                 return size
 
         logger.warning("未能解析屏幕分辨率，保留未知值但不影响设备入池")

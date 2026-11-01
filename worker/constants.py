@@ -100,6 +100,11 @@ DEFAULT_LOG_FILE = None
 DEFAULT_LOG_MAX_SIZE = 52428800
 DEFAULT_LOG_BACKUP_COUNT = 5
 
+# 日志统一目录与 HDC server 日志目录（相对运行根目录 get_base_dir()）。
+# logs 与 data 平级，避免安装器/保留期清理 data 时波及日志。
+DEFAULT_LOG_DIR_REL = "logs"
+DEFAULT_HDC_LOG_DIR_REL = "logs/hdc"
+
 # 升级检查与下载超时。
 DEFAULT_UPGRADE_CHECK_TIMEOUT = 30
 DEFAULT_UPGRADE_DOWNLOAD_TIMEOUT = 300

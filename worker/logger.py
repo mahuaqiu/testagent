@@ -8,8 +8,9 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-from common.packaging import get_app_dir
+from common.packaging import get_base_dir
 from common.request_context import get_request_id
+from worker.constants import DEFAULT_LOG_DIR_REL
 
 
 class RequestIdFormatter(logging.Formatter):
@@ -21,17 +22,31 @@ class RequestIdFormatter(logging.Formatter):
         return super().format(record)
 
 
+def get_log_dir() -> str:
+    """
+    获取统一日志目录。
+
+    所有进程日志（worker.log、startup_error.log、HDC server 日志）收拢到
+    运行根目录下的 data/logs，与 data/artifacts 等数据目录同级，且不在
+    任务/附件保留期清理范围内。
+
+    Returns:
+        str: 日志目录路径
+    """
+    return os.path.join(get_base_dir(), *DEFAULT_LOG_DIR_REL.split("/"))
+
+
 def get_default_log_path() -> str:
     """
     获取默认日志文件路径。
 
-    - 打包环境：exe 所在目录下的 worker.log
-    - 普通环境：当前工作目录下的 worker.log
+    - 打包环境：exe 所在目录下的 data/logs/worker.log
+    - 普通环境：项目根目录下的 data/logs/worker.log
 
     Returns:
         str: 默认日志文件路径
     """
-    return os.path.join(get_app_dir(), "worker.log")
+    return os.path.join(get_log_dir(), "worker.log")
 
 
 def _clear_all_loggers() -> None:

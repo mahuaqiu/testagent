@@ -10,7 +10,7 @@ import traceback
 
 # 导入打包检测工具
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.packaging import get_app_dir, is_packaged
+from common.packaging import get_app_dir, get_base_dir, is_packaged
 
 
 # ============ 最早期错误捕获（在任何导入之前） ============
@@ -18,7 +18,16 @@ from common.packaging import get_app_dir, is_packaged
 def _early_error_log(error_msg):
     """将早期启动错误写入文件。"""
     try:
-        log_path = os.path.join(get_app_dir(), "startup_error.log")
+        # 早期错误可能正是 worker 应用模块导入失败导致，这里不能依赖它们
+        # 计算路径；worker.constants 为纯常量模块，缺失时回退到固定目录。
+        try:
+            from worker.constants import DEFAULT_LOG_DIR_REL
+
+            log_dir = os.path.join(get_base_dir(), *DEFAULT_LOG_DIR_REL.split("/"))
+        except Exception:
+            log_dir = os.path.join(get_base_dir(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "startup_error.log")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"\n{'='*60}\n")
             f.write(f"Startup Error at {__import__('datetime').datetime.now()}\n")
