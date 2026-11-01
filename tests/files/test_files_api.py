@@ -23,10 +23,15 @@ def _root_of(client):
     return get_files_settings().root
 
 
-def test_list_empty_root(client):
+def test_list_empty_root(client, tmp_path):
     resp = client.get("/files/list")
     assert resp.status_code == 200
-    assert resp.json() == {"path": "", "entries": [], "truncated": False}
+    assert resp.json() == {
+        "path": "",
+        "root": str(tmp_path),
+        "entries": [],
+        "truncated": False,
+    }
 
 
 def test_list_dirs_first_and_sorted(client):

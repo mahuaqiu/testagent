@@ -206,8 +206,11 @@ async def list_files(path: str | None = Query(default=None)) -> dict:
         raise HTTPException(status_code=400, detail="不是目录")
     # iterdir/stat 是阻塞 IO,放线程池执行,避免大目录拖住事件循环上的流式任务
     entries, truncated = await asyncio.to_thread(_scan_dir, target)
+    root = str(get_files_settings().root)
     return {
         "path": (path or "").replace("\\", "/").strip("/"),
+        # 平台展示"Worker 上的位置"用:根目录绝对路径,便于在远程桌面定位文件
+        "root": root,
         "entries": entries,
         "truncated": truncated,
     }
