@@ -659,6 +659,10 @@ class HarmonyHdcWrapper:
 
     KEY_MAP = HARMONY_KEY_MAP
 
+    # snapshot_display 截图/传输短超时（秒）：设备端卡死时快速失败，
+    # 不吃满 shell 默认 30s
+    SCREENSHOT_TIMEOUT_SECONDS = 10
+
     def __init__(self, serial: str, hdc_path: str | None = None):
         """
         初始化 HDC 包装器。
@@ -776,6 +780,11 @@ class HarmonyHdcWrapper:
         """
         截取屏幕并保存到本地（snapshot_display -f，JPEG 格式）。
 
+        截图与传输各 10s 短超时：snapshot_display 在熄屏/显示服务异常的
+        设备上可能长时间阻塞，快速失败避免吃满默认 30s。失败且设备熄屏
+        时 wakeup 幂等唤醒后最多重试一次（熄屏是 snapshot_display 阻塞
+        的常见诱因）；亮屏失败不重试，成功路径不改变设备状态。
+
         Args:
             local_path: 本地保存路径
 
@@ -783,27 +792,45 @@ class HarmonyHdcWrapper:
             bool: True 表示成功，False 表示失败
         """
         try:
-            # 复用远端文件，并合并清理和截图命令；随后用 file recv 传输二进制，
-            # 避免 Base64 放大图片体积，也不依赖设备端额外命令。
-            remote_path = _get_screenshot_remote_path(self.serial)
-            capture_command = f"rm -f {remote_path} && snapshot_display -f {remote_path}"
-            with _get_screenshot_lock(self.serial):
-                result = self.shell(capture_command)
-                if not self._check_result(result, "snapshot_display 截图"):
-                    return False
-                return self.pull_file(remote_path, local_path)
+            if self._capture_screenshot(local_path):
+                return True
+            try:
+                screen_on = self.is_screen_on()
+            except Exception as e:
+                logger.warning(f"检查屏幕状态失败，跳过唤醒重试: {e}")
+                return False
+            if screen_on:
+                return False
+            logger.warning("熄屏状态下截图失败，wakeup 后重试一次")
+            self.wakeup()
+            time.sleep(0.5)
+            return self._capture_screenshot(local_path)
 
         except Exception as e:
             logger.error(f"截图失败: {e}")
             return False
 
-    def pull_file(self, remote_path: str, local_path: str) -> bool:
+    def _capture_screenshot(self, local_path: str) -> bool:
+        """执行一次截图+拉取，仅尝试一次，不做内部重试。"""
+        # 复用远端文件，并合并清理和截图命令；随后用 file recv 传输二进制，
+        # 避免 Base64 放大图片体积，也不依赖设备端额外命令。
+        remote_path = _get_screenshot_remote_path(self.serial)
+        capture_command = f"rm -f {remote_path} && snapshot_display -f {remote_path}"
+        timeout = self.SCREENSHOT_TIMEOUT_SECONDS
+        with _get_screenshot_lock(self.serial):
+            result = self.shell(capture_command, timeout=timeout)
+            if not self._check_result(result, "snapshot_display 截图"):
+                return False
+            return self.pull_file(remote_path, local_path, timeout=timeout)
+
+    def pull_file(self, remote_path: str, local_path: str, timeout: int = 30) -> bool:
         """
         从设备拉取文件到本地。
 
         Args:
             remote_path: 设备上的文件路径
             local_path: 本地保存路径
+            timeout: 单次命令超时（秒）
 
         Returns:
             bool: True 表示成功，False 表示失败
@@ -814,7 +841,9 @@ class HarmonyHdcWrapper:
             if local_dir and not os.path.exists(local_dir):
                 os.makedirs(local_dir, exist_ok=True)
 
-            result = self._execute(["file", "recv", remote_path, local_path])
+            result = self._execute(
+                ["file", "recv", remote_path, local_path], timeout=timeout
+            )
 
             if result.exit_code != 0:
                 logger.error(f"拉取文件失败: {result.error}")

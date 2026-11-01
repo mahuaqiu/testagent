@@ -730,7 +730,10 @@ def test_hdc_screenshot_merges_capture_cleanup_and_uses_binary_pull(
     monkeypatch.setattr(
         wrapper,
         "pull_file",
-        lambda remote_path, local_path: pull_calls.append((remote_path, local_path)) or True,
+        lambda remote_path, local_path, timeout=30: pull_calls.append(
+            (remote_path, local_path)
+        )
+        or True,
     )
 
     local_path = str(tmp_path / "screenshot.jpeg")
@@ -741,6 +744,85 @@ def test_hdc_screenshot_merges_capture_cleanup_and_uses_binary_pull(
     assert "base64" not in shell_calls[0]
     assert len(pull_calls) == 1
     assert pull_calls[0][1] == local_path
+
+
+def test_hdc_screenshot_uses_short_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """截图与传输各 10s 短超时：snapshot_display 卡死时快速失败。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    captured: list[dict] = []
+
+    def shell(command, timeout=30):
+        captured.append({"op": "shell", "timeout": timeout})
+        return CommandResult("", "", 0)
+
+    def pull_file(remote_path, local_path, timeout=30):
+        captured.append({"op": "pull", "timeout": timeout})
+        return True
+
+    monkeypatch.setattr(wrapper, "shell", shell)
+    monkeypatch.setattr(wrapper, "pull_file", pull_file)
+
+    assert wrapper.screenshot("out.jpeg") is True
+    assert captured == [
+        {"op": "shell", "timeout": wrapper.SCREENSHOT_TIMEOUT_SECONDS},
+        {"op": "pull", "timeout": wrapper.SCREENSHOT_TIMEOUT_SECONDS},
+    ]
+
+
+def test_hdc_screenshot_wakes_and_retries_once_when_screen_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """熄屏截图失败：wakeup 幂等唤醒后重试一次，成功即返回。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_results = iter([
+        CommandResult("Fail to snapshot display", "", 1),
+        CommandResult("", "", 0),
+    ])
+    shell_calls: list[str] = []
+    wakeups: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: shell_calls.append(command) or next(shell_results),
+    )
+    monkeypatch.setattr(
+        wrapper, "pull_file", lambda remote_path, local_path, timeout=30: True
+    )
+    monkeypatch.setattr(wrapper, "is_screen_on", lambda: False)
+    monkeypatch.setattr(
+        wrapper, "wakeup", lambda: wakeups.append("wakeup") or True
+    )
+    monkeypatch.setattr(
+        harmony_hdc.time, "sleep", lambda _s: None
+    )
+
+    assert wrapper.screenshot("out.jpeg") is True
+    assert len(shell_calls) == 2
+    assert wakeups == ["wakeup"]
+
+
+def test_hdc_screenshot_no_retry_when_screen_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """亮屏截图失败不重试：单次尝试后返回失败，不改变设备状态。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    shell_calls: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: shell_calls.append(command)
+        or CommandResult("Fail to snapshot display", "", 1),
+    )
+    monkeypatch.setattr(wrapper, "is_screen_on", lambda: True)
+
+    def _forbidden_wakeup():
+        raise AssertionError("亮屏失败不应唤醒设备")
+
+    monkeypatch.setattr(wrapper, "wakeup", _forbidden_wakeup)
+
+    assert wrapper.screenshot("out.jpeg") is False
+    assert len(shell_calls) == 1
 
 
 @pytest.mark.parametrize("platform", ["harmony_mobile", "harmony_pc"])
