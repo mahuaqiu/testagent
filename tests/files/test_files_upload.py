@@ -81,9 +81,17 @@ def test_upload_same_name_as_dir_400(client):
     assert (_root_of(client) / "logs").is_dir()
 
 
-def test_upload_target_dir_missing(client):
-    resp = client.post("/files/upload", params={"path": "nothere", "name": "x"}, content=b"x")
-    assert resp.status_code == 404
+def test_upload_creates_missing_subdirs(client):
+    """文件夹上传依赖:目标子目录不存在时自动创建(仍限根目录内)。"""
+    payload = b"hello"
+    resp = client.post(
+        "/files/upload",
+        params={"path": "newdir/sub", "name": "a.log"},
+        content=payload,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert resp.status_code == 200
+    assert (_root_of(client) / "newdir" / "sub" / "a.log").read_bytes() == payload
 
 
 def test_upload_disk_full_507(client, monkeypatch):

@@ -263,6 +263,13 @@ async def upload_file(
 ):
     settings = get_files_settings()
     target_dir = resolve_under_root(path)
+    if not target_dir.exists():
+        # 文件夹上传(前端按相对目录逐文件上传)依赖自动建目录;
+        # resolve_under_root 已保证路径在根目录内,这里放行创建
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail="目标目录创建失败") from exc
     if not target_dir.is_dir():
         raise HTTPException(status_code=404, detail="目标目录不存在")
     filename = _validate_filename(name)
