@@ -1,10 +1,12 @@
 """鸿蒙 HDC 和平台管理器的单元测试。"""
 
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
 
+from worker.actions.spec import ActionTimedOutError, ExecutionControl
 from worker.actions.unlock import UnlockScreenAction
 from worker.config import PlatformConfig, WorkerConfig
 from worker.constants import HARMONY_KEYPAD_COORDINATES, HARMONY_MOBILE_UNLOCK_SWIPE
@@ -1036,6 +1038,79 @@ def test_harmony_brightness_check_failure_assumes_screen_on_without_screenshot()
     )
 
     assert UnlockScreenAction()._check_screen_brightness(platform, client) is True
+
+
+def test_unlock_deadline_expiry_terminates_before_device_interaction() -> None:
+    """截止时间已过：解锁在首个检查点立即终止，不触碰设备。"""
+    action = Action(action_type="unlock_screen", value="123456")
+    action.execution_control = ExecutionControl(deadline_monotonic=time.monotonic() - 1)
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("超时后不应有任何设备交互")
+
+    client = SimpleNamespace(
+        display_size=_forbidden,
+        is_locked=_forbidden,
+        is_screen_on=_forbidden,
+        is_interactive=_forbidden,
+        swipe=_forbidden,
+        tap=_forbidden,
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+
+    with pytest.raises(ActionTimedOutError):
+        UnlockScreenAction().execute(platform, action, context=client)
+
+
+class _ExpiringControl:
+    """第 N 个检查点抛 ActionTimedOutError 的假执行控制（等待也计检查点）。"""
+
+    def __init__(self, checkpoints_left: int) -> None:
+        self.checkpoints_left = checkpoints_left
+
+    def checkpoint(self) -> None:
+        self.checkpoints_left -= 1
+        if self.checkpoints_left <= 0:
+            raise ActionTimedOutError("Task timeout")
+
+    def wait(self, seconds: float) -> None:
+        self.checkpoint()
+
+
+def test_unlock_deadline_expiry_interrupts_password_digits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """输密码中途截止时间耗尽：立即抛超时，不点余下按键。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    taps: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        display_size=lambda: (1260, 2720),
+        is_locked=lambda: True,
+        is_screen_on=lambda: True,
+        is_interactive=lambda: True,
+        swipe=lambda *args: None,
+        tap=lambda x, y: taps.append((x, y)),
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+    action = Action(action_type="unlock_screen", value="1234567890")
+    # 检查点序列：起始、检测后、滑动前、滑动后等待、输密码前、
+    # 数字1前、数字1后间隔 → 第 7 个在首个数字的间隔等待触发
+    action.execution_control = _ExpiringControl(checkpoints_left=7)
+
+    with pytest.raises(ActionTimedOutError):
+        UnlockScreenAction().execute(platform, action, context=client)
+
+    assert len(taps) == 1
 
 
 def test_harmony_lock_state_parsing_tolerates_dump_variants() -> None:

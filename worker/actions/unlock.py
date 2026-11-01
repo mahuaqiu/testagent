@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING
 
 from worker.actions.base import ActionExecutor
+from worker.actions.spec import ActionCancelledError, ActionTimedOutError
 from worker.constants import (
     ANDROID_KEYPAD_COORDINATES,
     HARMONY_KEYPAD_COORDINATES,
@@ -72,6 +73,9 @@ class UnlockScreenAction(ActionExecutor):
         # 获取点击间隔（毫秒）
         click_interval = self._get_click_interval()
 
+        # 截止时间检查点：超时/取消在触碰任何设备命令之前立即终止
+        self._checkpoint(action)
+
         # 获取设备分辨率和缩放因子（用于坐标转换）。
         # 鸿蒙解锁全程不走截图：分辨率仅在手机带密码查九宫格坐标表时
         # 需要，用 hidumper display_size 查询（snapshot_display 在熄屏/
@@ -106,11 +110,14 @@ class UnlockScreenAction(ActionExecutor):
                     output="Screen already unlocked and on",
                 )
 
+            # 截止时间检查点：进入唤醒/解锁流程前
+            self._checkpoint(action)
+
             # 3. 唤醒屏幕（如熄屏）
             if not is_screen_on:
                 logger.info("Screen is off, waking up...")
                 self._wake_screen(platform, context)
-                time.sleep(1.0)  # 等待屏幕亮起
+                self._sleep(action, 1.0)  # 等待屏幕亮起
 
                 # 3.1 再次检测亮度，验证唤醒成功
                 is_screen_on_after = self._check_screen_brightness(platform, context)
@@ -131,11 +138,17 @@ class UnlockScreenAction(ActionExecutor):
             if platform.platform == "harmony_mobile":
                 self._ensure_interactive(platform, context)
 
+            # 截止时间检查点：进入滑动/解锁方式触发前
+            self._checkpoint(action)
+
             # 4. 触发解锁界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
             self._trigger_password_screen(platform, context, unlock_method)
-            time.sleep(1.0)  # 等待解锁界面出现
+            self._sleep(action, 1.0)  # 等待解锁界面出现
+
+            # 截止时间检查点：进入密码输入前
+            self._checkpoint(action)
 
             # 5. 根据是否有密码，执行不同的解锁流程
             if not password:
@@ -144,7 +157,10 @@ class UnlockScreenAction(ActionExecutor):
                 duration_ms = int((time.time() - start_time) * 1000)
 
                 # 等待解锁完成
-                time.sleep(1.5)
+                self._sleep(action, 1.5)
+
+                # 截止时间检查点：验证前
+                self._checkpoint(action)
 
                 # 验证解锁成功
                 is_locked_after = self._check_locked(platform, context)
@@ -176,6 +192,9 @@ class UnlockScreenAction(ActionExecutor):
                 keypad_coords = self._get_keypad_coords(platform, context, resolution)
 
                 for digit in password:
+                    # 截止时间检查点：超时立即中断，不点余下按键
+                    self._checkpoint(action)
+
                     if digit not in keypad_coords:
                         logger.warning(f"Invalid password digit: {digit}, skipping")
                         continue
@@ -188,10 +207,13 @@ class UnlockScreenAction(ActionExecutor):
                     logger.info(f"Tapped password digit '{digit}' at physical ({x}, {y}), logical ({x//scale_factor}, {y//scale_factor})")
 
                     # 点击间隔
-                    time.sleep(click_interval / 1000.0)
+                    self._sleep(action, click_interval / 1000.0)
 
             # 6. 等待解锁完成
-            time.sleep(1.0)
+            self._sleep(action, 1.0)
+
+            # 截止时间检查点：验证前
+            self._checkpoint(action)
 
             # 7. 验证解锁成功
             is_locked_after = self._check_locked(platform, context)
@@ -216,6 +238,11 @@ class UnlockScreenAction(ActionExecutor):
                     error="Screen still locked after password input",
                 )
 
+        except (ActionCancelledError, ActionTimedOutError):
+            # 截止/取消信号必须透传：worker 靠它们把任务收尾为
+            # TIMEOUT/CANCELLED；吞掉会退化成普通 FAILED
+            raise
+
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"Unlock screen failed: {e}")
@@ -230,6 +257,18 @@ class UnlockScreenAction(ActionExecutor):
     def _get_click_interval(self) -> int:
         """获取固定的密码键盘点击间隔（毫秒）。"""
         return UNLOCK_CLICK_INTERVAL_MS
+
+    def _checkpoint(self, action: Action) -> None:
+        """动作截止/取消检查点：到达 deadline 立即抛 ActionTimedOutError 终止解锁。"""
+        if action.execution_control is not None:
+            action.execution_control.checkpoint()
+
+    def _sleep(self, action: Action, seconds: float) -> None:
+        """可被截止时间/取消打断的等待；无控制对象（直连调用/测试）时退回普通休眠。"""
+        if action.execution_control is not None:
+            action.execution_control.wait(seconds)
+        else:
+            time.sleep(seconds)
 
     def _get_keypad_coords(
         self,
