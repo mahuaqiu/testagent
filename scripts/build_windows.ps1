@@ -4,7 +4,7 @@ param(
     [string]$OutputDir = "dist\windows",
     [string]$PythonPath = "",      # Specify Python executable path
     [string]$PerfwinWheel = "D:\code\perfwin\target\wheels\perfwin-0.4.0-cp312-cp312-win_amd64.whl",  # perfwin wheel path
-    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.3.2-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
+    [string]$PerfharmonyWheel = "D:\code\perfharmony\target\wheels\perfharmony-0.3.4-cp312-cp312-win_amd64.whl",  # perfharmony wheel path
     [string]$WinControlWheel = "D:\code\win-control\target\wheels\win_control-0.1.5-cp312-cp312-win_amd64.whl",  # win-control wheel path
     [string]$JavaRuntimePath = "D:\Program Files\jdk",  # JRE/JDK 17+ 根目录；将复制到 tools\jre 供鸿蒙官方 Java Bridge 使用
     [string]$JavaCompilerPath = "D:\Program Files\jdk",  # JDK 根目录或 javac.exe 路径；未指定时从 PATH 查找
@@ -31,7 +31,7 @@ Write-Host "=========================================="
 Set-Location $ProjectRoot
 
 # 编译鸿蒙官方 Java Bridge。目标机器运行时只需要 JRE，javac 仅在打包机上使用。
-$HarmonyJar = "$ProjectRoot\tools\harmony\hosScrcpy-1.0.15-beta.jar"
+$HarmonyJar = "$ProjectRoot\tools\harmony\hosScrcpy-1.0.18-beta.jar"
 $HarmonyBridgeSource = "$ProjectRoot\worker\platforms\harmony_official\java\StreamBridge.java"
 $HarmonyBridgeOutput = "$ProjectRoot\tools\harmony\bridge"
 $JavacExe = $null
@@ -367,7 +367,8 @@ if ($JavaRuntimePath -ne "") {
 # Verify the bundled Harmony module can be imported with the matching CPython ABI.
 $oldPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$PackageDir;$PackageDir\perfharmony"
-& "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '0.3.1'; print('perfharmony import smoke test passed')"
+$PerfharmonyVersion = (Split-Path $PerfharmonyWheel -Leaf) -replace '^perfharmony-([^-]+)-.*$', '$1'
+& "$VenvPath\Scripts\python.exe" -c "import perfharmony; assert perfharmony.__version__ == '$PerfharmonyVersion'; print('perfharmony import smoke test passed: ' + perfharmony.__version__)"
 $smokeExit = $LASTEXITCODE
 $env:PYTHONPATH = $oldPythonPath
 if ($smokeExit -ne 0) {

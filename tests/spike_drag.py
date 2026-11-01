@@ -23,7 +23,7 @@ from worker.platforms.harmony_official.session import HarmonyOfficialSession  # 
 
 SETTINGS = {
     "java_path": "java",
-    "jar_path": "tools/harmony/hosScrcpy-1.0.15-beta.jar",
+    "jar_path": "tools/harmony/hosScrcpy-1.0.18-beta.jar",
     "bridge_class_path": "tools/harmony/bridge",
     "temp_dir": "temp/hos_bridge",
     "image_scale_size": 720, "frame_rate": 10, "bit_rate": 4_000_000,
