@@ -72,10 +72,21 @@ class UnlockScreenAction(ActionExecutor):
         # 获取点击间隔（毫秒）
         click_interval = self._get_click_interval()
 
-        # 获取设备分辨率和缩放因子（用于 iOS 坐标转换）
-        resolution = self._get_device_resolution(platform, context)
-        scale_factor = self._get_scale_factor(platform, context, resolution or (750, 1334))
-        logger.info(f"Scale factor for coordinate conversion: {scale_factor}")
+        # 获取设备分辨率和缩放因子（用于坐标转换）。
+        # 鸿蒙解锁全程不走截图：分辨率仅在手机带密码查九宫格坐标表时
+        # 需要，用 hidumper display_size 查询（snapshot_display 在熄屏/
+        # 异常设备上可能长时间阻塞）；PC 与无密码场景完全不需要分辨率。
+        if platform.platform in self.HARMONY_PLATFORMS:
+            resolution = (
+                self._get_harmony_resolution(platform, context)
+                if platform.platform == "harmony_mobile" and password
+                else None
+            )
+            scale_factor = 1
+        else:
+            resolution = self._get_device_resolution(platform, context)
+            scale_factor = self._get_scale_factor(platform, context, resolution or (750, 1334))
+            logger.info(f"Scale factor for coordinate conversion: {scale_factor}")
 
         try:
             # 1. 检测锁屏状态
@@ -162,7 +173,7 @@ class UnlockScreenAction(ActionExecutor):
                 self._input_password_pc(platform, context, password)
             else:
                 # 获取密码键盘坐标配置（根据设备分辨率自动匹配）
-                keypad_coords = self._get_keypad_coords(platform, context)
+                keypad_coords = self._get_keypad_coords(platform, context, resolution)
 
                 for digit in password:
                     if digit not in keypad_coords:
@@ -220,12 +231,18 @@ class UnlockScreenAction(ActionExecutor):
         """获取固定的密码键盘点击间隔（毫秒）。"""
         return UNLOCK_CLICK_INTERVAL_MS
 
-    def _get_keypad_coords(self, platform: "PlatformManager", context: object) -> dict:
+    def _get_keypad_coords(
+        self,
+        platform: "PlatformManager",
+        context: object,
+        resolution: tuple[int, int] | None = None,
+    ) -> dict:
         """根据设备分辨率获取代码内置的密码键盘坐标。"""
         platform_type = platform.platform
 
-        # 获取设备分辨率
-        resolution = self._get_device_resolution(platform, context)
+        # 获取设备分辨率（execute 已查询过时直接复用，不重复探测）
+        if resolution is None:
+            resolution = self._get_device_resolution(platform, context)
         resolution_key = f"{resolution[0]}x{resolution[1]}" if resolution else "default"
 
         logger.info(f"Device resolution: {resolution_key}")
@@ -274,22 +291,28 @@ class UnlockScreenAction(ActionExecutor):
                 except Exception as e:
                     logger.warning(f"Failed to get Android screen size: {e}")
 
-        elif platform_type in self.HARMONY_PLATFORMS:
-            hdc = context or platform._device_clients.get(platform._current_device)
-            if hdc:
-                try:
-                    # 通过截图获取分辨率
-                    screenshot_bytes = platform.take_screenshot(context)
-                    if screenshot_bytes:
-                        import io
-
-                        from PIL import Image
-                        img = Image.open(io.BytesIO(screenshot_bytes))
-                        return img.size
-                except Exception as e:
-                    logger.warning(f"Failed to get Harmony screen size: {e}")
-
         return None
+
+    def _get_harmony_resolution(
+        self, platform: "PlatformManager", context: object
+    ) -> tuple[int, int] | None:
+        """鸿蒙设备分辨率：hidumper display_size 查询，不走截图。
+
+        分辨率仅用于九宫格坐标表匹配；查询失败或解析不到时返回 None，
+        坐标表自动落到 default 一套。snapshot_display 在熄屏/异常设备上
+        可能长时间阻塞，解锁链路一律避开。
+        """
+        hdc = context or platform._device_clients.get(platform._current_device)
+        if not hdc or not hasattr(hdc, "display_size"):
+            return None
+        try:
+            size = hdc.display_size()
+        except Exception as e:
+            logger.warning(f"Failed to get Harmony display size: {e}")
+            return None
+        if not size or size == (0, 0):
+            return None
+        return (int(size[0]), int(size[1]))
 
     def _get_scale_factor(self, platform: "PlatformManager", context: object, physical_size: tuple[int, int]) -> int:
         """获取 iOS 设备的缩放因子（物理分辨率 / 逻辑分辨率）。"""
@@ -382,41 +405,18 @@ class UnlockScreenAction(ActionExecutor):
             return True
 
         if platform_type in self.HARMONY_PLATFORMS:
-            # Harmony: 优先通过 hidumper powerStatus 判断，失败时退化为截图亮度
+            # Harmony: 通过 hidumper powerStatus 判断。查询失败时按亮屏
+            # 处理继续解锁流程（wakeup 幂等，误判代价低），不回退截图
+            # 亮度——snapshot_display 在熄屏/异常设备上可能长时间阻塞。
             hdc = context or platform._device_clients.get(platform._current_device)
             if hdc and hasattr(hdc, "is_screen_on"):
                 try:
                     return hdc.is_screen_on()
                 except Exception as e:
-                    logger.warning(f"Failed to check Harmony screen state via hidumper: {e}")
-
-            # 回退：通过截图亮度判断（与 iOS 相同）
-            try:
-                screenshot_bytes = platform.take_screenshot(context)
-                if not screenshot_bytes:
-                    logger.warning("Failed to take screenshot, assuming screen is off")
-                    return False
-
-                import io
-
-                from PIL import Image
-
-                img = Image.open(io.BytesIO(screenshot_bytes))
-                # 转换为灰度图
-                gray_img = img.convert("L")
-                # 计算平均亮度
-                pixels = list(gray_img.getdata())
-                avg_brightness = sum(pixels) / len(pixels)
-                logger.info(f"Screenshot average brightness: {avg_brightness}")
-
-                # 亮度阈值：低于 10 认为屏幕熄灭（全黑）
-                is_screen_on = avg_brightness > 10
-                logger.info(f"Screen on detected via brightness: {is_screen_on}")
-                return is_screen_on
-
-            except Exception as e:
-                logger.warning(f"Failed to check screen brightness: {e}")
-                return True
+                    logger.warning(
+                        f"Failed to check Harmony screen state via hidumper: {e}, assuming screen on"
+                    )
+            return True
 
         # iOS: 通过截图亮度判断（WDA 没有 screenOn API）
         try:

@@ -7,6 +7,7 @@ import pytest
 
 from worker.actions.unlock import UnlockScreenAction
 from worker.config import PlatformConfig, WorkerConfig
+from worker.constants import HARMONY_KEYPAD_COORDINATES, HARMONY_MOBILE_UNLOCK_SWIPE
 from worker.discovery.harmony import HarmonyDeviceInfo
 from worker.platforms import harmony_capture, harmony_hdc
 from worker.platforms.harmony import HarmonyPlatformManager
@@ -120,7 +121,7 @@ def test_list_target_info_restarts_hdc_once_after_connect_server_failure(
     assert [target.udid for target in targets] == ["device-001"]
     assert restart_paths == ["hdc.exe"]
     assert command_calls == [
-        (["list", "targets", "-v"], {"retries": 2}),
+        (["list", "targets", "-v"], {"retries": 2, "timeout": 30}),
         (["list", "targets", "-v"], {"retries": 0}),
     ]
 
@@ -829,6 +830,132 @@ def test_harmony_unlock_uses_1260x2720_keypad_coordinates() -> None:
     assert coords["4"] == {"x": 340, "y": 1785}
 
 
+def _forbidden_screenshot(*_args, **_kwargs):
+    raise AssertionError("鸿蒙解锁链路不允许截图（snapshot_display 可能长时间阻塞）")
+
+
+def test_harmony_unlock_mobile_password_flow_has_no_screenshots(monkeypatch) -> None:
+    """鸿蒙手机带密码解锁：全流程零截图，分辨率走 hidumper display_size。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    screenshots: list[object] = []
+    display_queries: list[object] = []
+    swipes: list[tuple[int, int, int, int]] = []
+    taps: list[tuple[int, int]] = []
+    lock_states = iter([True, False])
+
+    client = SimpleNamespace(
+        display_size=lambda: display_queries.append(1) or (1260, 2720),
+        is_locked=lambda: next(lock_states),
+        is_screen_on=lambda: True,
+        is_interactive=lambda: True,
+        swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
+        tap=lambda x, y: taps.append((x, y)),
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=lambda *args, **kwargs: screenshots.append(1)
+        or _forbidden_screenshot(),
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen", value="123456"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert screenshots == []
+    assert display_queries == [1]
+    assert swipes == [HARMONY_MOBILE_UNLOCK_SWIPE]
+    keypad = HARMONY_KEYPAD_COORDINATES["1260x2720"]
+    assert taps == [(keypad[d]["x"], keypad[d]["y"]) for d in "123456"]
+
+
+def test_harmony_unlock_pc_flow_has_no_screenshots_and_no_resolution_query(monkeypatch) -> None:
+    """鸿蒙 PC 解锁：文本框输入密码，全程零截图、零分辨率查询。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    screenshots: list[object] = []
+    pressed_keys: list[str] = []
+    texts: list[str] = []
+    lock_states = iter([True, False])
+
+    def _forbidden_display_size():
+        raise AssertionError("鸿蒙 PC 解锁不需要查询分辨率")
+
+    client = SimpleNamespace(
+        display_size=_forbidden_display_size,
+        is_locked=lambda: next(lock_states),
+        is_screen_on=lambda: True,
+        swipe=lambda *args: None,
+        tap=lambda x, y: None,
+        input_text=lambda text: texts.append(text) or True,
+        press_key=lambda key: None,
+    )
+    platform = SimpleNamespace(
+        platform="harmony_pc",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        press=lambda key, context=None: pressed_keys.append(key),
+        take_screenshot=lambda *args, **kwargs: screenshots.append(1)
+        or _forbidden_screenshot(),
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen", value="123456"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert screenshots == []
+    assert texts == ["123456"]
+    assert pressed_keys == ["ctrl+a", "BACKSPACE"]
+
+
+def test_harmony_unlock_no_password_skips_resolution_query(monkeypatch) -> None:
+    """鸿蒙手机无密码解锁：仅滑动，不查询分辨率、零截图。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    swipes: list[tuple[int, int, int, int]] = []
+    lock_states = iter([True, False])
+
+    client = SimpleNamespace(
+        display_size=lambda: (_ for _ in ()).throw(
+            AssertionError("无密码解锁不需要分辨率")
+        ),
+        is_locked=lambda: next(lock_states),
+        is_screen_on=lambda: True,
+        is_interactive=lambda: True,
+        swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
+    )
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert swipes == [HARMONY_MOBILE_UNLOCK_SWIPE]
+
+
+def test_harmony_brightness_check_failure_assumes_screen_on_without_screenshot() -> None:
+    """hidumper 熄屏检测异常时按亮屏处理继续解锁，不回退截图。"""
+    def _broken_is_screen_on():
+        raise RuntimeError("hidumper down")
+
+    client = SimpleNamespace(is_screen_on=_broken_is_screen_on)
+    platform = SimpleNamespace(
+        platform="harmony_mobile",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        take_screenshot=_forbidden_screenshot,
+    )
+
+    assert UnlockScreenAction()._check_screen_brightness(platform, client) is True
+
+
 def test_harmony_lock_state_parsing_tolerates_dump_variants() -> None:
     assert harmony_hdc.parse_harmony_lock_state("screenLocked: true") is True
     assert harmony_hdc.parse_harmony_lock_state(" screenLocked          False") is False
@@ -1220,6 +1347,81 @@ def test_display_size_falls_back_to_render_service_dump(
 
     # 数字服务 ID dump 无法解析时，回退按服务名 dump
     assert wrapper.display_size() == (1260, 2720)
+
+
+def test_display_size_result_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """分辨率是设备不变量：成功查询一次后缓存，重复调用不再执行 HDC 命令。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: calls.append(command)
+        or CommandResult("activeMode: 1260x2720, refreshrate=120", "", 0),
+    )
+
+    assert wrapper.display_size() == (1260, 2720)
+    assert wrapper.display_size() == (1260, 2720)
+    assert calls == ["hidumper -s 10 -a screen"]
+
+
+def test_display_size_failure_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """查询失败不缓存：下次调用重新查询，成功后才开始缓存。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    calls: list[str] = []
+    results = iter([
+        CommandResult("no display metrics", "", 0),
+        CommandResult("no display metrics", "", 0),
+        CommandResult("activeMode: 1260x2720, refreshrate=120", "", 0),
+    ])
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: calls.append(command) or next(results),
+    )
+
+    assert wrapper.display_size() == (0, 0)
+    assert wrapper.display_size() == (1260, 2720)
+    assert wrapper.display_size() == (1260, 2720)
+    # 第一次两条命令都失败，第二次首条命令成功后走缓存
+    assert len(calls) == 3
+
+
+def test_is_online_probe_uses_single_bounded_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """在线探测只做一次 10s 短超时尝试，不做多轮重试。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    wrapper.hdc_path = "hdc.exe"
+    captured: dict = {}
+
+    def execute(*args, **kwargs):
+        captured.update(kwargs)
+        return CommandResult("device-001 USB Ready", "", 0)
+
+    monkeypatch.setattr(harmony_hdc, "_find_hdc_path", lambda _: "hdc.exe")
+    monkeypatch.setattr(harmony_hdc, "_execute_hdc_command", execute)
+
+    assert wrapper.is_online() is True
+    assert captured == {"timeout": 10, "retries": 0}
+
+
+def test_harmony_create_context_reuses_client_without_online_probe() -> None:
+    """create_context 直接复用已有客户端：在线性由 ensure_device_service 保证。"""
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_mobile")
+    client = SimpleNamespace(
+        serial="device-001",
+        is_online=lambda: (_ for _ in ()).throw(
+            AssertionError("create_context 不应重复执行在线探测")
+        ),
+    )
+    manager._device_clients["device-001"] = client
+
+    context = manager.create_context(device_id="device-001")
+
+    assert context is client
+    assert manager._current_device == "device-001"
 
 
 # ============================================================================

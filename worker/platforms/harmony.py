@@ -279,15 +279,17 @@ class HarmonyPlatformManager(PlatformManager):
 
         Raises:
             ValueError: 未提供 device_id
-            DeviceNotFoundError: 设备未在线
+            DeviceNotFoundError: 创建新客户端时设备未在线
         """
         if not device_id:
             raise ValueError("鸿蒙平台必须提供 device_id")
 
-        # 尝试获取已有的客户端
+        # 已有客户端直接复用，不再做在线探测：任务链路进入本方法前必经
+        # ensure_device_service 确认在线（其内部已执行 hdc list targets）。
+        # 客户端若在此后失效，第一条 HDC 命令自然报错，任务按失败收尾。
         client = self._device_clients.get(device_id)
 
-        if client and client.is_online():
+        if client:
             logger.debug(f"使用已有的设备客户端: {device_id}")
             self._current_device = device_id
             return client
