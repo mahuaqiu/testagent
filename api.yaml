@@ -1335,13 +1335,20 @@ components:
         width:
           type: integer
           description: |
-            分辨率宽度，仅 set_resolution 动作必填：
-            - 设置显示器分辨率的宽度值，如 1920、1280
+            分辨率/尺寸宽度：
+            - set_resolution 动作必填：设置显示器分辨率的宽度值，如 1920、1280
+            - Web start_app 动作可选：浏览器页面视口宽度（截图尺寸与之一致），需与 height 同时传入：
+              - width/height 同时为 -1：全屏启动（--start-fullscreen，视口跟随真实屏幕；仅 headful 模式有效，headless 下忽略）
+              - width/height 同时为正值：自定义视口大小，如 1920x1080
+              - 不传：默认 1280x720
+              示例：{"action_type": "start_app", "value": "chromium", "width": 1920, "height": 1080}
+              示例：{"action_type": "start_app", "value": "chromium", "width": -1, "height": -1}
         height:
           type: integer
           description: |
-            分辨率高度，仅 set_resolution 动作必填：
-            - 设置显示器分辨率的高度值，如 1080、720
+            分辨率/尺寸高度：
+            - set_resolution 动作必填：设置显示器分辨率的高度值，如 1080、720
+            - Web start_app 动作可选：浏览器页面视口高度，约定同 width（-1,-1 全屏；正值自定义；不传默认 1280x720）
         monitor_index:
           type: integer
           default: 0
@@ -1494,6 +1501,16 @@ components:
             - type: array
               items:
                 type: string
+        token_headers:
+          type: array
+          items:
+            type: string
+          description: |
+            要捕获 Token 的请求头名称列表，仅 Web 平台 start_app 动作可选：
+            - 追加到 worker.yaml platforms.web.token_headers 配置（自动去重）
+            - 浏览器后续请求携带这些请求头时，值会被持续捕获并始终保持最新值
+            - 通过 get_token 动作读取捕获结果
+            示例：{"action_type": "start_app", "value": "chromium", "token_headers": ["X-Auth-Token", "X-Request-Operator"]}
         fps:
           type: integer
           default: 10
@@ -2007,6 +2024,12 @@ components:
   # {"action_type": "start_app", "value": "chromium", "proxy": "http://proxy.example.com:8080"}
   # 示例 7 (Web): 启动浏览器，不传 proxy 参数则显式禁用代理（不走系统代理）
   # {"action_type": "start_app", "value": "chromium"}
+  # 示例 8 (Web): 自定义浏览器页面视口大小 1920x1080（不传默认 1280x720）
+  # {"action_type": "start_app", "value": "chromium", "width": 1920, "height": 1080}
+  # 示例 9 (Web): 全屏启动（width/height 同时为 -1，仅 headful 模式有效）
+  # {"action_type": "start_app", "value": "chromium", "width": -1, "height": -1}
+  # 示例 10 (Web): 启动时指定要捕获 Token 的请求头（配合 get_token 动作读取）
+  # {"action_type": "start_app", "value": "chromium", "token_headers": ["X-Auth-Token"]}
 
   # stop_app - 关闭应用/浏览器
   # 示例 1: 关闭当前应用/浏览器

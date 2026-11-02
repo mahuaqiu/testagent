@@ -140,6 +140,10 @@ class Action:
     # 默认 None 表示显式禁用代理（不走系统代理）
     proxy: str | None = None
 
+    # Web Token 捕获参数（start_app 专用）：本次启动要监听的请求头名称列表，
+    # 追加到 worker.yaml platforms.web.token_headers 配置之后（自动去重）
+    token_headers: list[str] | None = None
+
     # 录屏参数（start_recording 专用）
     fps: int | None = None                    # 帧率（默认 10）
     audio: bool = False                       # 是否录制音频
@@ -223,6 +227,7 @@ class Action:
             window_class=data.get("window_class") or data.get("class"),
             negate=data.get("negate", False),
             proxy=data.get("proxy"),
+            token_headers=data.get("token_headers"),
             fps=data.get("fps"),
             audio=data.get("audio", False),
             watermark=data.get("watermark", True),
@@ -315,6 +320,8 @@ class Action:
             result["negate"] = self.negate
         if self.proxy is not None:
             result["proxy"] = self.proxy
+        if self.token_headers is not None:
+            result["token_headers"] = self.token_headers
         if self.fps is not None:
             result["fps"] = self.fps
         if self.audio:

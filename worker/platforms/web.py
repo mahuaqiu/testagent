@@ -111,6 +111,10 @@ class WebPlatformManager(PlatformManager):
         # 代理配置（由 start_app 动作参数传入）
         self._proxy_config: dict[str, str] | None = None  # Playwright proxy 格式
 
+        # 窗口尺寸/全屏（由 start_app 动作参数传入，见 _apply_window_size）
+        self._viewport: dict[str, int] | None = None  # 页面视口；None 表示默认 1280x720
+        self._fullscreen: bool = False  # width/height 同时为 -1 时的全屏启动
+
         # Token 捕获
         self._token_headers: list[str] = config.token_headers or []
         self._captured_tokens: dict[str, str] = {}  # 存储捕获的 token
@@ -175,6 +179,48 @@ class WebPlatformManager(PlatformManager):
         except Exception as e:
             logger.warning(f"Failed to parse proxy string: {proxy_str}, error: {e}")
             return None
+
+    def _apply_window_size(self, action: Action) -> None:
+        """解析 start_app 的窗口尺寸参数，写入 _viewport/_fullscreen。
+
+        约定：width/height 同时为 -1 表示全屏；同时为正值表示自定义页面视口大小；
+        不传或非法组合使用默认 1280x720。每次浏览器启动前重新解析，天然覆盖重置状态。
+        """
+        self._viewport = None
+        self._fullscreen = False
+
+        if action.width is None or action.height is None:
+            return
+
+        if action.width == -1 and action.height == -1:
+            self._fullscreen = True
+        elif action.width > 0 and action.height > 0:
+            self._viewport = {"width": action.width, "height": action.height}
+        else:
+            logger.warning(
+                f"Invalid start_app size: width={action.width}, height={action.height}, "
+                "using default viewport (1280x720)"
+            )
+
+    def _apply_window_launch_options(self, context_options: dict, chromium_args: list[str]) -> None:
+        """把 _viewport/_fullscreen 写入浏览器启动选项。
+
+        - 全屏：--start-fullscreen + no_viewport，视口跟随真实屏幕（仅 headful 的 Chromium 系有效）
+        - 自定义尺寸：viewport 选项精确控制页面视口（headless/headful 均适用，截图尺寸与之一致）
+        - 均未设置：保持 Playwright 默认 1280x720
+        """
+        if self._fullscreen:
+            if self.headless:
+                logger.warning("start_app fullscreen requested in headless mode has no window, using default viewport")
+            elif self.browser_type in ("chromium", "chrome", "msedge", "edge"):
+                chromium_args.append("--start-fullscreen")
+                context_options["no_viewport"] = True
+                logger.info("Browser will start fullscreen (--start-fullscreen), viewport follows screen")
+            else:
+                logger.warning(f"Fullscreen not supported for browser type {self.browser_type}, using default viewport")
+        elif self._viewport:
+            context_options["viewport"] = dict(self._viewport)
+            logger.info(f"Custom viewport: {self._viewport['width']}x{self._viewport['height']}")
 
     def _clear_profile_data(self, user_data_dir: str) -> None:
         """清理表单相关数据（保留 HTTP 缓存和其他非敏感数据）。
@@ -393,6 +439,9 @@ class WebPlatformManager(PlatformManager):
             "--hide-crash-restore-bubble",  # 禁用"恢复页面"弹窗（替代失效的 --disable-session-crashed-bubble）
         ]
 
+        # 窗口尺寸/全屏（由 start_app 动作参数传入）
+        self._apply_window_launch_options(context_options, chromium_args)
+
         # 合并用户配置的启动参数
         if self.browser_args:
             chromium_args.extend(self.browser_args)
@@ -445,19 +494,41 @@ class WebPlatformManager(PlatformManager):
 
         logger.info(f"Browser started, user_data_dir={user_data_dir}, clear_profile={self.clear_profile_on_start}")
 
-    def _setup_token_capture(self) -> None:
-        """设置请求头 Token 捕获监听。"""
+    def _setup_token_capture(self, headers: list[str] | None = None) -> None:
+        """设置请求头 Token 捕获监听。
+
+        Args:
+            headers: 要监听的 header 列表；None 表示监听 self._token_headers 全量列表
+                （浏览器启动时的默认行为）。传入子列表用于浏览器运行中追加新 header，
+                避免对已监听的 header 重复挂监听。
+        """
+        target_headers = headers if headers is not None else self._token_headers
+
         async def on_request(request):
-            headers = request.headers
-            for header_name in self._token_headers:
+            request_headers = request.headers
+            for header_name in target_headers:
                 # HTTP headers 在 Playwright 中是小写的
-                value = headers.get(header_name.lower())
+                value = request_headers.get(header_name.lower())
                 if value:
                     self._captured_tokens[header_name] = value
                     logger.debug(f"Captured token: {header_name}={value}")
 
         self._browser_context.on("request", on_request)
-        logger.info(f"Token capture enabled for headers: {self._token_headers}")
+        logger.info(f"Token capture enabled for headers: {target_headers}")
+
+    def _merge_action_token_headers(self, action: Action) -> None:
+        """合并 start_app 动作传入的 token_headers（追加去重）。
+
+        浏览器已启动时为新增 header 补挂监听；未启动时由 _async_start 统一设置。
+        """
+        if not action.token_headers:
+            return
+        new_headers = [h for h in action.token_headers if h and h not in self._token_headers]
+        if not new_headers:
+            return
+        self._token_headers.extend(new_headers)
+        if self._browser_context is not None:
+            self._setup_token_capture(new_headers)
 
     def get_captured_tokens(self) -> dict[str, str]:
         """返回捕获的 tokens dict 副本。"""
@@ -1101,10 +1172,8 @@ class WebPlatformManager(PlatformManager):
         """启动/新建浏览器页面。"""
         browser_name = action.value or self.browser_type
 
-        # 解析代理参数
-        # 格式："http://user:pass@proxy.example.com:8080" 或 "http://proxy.example.com:8080"
-        # None 表示禁用代理（不走系统代理）
-        self._proxy_config = self._parse_proxy_string(action.proxy)
+        # 合并 token_headers 参数（追加去重；浏览器已运行时为新增 header 补挂监听）
+        self._merge_action_token_headers(action)
 
         # 尝试复用已有会话
         if self.has_active_session():
@@ -1135,6 +1204,12 @@ class WebPlatformManager(PlatformManager):
             # 启动浏览器
             if not self._browser_context:
                 try:
+                    # 解析代理和窗口尺寸参数：必须在 _reset_browser_state 之后，
+                    # 否则刚解析的参数会被重置逻辑清掉（_reset_browser_state 会清 _proxy_config）
+                    # 代理格式："http://user:pass@proxy.example.com:8080"（带认证）或
+                    #           "http://proxy.example.com:8080"（无认证）；None 表示禁用代理
+                    self._proxy_config = self._parse_proxy_string(action.proxy)
+                    self._apply_window_size(action)
                     _run_async(self._async_start())
                     self._started = True
                     logger.info(f"Browser started: {browser_name}")
