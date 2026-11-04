@@ -29,6 +29,7 @@ from worker.config import (
     merge_config_with_local_protection,
     save_config_with_version,
 )
+from worker.constants import DEFAULT_MAX_CONNECTIONS_PER_DEVICE
 from worker.errors import WorkerError
 from worker.files_api import router as files_router
 from worker.files_api import set_files_config
@@ -83,8 +84,8 @@ def _release_ws_connection_slot(conn_key: str) -> int:
     logger.info("WebSocket connection slot released: key=%s, count=%d", conn_key, remaining)
     return remaining
 
-# 默认 WebSocket 配置（会被 worker.config 覆盖）
-DEFAULT_WS_MAX_CONNECTIONS = 3
+# 默认 WebSocket 配置（会被 worker.config 覆盖）。
+# 连接数上限不再单独维护默认值：统一引用 constants.DEFAULT_MAX_CONNECTIONS_PER_DEVICE。
 DEFAULT_WS_SEND_TIMEOUT = 30
 DEFAULT_WS_IDLE_TIMEOUT = 900
 DEFAULT_WS_STREAMING_FPS = 15
@@ -1375,7 +1376,7 @@ async def screen_stream(
         codec = "jpeg"
 
     # 从配置读取参数（使用默认值作为 fallback）
-    max_connections = DEFAULT_WS_MAX_CONNECTIONS
+    max_connections = DEFAULT_MAX_CONNECTIONS_PER_DEVICE
     send_timeout = DEFAULT_WS_SEND_TIMEOUT
     streaming_fps = DEFAULT_WS_STREAMING_FPS
     streaming_bitrate = DEFAULT_WS_STREAMING_BITRATE

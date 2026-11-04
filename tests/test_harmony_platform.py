@@ -966,14 +966,17 @@ def test_harmony_unlock_pc_flow_has_no_screenshots_and_no_resolution_query(monke
     def _forbidden_display_size():
         raise AssertionError("鸿蒙 PC 解锁不需要查询分辨率")
 
+    def _forbidden_press_key(_key):
+        raise AssertionError("鸿蒙 PC 解锁按键必须走 uinput -K 通道，不允许 hdc.press_key")
+
     client = SimpleNamespace(
         display_size=_forbidden_display_size,
         is_locked=lambda: next(lock_states),
         is_screen_on=lambda: True,
         swipe=lambda *args: None,
-        tap=lambda x, y: None,
+        tap=lambda x, y: True,
         input_text=lambda text: texts.append(text) or True,
-        press_key=lambda key: None,
+        press_key=_forbidden_press_key,
     )
     platform = SimpleNamespace(
         platform="harmony_pc",
@@ -991,7 +994,9 @@ def test_harmony_unlock_pc_flow_has_no_screenshots_and_no_resolution_query(monke
     assert result.status == ActionStatus.SUCCESS
     assert screenshots == []
     assert texts == ["123456"]
-    assert pressed_keys == ["ctrl+a", "BACKSPACE"]
+    # Ctrl+A / BackSpace / ENTER 统一走 platform.press（uinput -K 通道），
+    # 不再调用 hdc.press_key（uitest uiInput keyEvent 在鸿蒙 PC 上不可靠）
+    assert pressed_keys == ["ctrl+a", "BACKSPACE", "ENTER"]
 
 
 def test_harmony_unlock_no_password_skips_resolution_query(monkeypatch) -> None:
@@ -1123,6 +1128,47 @@ def test_harmony_lock_state_parsing_tolerates_dump_variants() -> None:
     assert harmony_hdc.parse_harmony_lock_state("no lock info here") is None
 
 
+SCREENLOCK_MULTIUSER_DUMP = (
+    "----------------------------------ScreenlockService-----------------------"
+    "-----------\n"
+    " Screenlock system state\tValue\t\tDescription\n"
+    " * screenState  \ttrue\t\tscreen on / off status\n"
+    " * interactiveState  \t0\t\t100\n"
+    " * deviceLocked  \ttrue\t\t100\n"
+    " * screenLocked  \ttrue\t\t100\n"
+    " * interactiveState  \t2\t\t101\n"
+    " * deviceLocked  \tfalse\t\t101\n"
+    " * screenLocked  \tfalse\t\t101\n"
+)
+
+
+def test_harmony_lock_state_multiuser_picks_max_user_id() -> None:
+    """多用户 dump 同一字段多行：取 userId 最大（活跃用户）的锁屏状态。"""
+    assert harmony_hdc.parse_harmony_lock_state(SCREENLOCK_MULTIUSER_DUMP) is False
+    assert harmony_hdc.parse_harmony_interactive_state(SCREENLOCK_MULTIUSER_DUMP) == 2
+
+
+def test_harmony_lock_state_multiuser_dump_via_screenlock_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """合并查询在多用户 dump 下返回活跃用户（userId 最大）的两态。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    wrapper.serial = "device-001"
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: CommandResult(SCREENLOCK_MULTIUSER_DUMP, "", 0),
+    )
+
+    assert wrapper.screenlock_status() == {"locked": False, "interactive_state": 2}
+
+
+def test_harmony_lock_state_multirow_without_user_id_keeps_first_row() -> None:
+    """多行但行尾没有 userId（旧版本格式）：保持第一行，与历史行为一致。"""
+    dump = "screenLocked: true\nscreenLocked: false\n"
+    assert harmony_hdc.parse_harmony_lock_state(dump) is True
+
+
 def test_harmony_is_locked_prefers_screenlock_service_then_screen_state() -> None:
     wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
     wrapper.shell = lambda cmd, timeout=30: harmony_hdc.CommandResult(  # type: ignore[method-assign]
@@ -1165,12 +1211,13 @@ def test_harmony_unlock_pc_branch_swipes_and_inputs_password() -> None:
     swipes: list[tuple[int, int, int, int]] = []
     taps: list[tuple[int, int]] = []
     texts: list[str] = []
-    keys: list[str] = []
     client = SimpleNamespace(
         swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
-        tap=lambda x, y: taps.append((x, y)),
+        tap=lambda x, y: taps.append((x, y)) or True,
         input_text=lambda text: texts.append(text) or True,
-        press_key=lambda key: keys.append(key),
+        press_key=lambda key: (_ for _ in ()).throw(
+            AssertionError("ENTER 必须走 platform.press (uinput -K)，不允许 hdc.press_key")
+        ),
     )
 
     action._trigger_password_screen(platform, client, "swipe_up")
@@ -1179,9 +1226,8 @@ def test_harmony_unlock_pc_branch_swipes_and_inputs_password() -> None:
     assert swipes == [(1560, 1600, 1560, 600)]
     box = UnlockScreenAction.DEFAULT_HARMONY_PC_PASSWORD_BOX
     assert taps == [(box["x"], box["y"])]
-    assert pressed_keys == ["ctrl+a", "BACKSPACE"]
+    assert pressed_keys == ["ctrl+a", "BACKSPACE", "ENTER"]
     assert texts == ["123456"]
-    assert keys == ["ENTER"]
 
 
 def test_harmony_unlock_check_locked_uses_hdc_is_locked() -> None:

@@ -99,6 +99,8 @@ class UnlockScreenAction(ActionExecutor):
             harmony_status = None
             if platform.platform in self.HARMONY_PLATFORMS:
                 harmony_status = self._harmony_screenlock_status(platform, context)
+                if harmony_status is not None:
+                    logger.info(f"Harmony merged screenlock status: {harmony_status}")
             if harmony_status is not None and harmony_status.get("locked") is not None:
                 is_locked = harmony_status["locked"]
             else:
@@ -641,9 +643,10 @@ class UnlockScreenAction(ActionExecutor):
     def _input_password_pc(self, platform: "PlatformManager", context: object, password: str) -> None:
         """鸿蒙 PC 锁屏密码输入：点击密码框聚焦 → Ctrl+A 全选 → BackSpace 清空 → 整串输入 → 回车确认。
 
-        密码框可能有上次输入残留，输入前先全选清空。Ctrl+A 组合键与
-        BackSpace 走 uinput -K 通道（uitest keyEvent 在鸿蒙 PC 上不支持
-        修饰键组合）。
+        密码框可能有上次输入残留，输入前先全选清空。回车、Ctrl+A 组合键
+        与 BackSpace 统一走 platform.press（uinput -K 通道，与 task 按键
+        动作一致；uitest uiInput keyEvent 在鸿蒙 PC 上不支持修饰键组合，
+        且部分键值行为不可靠）。
         """
         hdc = context or platform._device_clients.get(platform._current_device)
         if not hdc:
@@ -652,23 +655,32 @@ class UnlockScreenAction(ActionExecutor):
         box = HARMONY_PC_PASSWORD_BOX
         x, y = box["x"], box["y"]
 
-        # 点击密码框获取焦点
-        hdc.tap(x, y)
+        # 步骤 1/5：点击密码框获取焦点（失败立即报错，避免后续步骤打到错误位置）
+        logger.info(f"Harmony PC unlock step 1/5: tap password box at ({x}, {y})")
+        if not hdc.tap(x, y):
+            raise RuntimeError(f"Harmony PC tap password box failed at ({x}, {y})")
         time.sleep(0.5)
 
-        # Ctrl+A 全选 → BackSpace 清空残留内容
+        # 步骤 2/5：Ctrl+A 全选残留内容（uinput -K 组合键）
+        logger.info("Harmony PC unlock step 2/5: Ctrl+A select all")
         platform.press("ctrl+a", hdc)
         time.sleep(0.3)
+
+        # 步骤 3/5：BackSpace 清空残留内容
+        logger.info("Harmony PC unlock step 3/5: BackSpace clear residual text")
         platform.press("BACKSPACE", hdc)
         time.sleep(0.3)
 
-        # 向聚焦的密码框整串输入密码
+        # 步骤 4/5：向聚焦的密码框整串输入密码
+        logger.info(f"Harmony PC unlock step 4/5: input password (length={len(password)})")
         if not hdc.input_text(password):
+            logger.error("Harmony PC unlock step 4/5 failed: uitest uiInput text returned failure")
             raise RuntimeError(f"Harmony PC password input failed at ({x}, {y})")
         time.sleep(0.5)
 
-        # 回车确认
-        hdc.press_key("ENTER")
+        # 步骤 5/5：回车确认（uinput -K 通道，与 task 按键一致）
+        logger.info("Harmony PC unlock step 5/5: press ENTER via uinput -K")
+        platform.press("ENTER", hdc)
         logger.info(f"Harmony PC password cleared, entered at ({x}, {y}) and confirmed with ENTER")
 
     def _tap_digit(self, platform: "PlatformManager", context: object, x: int, y: int, scale_factor: int = 1) -> None:

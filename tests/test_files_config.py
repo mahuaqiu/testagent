@@ -6,8 +6,8 @@ from worker.config import WorkerConfig
 def test_files_defaults():
     cfg = WorkerConfig()
     assert cfg.files_root is None
-    assert cfg.files_download_rate_limit_mb == 1.0
-    assert cfg.files_upload_rate_limit_mb == 1.0
+    assert cfg.files_download_rate_limit_mb == 5.0
+    assert cfg.files_upload_rate_limit_mb == 5.0
     assert cfg.files_max_concurrent_downloads == 2
     assert cfg.files_max_concurrent_uploads == 2
     assert cfg.files_max_upload_size_mb == 1024
@@ -31,8 +31,8 @@ files:
     )
     cfg = WorkerConfig.from_yaml(str(yaml_file))
     assert cfg.files_root is None
-    assert cfg.files_download_rate_limit_mb == 1.0
-    assert cfg.files_upload_rate_limit_mb == 1.0
+    assert cfg.files_download_rate_limit_mb == 5.0
+    assert cfg.files_upload_rate_limit_mb == 5.0
     assert cfg.files_max_concurrent_downloads == 2
     assert cfg.files_max_concurrent_uploads == 2
     assert cfg.files_max_upload_size_mb == 1024

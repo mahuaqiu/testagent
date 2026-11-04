@@ -115,32 +115,73 @@ def parse_harmony_interactive_state(output: str) -> int | None:
 
     真机实测（Mate 60 Pro）：0 = 非交互（AOD 息屏时钟亮屏但合成触摸
     被忽略），2 = 可交互（锁屏界面，触摸有效）。
+    多用户 dump 同一字段出现多行时取 userId 最大的条目（活跃用户）。
     """
-    match = re.search(
-        r"interactiveState\s*(?:\*\s*)?(-?\d+)",
-        output,
-        re.IGNORECASE,
-    )
-    if not match:
+    matches = list(HARMONY_INTERACTIVE_STATE_PATTERN.finditer(output))
+    if not matches:
         return None
+    chosen = _pick_active_user_row(matches, "interactiveState")
     try:
-        return int(match.group(1))
+        return int(chosen.group("value"))
     except ValueError:
         return None
 
 
 def parse_harmony_lock_state(output: str) -> bool | None:
-    """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。"""
-    match = re.search(
-        r"(?:is\s*)?(?:screen[_\s]?(?:locked|lock[_\s]?state|lock[_\s]?status)|"
-        r"lock[_\s]?(?:state|status))\b\s*[:=]?\s*"
-        r"(true|false|yes|no|locked|unlocked|on|off|1|0)",
-        output,
-        re.IGNORECASE,
-    )
-    if not match:
+    """解析 hidumper ScreenlockService 输出中的锁屏状态，无法判断返回 None。
+
+    多用户 dump 同一字段会出现多行（每个用户一行），取 userId 最大的
+    条目（即活跃用户）的锁屏状态。
+    """
+    matches = list(HARMONY_LOCK_STATE_PATTERN.finditer(output))
+    if not matches:
         return None
-    return match.group(1).lower() in ("true", "yes", "locked", "on", "1")
+    chosen = _pick_active_user_row(matches, "screenLocked")
+    return chosen.group("value").lower() in ("true", "yes", "locked", "on", "1")
+
+
+# ScreenlockService 字段行：字段名 + 值 + 行尾剩余内容。多用户 dump 的
+# 行尾描述列是 userId（如 "* screenLocked \tfalse\t\t101"）。
+HARMONY_INTERACTIVE_STATE_PATTERN = re.compile(
+    r"interactiveState\s*(?:\*\s*)?(?P<value>-?\d+)(?P<trailing>[^\n]*)",
+    re.IGNORECASE,
+)
+HARMONY_LOCK_STATE_PATTERN = re.compile(
+    r"(?:is\s*)?(?:screen[_\s]?(?:locked|lock[_\s]?state|lock[_\s]?status)|"
+    r"lock[_\s]?(?:state|status))\b\s*[:=]?\s*"
+    r"(?P<value>true|false|yes|no|locked|unlocked|on|off|1|0)"
+    r"(?P<trailing>[^\n]*)",
+    re.IGNORECASE,
+)
+
+
+def _pick_active_user_row(matches: list[re.Match[str]], field_label: str) -> re.Match[str]:
+    """同一字段出现多行时，取行尾 userId 最大的条目（活跃用户）。
+
+    多用户设备的 ScreenlockService dump 会对每个用户各输出一行
+    screenLocked/interactiveState，行尾附带 userId；re.search 默认取
+    第一行，可能读到非活跃用户（如 userId=100 的后台用户）的状态。
+    行尾没有数字（单用户/旧版本格式）时保持第一行，与历史行为一致。
+    """
+    if len(matches) == 1:
+        return matches[0]
+
+    user_rows = []
+    for match in matches:
+        numbers = re.findall(r"\d+", match.group("trailing") or "")
+        if numbers:
+            user_rows.append((int(numbers[-1]), match))
+    if not user_rows:
+        return matches[0]
+
+    active_user_id, active_row = max(user_rows, key=lambda item: item[0])
+    logger.info(
+        "ScreenlockService 多用户 dump: %s 共 %d 行，取 userId=%d (活跃用户) 的条目",
+        field_label,
+        len(matches),
+        active_user_id,
+    )
+    return active_row
 
 
 # ============================================================================
