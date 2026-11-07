@@ -104,6 +104,9 @@ class HarmonyPlatformManager(PlatformManager):
         self._task_busy_devices: set[str] = set()
         self._task_busy_lock = threading.Lock()
         self._official_sessions.set_wake_poke_gate(self._is_device_task_busy)
+        # 冷启动兜底清理同样受任务忙门控：kill -9 设备端 uitest 守护进程会
+        # 打断正在跑的用例（HDC uiInput 自动化），任务忙时跳过进程清理。
+        self._official_sessions.set_device_cleanup_gate(self._is_device_task_busy)
 
     @property
     def platform(self) -> str:

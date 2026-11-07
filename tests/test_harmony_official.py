@@ -963,7 +963,7 @@ def test_get_or_start_cleans_residue_before_each_start_attempt(monkeypatch) -> N
 def test_get_or_start_reuses_running_session_without_cleanup(monkeypatch) -> None:
     manager = HarmonyOfficialSessionManager("harmony_mobile")
     manager.set_hdc_path("hdc.exe")
-    running = SimpleNamespace(is_running=True)
+    running = SimpleNamespace(is_running=True, is_reusable=lambda: True)
     manager._sessions["device-1"] = running
     events: list[str] = []
     monkeypatch.setattr(
@@ -1228,6 +1228,9 @@ def test_session_lease_stops_bridge_after_last_consumer() -> None:
         def __init__(self) -> None:
             self.stop_count = 0
 
+        def is_reusable(self) -> bool:
+            return True
+
         def stop(self) -> None:
             self.stop_count += 1
 
@@ -1260,6 +1263,9 @@ def test_stop_session_if_idle_stops_session_without_owners() -> None:
         def __init__(self) -> None:
             self.stop_count = 0
 
+        def is_reusable(self) -> bool:
+            return True
+
         def stop(self) -> None:
             self.stop_count += 1
 
@@ -1289,6 +1295,9 @@ def test_stop_session_if_idle_waits_for_stream_owner_release() -> None:
         def __init__(self) -> None:
             self.stop_count = 0
 
+        def is_reusable(self) -> bool:
+            return True
+
         def stop(self) -> None:
             self.stop_count += 1
 
@@ -1317,6 +1326,9 @@ def test_stop_session_if_idle_skips_when_task_owner_active() -> None:
 
         def __init__(self) -> None:
             self.stop_count = 0
+
+        def is_reusable(self) -> bool:
+            return True
 
         def stop(self) -> None:
             self.stop_count += 1
@@ -1354,3 +1366,217 @@ def test_h264_startup_diagnosis_reports_last_access_unit_age() -> None:
     assert diag["received_access_units"] == 1
     assert diag["last_access_unit_age_seconds"] is not None
     assert diag["last_access_unit_age_seconds"] < 5.0
+
+
+# ---------------------------------------------------------------------------
+# 会话健康自愈：stdin 写入失败 → 计数 → 主动停止重建（对齐官方 demo "异常即
+# 弃用对象"的语义），防止僵尸 JVM 让前端在回放旧画面上无限挂死。
+# ---------------------------------------------------------------------------
+
+
+def _make_session_with_bridge(sent_commands: list[bytes]) -> HarmonyOfficialSession:
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=sent_commands.append,
+        stop=lambda timeout=5.0: None,
+    )
+    return session
+
+
+def test_send_failures_trigger_self_heal_stop() -> None:
+    """stdin 连续写入失败达到阈值：主动停止会话，且只升级一次。"""
+    from worker.platforms.harmony_official.bridge import JavaBridgeError
+    from worker.platforms.harmony_official.session import (
+        H264_SEND_FAILURE_ESCALATION_THRESHOLD,
+        HarmonyOfficialError,
+    )
+
+    stops: list[float] = []
+
+    def broken_send(command: bytes) -> None:
+        raise JavaBridgeError("写入 Java Bridge 失败: [Errno 22] Invalid argument")
+
+    session = HarmonyOfficialSession(
+        serial="device-1",
+        device_type="mobile",
+        hdc_path="hdc.exe",
+        settings=dict(HarmonyOfficialSessionManager.DEFAULTS),
+    )
+    session._bridge = SimpleNamespace(  # type: ignore[assignment]
+        is_running=True,
+        send=broken_send,
+        stop=lambda timeout=5.0: stops.append(timeout),
+    )
+
+    for _ in range(H264_SEND_FAILURE_ESCALATION_THRESHOLD):
+        with pytest.raises(HarmonyOfficialError):
+            session._send(b"REQUEST_IDR\n")
+
+    deadline = time.monotonic() + 2.0
+    while not stops and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(stops) == 1
+    assert session._stop_event.is_set()
+
+    # 会话停止后继续失败不再触发第二次停止（一次性守卫）。
+    with pytest.raises(HarmonyOfficialError):
+        session._send(b"REQUEST_IDR\n")
+    time.sleep(0.05)
+    assert len(stops) == 1
+
+
+def test_session_with_send_failures_is_not_reusable() -> None:
+    """发生过写入失败的会话一律拒绝复用（进程可能仍存活但命令通道已断）。"""
+    sent_commands: list[bytes] = []
+    session = _make_session_with_bridge(sent_commands)
+
+    assert session.is_reusable() is True
+    session._send_failure_count = 1
+    assert session.is_reusable() is False
+    session.stop()
+
+
+def test_get_or_start_recycles_unhealthy_session(monkeypatch) -> None:
+    """复用健康门禁不过：旧会话被停止回收，而不是继续复用僵尸。"""
+    stops: list[int] = []
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager.set_hdc_path("hdc.exe")
+    running = SimpleNamespace(
+        is_running=True,
+        is_reusable=lambda: False,
+        stop=lambda timeout=1.0: stops.append(1),
+    )
+    manager._sessions["device-1"] = running  # type: ignore[assignment]
+    monkeypatch.setattr(
+        manager, "_clean_up_hdc_fport", lambda serial: None
+    )
+    monkeypatch.setattr(
+        manager, "_clean_up_device_processes", lambda serial: None
+    )
+    manager._settings["reconnect_attempts"] = 1
+    manager._settings["reconnect_backoff_seconds"] = 0.01
+
+    # 冷启动必然失败（无设备），这里只关心：旧会话已被回收停止。
+    assert manager.get_or_start("device-1") is None
+    assert stops == [1]
+    assert manager.get("device-1") is None
+
+
+def test_force_idr_request_does_not_block_later_non_force_request() -> None:
+    """force 请求不推进节流时间戳：其他订阅者的恢复请求不会被 force 吞掉。"""
+    sent_commands: list[bytes] = []
+    session = _make_session_with_bridge(sent_commands)
+
+    session.request_idr(force=True)
+    session.request_idr()
+    assert sent_commands == [b"REQUEST_IDR\n", b"REQUEST_IDR\n"]
+
+    # 紧随其后的非 force 请求仍落入 0.5s 节流窗口被合并。
+    session.request_idr()
+    assert sent_commands == [b"REQUEST_IDR\n", b"REQUEST_IDR\n"]
+    session.stop()
+
+
+def test_wake_stream_throttles_burst() -> None:
+    """多客户端同时触发 wake 时合并 uinput poke，IDR 请求不受影响。"""
+    sent_commands: list[bytes] = []
+    session = _make_session_with_bridge(sent_commands)
+
+    session.wake_stream()
+    session.wake_stream()
+    session.wake_stream()
+    assert sent_commands == [b"WAKE_STREAM\n"]
+    session.stop()
+
+
+def test_overflow_recovery_reschedules_idr_retry_chain(monkeypatch) -> None:
+    """慢订阅者溢出恢复后必须重排完整补请求链，而不是只靠一次性请求。"""
+    sent_commands: list[bytes] = []
+    monkeypatch.setattr(
+        "worker.platforms.harmony_official.session.H264_IDR_RETRY_DELAYS_SECONDS",
+        (0.01, 0.01, 0.01),
+    )
+    session = _make_session_with_bridge(sent_commands)
+
+    queue = session.subscribe_h264("subscriber-1")
+    assert sent_commands == [b"WAKE_STREAM\n", b"REQUEST_IDR\n"]
+    # 正常起播解除门控。
+    session._broadcast_h264(b"\x00\x00\x01\x67\x01\x00\x00\x01\x68\x02" b"\x00\x00\x01\x65\x03")
+    while not queue.empty():
+        queue.get_nowait()
+
+    # 画面活跃：P 帧灌满队列触发溢出恢复。
+    for _ in range(20):
+        session._broadcast_h264(b"\x00\x00\x01\x41\x09")
+
+    time.sleep(0.1)
+    # 溢出一次性请求 + 重排后的补请求链（0.01s×3）全部真实发出。
+    assert sent_commands.count(b"REQUEST_IDR\n") >= 5
+    session.stop()
+
+
+def test_subscriber_start_timeout_recycles_stale_session(monkeypatch) -> None:
+    """IDR 补请求链用尽仍等不到关键帧且设备流静默：主动停止会话等待重建。"""
+    monkeypatch.setattr(
+        "worker.platforms.harmony_official.session.H264_IDR_RETRY_DELAYS_SECONDS",
+        (0.01, 0.01, 0.01),
+    )
+    monkeypatch.setattr(
+        "worker.platforms.harmony_official.session.H264_SUBSCRIBER_START_CHECK_DELAY_SECONDS",
+        0.01,
+    )
+    sent_commands: list[bytes] = []
+    session = _make_session_with_bridge(sent_commands)
+    stops: list[int] = []
+    original_stop = session.stop
+
+    def recording_stop(timeout: float = 5.0) -> None:
+        stops.append(1)
+        original_stop(timeout=timeout)
+
+    session.stop = recording_stop  # type: ignore[method-assign]
+
+    session.subscribe_h264("subscriber-1")
+    # 不广播任何帧：模拟 stdin 断裂/设备端失联后的静默会话。
+
+    deadline = time.monotonic() + 2.0
+    while not stops and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert stops == [1]
+    assert session._stop_event.is_set()
+    assert session._recycle_guard
+
+
+def test_get_or_start_skips_device_process_cleanup_while_task_busy(monkeypatch) -> None:
+    """任务忙时冷启动跳过设备端进程清理（kill 会打断用例自动化），fport 清理保留。"""
+    manager = HarmonyOfficialSessionManager("harmony_mobile")
+    manager._settings["reconnect_attempts"] = 1
+    manager._settings["reconnect_backoff_seconds"] = 0.01
+    manager.set_hdc_path("hdc.exe")
+    manager.set_device_cleanup_gate(lambda serial: True)
+    calls: list[str] = []
+    monkeypatch.setattr(manager, "_clean_up_hdc_fport", lambda serial: calls.append("fport"))
+    monkeypatch.setattr(
+        manager, "_clean_up_device_processes", lambda serial: calls.append("processes")
+    )
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+    def fail_start(self) -> None:
+        raise OSError("java executable failed")
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", fail_start)
+
+    assert manager.get_or_start("device-1") is None
+    assert calls == ["fport"]
+
+    # 任务结束后恢复正常清理
+    manager.set_device_cleanup_gate(lambda serial: False)
+    calls.clear()
+    assert manager.get_or_start("device-1") is None
+    assert calls == ["fport", "processes"]

@@ -40,6 +40,19 @@ H264_IDR_RETRY_DELAYS_SECONDS = (0.8, 2.0, 4.0)
 
 H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 600.0
 
+# stdin 连续写入失败达到该次数即判定输入通道断裂（设备端失联后 JVM 卡在退出
+# 路径时进程仍存活、stdout 仍打开），主动停止会话等待冷启动重建。
+H264_SEND_FAILURE_ESCALATION_THRESHOLD = 3
+
+# IDR 补请求链用尽后的一次性起播兜底检查延迟；设备流静默判定阈值：
+# 有订阅者仍在等关键帧却超过该时长未收到任何 access unit，说明会话已僵尸化。
+H264_SUBSCRIBER_START_CHECK_DELAY_SECONDS = 3.0
+H264_STALE_STREAM_SECONDS = 15.0
+
+# wake_stream（设备端 uinput poke）最小间隔：多客户端软重建/溢出恢复同时
+# 触发时合并，避免对设备形成命令与幽灵指针风暴。
+H264_WAKE_MIN_INTERVAL_SECONDS = 1.0
+
 # Java Bridge 被 taskkill /F 强杀（或 Worker 进程直接退出）时，SDK 的
 # stopCaptureScreen 没机会执行：宿主机会残留 fport 转发规则，设备端会残留
 # singleness/uitest 采集进程（scrcpy 服务的宿主），下次 startCaptureScreen
@@ -215,6 +228,12 @@ class HarmonyOfficialSession:
         self._last_h264_access_unit_at = 0.0
         self._h264_monitor_thread: threading.Thread | None = None
         self._h264_monitor_stop = threading.Event()
+        # 管道写入失败追踪：非零说明 Java Bridge 的 stdin 已断裂（进程可能仍
+        # 存活、stdout 仍打开），此时输入注入/IDR/wake 全部失效，会话不可复用。
+        self._send_failure_count = 0
+        self._first_send_failure_at = 0.0
+        self._recycle_guard = False
+        self._last_wake_stream_at = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -280,7 +299,22 @@ class HarmonyOfficialSession:
             monitor_thread.join(timeout=1.0)
         self._h264_monitor_thread = None
         if bridge:
+            # 停止前留存进程退出码：None=停止时仍存活（走 taskkill 兜底）。
+            java_returncode = getattr(bridge, "returncode", None)
             bridge.stop(timeout=timeout)
+            # 一次日志看清会话为何结束（自愈/空闲/显式停止/桥死亡），便于
+            # 现场把"画面挂死"类问题定位到具体环节。
+            last_at = self._last_h264_access_unit_at
+            logger.info(
+                "鸿蒙官方会话已停止: serial=%s, closed_reason=%s, java_returncode=%s, "
+                "连续写入失败=%d, 累计视频帧=%d, 最后视频帧=%s",
+                self.serial,
+                self._closed_reason or "-",
+                "停止时仍存活" if java_returncode is None else java_returncode,
+                self._send_failure_count,
+                self._h264_received_access_units,
+                "从未收到" if not last_at else f"{time.monotonic() - last_at:.1f}s前",
+            )
 
     def subscribe_h264(self, subscriber_id: str) -> Queue[bytes]:
         """订阅原始 H.264 WebSocket 帧，并请求一组新的参数集/关键帧。"""
@@ -367,13 +401,25 @@ class HarmonyOfficialSession:
         now = time.monotonic()
         with self._state_lock:
             if not force and now - self._last_idr_request_at < 0.5:
+                logger.debug(
+                    "鸿蒙 H.264 IDR 请求被节流合并: serial=%s, 距上次请求=%.0fms",
+                    self.serial,
+                    (now - self._last_idr_request_at) * 1000,
+                )
                 return
-            self._last_idr_request_at = now
             self._h264_idr_requests += 1
+            if not force:
+                # force 请求不推进节流时间戳：否则一次 force（订阅建立/前端
+                # wake/其他订阅者的重试链）会吞掉随后 0.5s 内其他订阅者的非
+                # force 恢复请求——多客户端下慢订阅者溢出恢复的 IDR 正是这样
+                # 被静默丢弃、画面永久冻结的。
+                self._last_idr_request_at = now
         try:
             self._send(command_request_idr())
-        except HarmonyOfficialError:
-            pass
+        except HarmonyOfficialError as exc:
+            # 写入失败已由 _record_send_failure 记录并按阈值自愈；此处保留
+            # DEBUG 观测，不再静默吞掉。
+            logger.debug("鸿蒙 H.264 IDR 请求发送失败: serial=%s, error=%s", self.serial, exc)
 
     def h264_startup_diagnosis(self) -> dict[str, Any]:
         """首帧超时诊断快照：区分设备静默与本地链路丢帧。
@@ -407,11 +453,18 @@ class HarmonyOfficialSession:
         if self._wake_poke_gate is not None and self._wake_poke_gate(self.serial):
             logger.info("任务执行中，触摸唤醒降级为仅请求 IDR: serial=%s", self.serial)
             return
+        now = time.monotonic()
+        with self._state_lock:
+            if now - self._last_wake_stream_at < H264_WAKE_MIN_INTERVAL_SECONDS:
+                logger.debug("鸿蒙 H.264 wake 请求被节流合并: serial=%s", self.serial)
+                return
+            self._last_wake_stream_at = now
         try:
             self._send(command_wake_stream())
-        except HarmonyOfficialError:
-            # 静止画面唤醒失败时仍保留原始 H.264 会话，后续帧或 IDR 请求可继续恢复。
-            logger.debug("鸿蒙官方 H.264 静止画面唤醒失败: serial=%s", self.serial)
+        except HarmonyOfficialError as exc:
+            # 静止画面唤醒失败时仍保留原始 H.264 会话，后续帧或 IDR 请求可继续
+            # 恢复；写入失败已由 _record_send_failure 记录并按阈值自愈。
+            logger.debug("鸿蒙官方 H.264 静止画面唤醒失败: serial=%s, error=%s", self.serial, exc)
 
     def tap(self, x: int, y: int, duration_ms: int = 0) -> None:
         """执行移动端触摸点击或长按。"""
@@ -588,6 +641,10 @@ class HarmonyOfficialSession:
         self._h264_idr_requests = 0
         self._last_h264_access_unit_at = 0.0
         self._h264_monitor_stop.clear()
+        self._send_failure_count = 0
+        self._first_send_failure_at = 0.0
+        self._recycle_guard = False
+        self._last_wake_stream_at = 0.0
         with self._state_lock:
             self._h264_subscribers.clear()
             retry_timers = list(self._h264_idr_retry_timers.values())
@@ -638,8 +695,19 @@ class HarmonyOfficialSession:
                         retry_index + 1,
                         len(H264_IDR_RETRY_DELAYS_SECONDS),
                     )
+                    # 静止画面下编码器可能对 IDR 请求无响应（wake poke 存在的
+                    # 原因），补一次唤醒提高收敛概率，避免 healthy 会话被起播
+                    # 兜底检查误判重建；任务忙门控与 1s 节流在 wake_stream
+                    # 内部处理。
+                    self.wake_stream()
                     self.request_idr(force=True)
-                    self._schedule_h264_idr_retry(subscriber_id)
+                    if retry_index + 1 >= len(H264_IDR_RETRY_DELAYS_SECONDS):
+                        # 补请求链用尽：安排一次性兜底检查，订阅者仍在等关键帧
+                        # 且设备流长时间静默时主动停止会话等待重建，而不是让
+                        # 前端在回放旧画面上无限挂死。
+                        self._schedule_subscriber_start_timeout_check(subscriber_id)
+                    else:
+                        self._schedule_h264_idr_retry(subscriber_id)
 
             timer = threading.Timer(delay, _retry)
             timer.daemon = True
@@ -647,6 +715,47 @@ class HarmonyOfficialSession:
         if old_timer:
             old_timer.cancel()
         timer.start()
+
+    def _schedule_subscriber_start_timeout_check(self, subscriber_id: str) -> None:
+        timer = threading.Timer(
+            H264_SUBSCRIBER_START_CHECK_DELAY_SECONDS,
+            self._check_subscriber_start_timeout,
+            args=(subscriber_id,),
+        )
+        timer.daemon = True
+        with self._state_lock:
+            if self._stop_event.is_set():
+                return
+            old_timer = self._h264_idr_retry_timers.get(subscriber_id)
+            self._h264_idr_retry_timers[subscriber_id] = timer
+        if old_timer:
+            old_timer.cancel()
+        timer.start()
+
+    def _check_subscriber_start_timeout(self, subscriber_id: str) -> None:
+        with self._state_lock:
+            current_timer = self._h264_idr_retry_timers.get(subscriber_id)
+            if current_timer is not threading.current_thread():
+                # 字典项已被更新的重试链/检查替换：本轮检查作废，不得摘除新链。
+                return
+            self._h264_idr_retry_timers.pop(subscriber_id, None)
+            subscriber = self._h264_subscribers.get(subscriber_id)
+            if (
+                self._stop_event.is_set()
+                or subscriber is None
+                or not subscriber.waiting_for_keyframe
+            ):
+                return
+        if not self.is_running:
+            return
+        last_at = self._last_h264_access_unit_at
+        if last_at and time.monotonic() - last_at <= H264_STALE_STREAM_SECONDS:
+            # 设备仍在产帧，只是关键帧未到：交给后续帧/下一次溢出恢复处理。
+            return
+        self._recycle_unhealthy_session(
+            f"订阅者 {subscriber_id} 起播超时且设备流静默"
+            f"（最后视频帧={'从未收到' if not last_at else f'{time.monotonic() - last_at:.1f}s前'}）"
+        )
 
     def _on_bridge_message(self, message: BridgeMessage) -> None:
         if message.message_type == BridgeMessageType.H264:
@@ -704,6 +813,7 @@ class HarmonyOfficialSession:
         request_idr = False
         wake_stream_requested = False
         cancel_retry_timers: list[threading.Timer] = []
+        reschedule_retry_ids: list[str] = []
         with self._state_lock:
             # 解析期间订阅可能已经断开，重新取当前订阅者。
             subscribers = list(self._h264_subscribers.values())
@@ -766,6 +876,10 @@ class HarmonyOfficialSession:
                             wake_stream_requested = (
                                 wake_stream_requested or not was_waiting_for_keyframe
                             )
+                            # 一次性 request_idr 受 0.5s 会话级节流可能被静默
+                            # 合并，订阅者会永久停在最后一帧；锁外为其重排完整
+                            # 的有限 IDR 补请求链兜底。
+                            reschedule_retry_ids.append(subscriber.subscriber_id)
                         elif frame_type == 0x02:
                             subscriber.waiting_for_keyframe = False
                             retry_timer = self._h264_idr_retry_timers.pop(
@@ -806,6 +920,9 @@ class HarmonyOfficialSession:
                                             wake_stream_requested
                                             or not was_waiting_for_keyframe
                                         )
+                                        reschedule_retry_ids.append(
+                                            subscriber.subscriber_id
+                                        )
                                 else:
                                     self._resume_subscriber_after_keyframe(subscriber)
                                     logger.info(
@@ -838,6 +955,24 @@ class HarmonyOfficialSession:
             self.wake_stream()
         if request_idr:
             self.request_idr()
+        for subscriber_id in reschedule_retry_ids:
+            self._reschedule_subscriber_idr_chain(subscriber_id)
+
+    def _reschedule_subscriber_idr_chain(self, subscriber_id: str) -> None:
+        """溢出恢复后为订阅者重排有限的 IDR 补请求链。
+
+        恢复只清空旧队列并重新门控，订阅者此后完全依赖下一个 IDR；溢出瞬间
+        的一次性 ``request_idr`` 受 0.5s 会话级节流、可能被静默合并（多客户端
+        下其他订阅者的 force 请求恰好在先时尤其如此），一旦丢失订阅者就会
+        永久停在最后一帧。重排复用订阅期同款有限重试（0.8/2.0/4.0s）。
+        """
+        with self._state_lock:
+            subscriber = self._h264_subscribers.get(subscriber_id)
+            if subscriber is None or self._stop_event.is_set():
+                return
+            # 溢出清空了订阅者的解码链路，重试计数一并重置，给它完整的补请求预算。
+            self._h264_idr_retry_counts.pop(subscriber_id, None)
+        self._schedule_h264_idr_retry(subscriber_id)
 
     def _update_h264_startup_cache(self, payload: bytes) -> None:
         """从 access unit 维护起播缓存（参数集/关键帧），供订阅建立时回放。
@@ -1023,7 +1158,83 @@ class HarmonyOfficialSession:
             with self._input_lock:
                 bridge.send(command)
         except JavaBridgeError as exc:
+            self._record_send_failure(command, exc)
             raise HarmonyOfficialError(str(exc)) from exc
+
+    def _record_send_failure(self, command: bytes, exc: JavaBridgeError) -> None:
+        """记录 stdin 写入失败并按阈值自愈。
+
+        stdin 断裂意味着 Java 侧已不再消费命令（设备端失联后 JVM 卡在退出路径，
+        或已被外部终止）：输入注入、IDR/wake 请求全部失效，而进程可能仍存活、
+        stdout 仍打开，仅凭 ``is_running`` 无法察觉。继续保留会话只会让前端在
+        回放的旧画面上无限等待、并刷屏"写入 Java Bridge 失败"。连续失败达到
+        阈值即主动停止会话，交给下一次订阅冷启动重建（对齐官方 demo：异常即
+        弃用对象，重来必新建）。
+        """
+        with self._state_lock:
+            if self._stop_event.is_set():
+                # 正常停止流程中的并发写入失败（STOP 与注入命令竞速）不计入。
+                return
+            if self._send_failure_count == 0:
+                self._first_send_failure_at = time.monotonic()
+            self._send_failure_count += 1
+            count = self._send_failure_count
+        logger.warning(
+            "鸿蒙官方 Java Bridge 命令写入失败(%s): serial=%s, command=%s, 连续失败=%d, error=%s",
+            "已触发自愈" if count >= H264_SEND_FAILURE_ESCALATION_THRESHOLD else "累计中",
+            self.serial,
+            command.decode("utf-8", "replace").strip(),
+            count,
+            exc,
+        )
+        if count >= H264_SEND_FAILURE_ESCALATION_THRESHOLD:
+            with self._state_lock:
+                window = time.monotonic() - self._first_send_failure_at
+            self._recycle_unhealthy_session(
+                f"stdin 连续写入失败 {count} 次（{window:.1f}s 内，输入通道断裂）"
+            )
+
+    def is_reusable(self) -> bool:
+        """会话复用健康门禁：进程存活不代表可用。
+
+        stdin 断裂（设备端失联后 JVM 卡在退出路径）时进程仍存活、stdout 仍
+        打开，但所有命令都已失效；复用只会让前端在回放的旧画面上无限等待。
+        发生过写入失败的会话一律不复用，交由冷启动重建。
+        """
+        if not self.is_running:
+            return False
+        return self._send_failure_count == 0
+
+    def _recycle_unhealthy_session(self, reason: str) -> None:
+        """主动停止疑似僵尸会话并等待冷启动重建（一次性守卫）。"""
+        with self._state_lock:
+            if self._recycle_guard or self._stop_event.is_set():
+                return
+            self._recycle_guard = True
+        logger.warning(
+            "鸿蒙官方会话判定不可用，主动停止等待重建: serial=%s, reason=%s",
+            self.serial,
+            reason,
+        )
+        # stop() 内部含 taskkill 兜底，可能耗时数秒；放独立线程避免卡住调用方
+        #（注入线程/广播线程）。
+        threading.Thread(
+            target=self._stop_for_recycle,
+            args=(reason,),
+            daemon=True,
+            name=f"harmony-official-recycle-{self.serial}",
+        ).start()
+
+    def _stop_for_recycle(self, reason: str) -> None:
+        try:
+            self.stop()
+        except Exception as exc:  # pragma: no cover - 防御性兜底
+            logger.warning(
+                "鸿蒙官方会话自愈停止失败: serial=%s, reason=%s, error=%s",
+                self.serial,
+                reason,
+                exc,
+            )
 
     def _mouse_click(self, button: str, x: int, y: int, duration_ms: int) -> None:
         self._require_pc()
@@ -1106,6 +1317,8 @@ class HarmonyOfficialSessionManager:
         self._device_lock_checker: Callable[[str], bool] | None = None
         # 触摸唤醒门控（任务执行中跳过 uinput 触摸），传播给每个新建会话
         self._wake_poke_gate: Callable[[str], bool] | None = None
+        # 设备端残留清理门控（任务执行中跳过 kill 设备进程，避免打断自动化）
+        self._device_cleanup_gate: Callable[[str], bool] | None = None
         self._lock = threading.RLock()
 
     def set_hdc_path(self, hdc_path: str | None) -> None:
@@ -1118,6 +1331,15 @@ class HarmonyOfficialSessionManager:
     def set_wake_poke_gate(self, gate: Callable[[str], bool] | None) -> None:
         """设置触摸唤醒门控（任务忙时 wake_stream 跳过 uinput 触摸）。"""
         self._wake_poke_gate = gate
+
+    def set_device_cleanup_gate(self, gate: Callable[[str], bool] | None) -> None:
+        """设置设备端残留清理门控（任务忙时冷启动跳过 kill 设备进程）。
+
+        用例动作依赖设备端 uitest 守护进程（HDC uiInput 自动化），冷启动兜底
+        清理的 ``kill -9`` 会打断正在跑的用例。任务忙时保留 fport 规则清理，
+        进程清理交由任务结束后的下一次冷启动补做。
+        """
+        self._device_cleanup_gate = gate
 
     def _is_device_locked(self, serial: str) -> bool:
         checker = self._device_lock_checker
@@ -1189,9 +1411,10 @@ class HarmonyOfficialSessionManager:
                     and serial not in self._stopping_sessions
                     and current
                     and current.is_running
+                    and current.is_reusable()
                 ):
-                    # 已运行的会话只需 Bridge 仍在运行即可复用；视频数据由真实的
-                    # WebSocket 订阅消费，不能在这里阻塞等待消费者。
+                    # 已运行的会话只需 Bridge 仍在运行且健康即可复用；视频数据由
+                    # 真实的 WebSocket 订阅消费，不能在这里阻塞等待消费者。
                     self._claim_owner_locked(serial, owner)
                     return current
 
@@ -1210,10 +1433,12 @@ class HarmonyOfficialSessionManager:
                     ):
                         return None
                     current = self._sessions.get(serial)
-                    if current and current.is_running:
+                    if current and current.is_running and current.is_reusable():
                         self._claim_owner_locked(serial, owner)
                         return current
                     if current:
+                        # 进程存活但健康门禁不过（stdin 曾写入失败）时同样走
+                        # 这里：停止（含 taskkill 兜底）后冷启动重建。
                         self._sessions.pop(serial, None)
                         try:
                             current.stop(timeout=1.0)
@@ -1247,7 +1472,16 @@ class HarmonyOfficialSessionManager:
                     # fport 规则和设备端 singleness/uitest 进程，避免
                     # startCaptureScreen 端口冲突报 "can not find scrcpy pid"。
                     self._clean_up_hdc_fport(serial)
-                    self._clean_up_device_processes(serial)
+                    if (
+                        self._device_cleanup_gate is not None
+                        and self._device_cleanup_gate(serial)
+                    ):
+                        logger.info(
+                            "设备任务执行中，跳过设备端残留进程清理以避免打断自动化: serial=%s",
+                            serial,
+                        )
+                    else:
+                        self._clean_up_device_processes(serial)
                     session = HarmonyOfficialSession(
                         serial=serial,
                         device_type=self.device_type,

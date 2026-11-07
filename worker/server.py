@@ -98,6 +98,10 @@ DEFAULT_HARMONY_STREAMING_JPEG_QUALITY = 60
 # 设备锁屏时保留 H.264 WebSocket，解锁后重新启动官方会话的最长等待时间。
 DEFAULT_HARMONY_H264_UNLOCK_WAIT_TIMEOUT = 300.0
 DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT = 10.0
+# H.264 死连接保活间隔：僵尸会话下队列为空、发送循环长期不出网数据，TCP
+# 断开（页面关闭/网络中断）将永远无法被感知，租约不释放、空闲回收不启动。
+# 周期 ping 文本帧让发送侧探测断连并走正常清理（前端忽略未知 meta.type）。
+DEFAULT_WS_H264_DEAD_LINK_PING_INTERVAL = 15.0
 # 鸿蒙 H.264 订阅建立预算（含官方会话冷启动）。取值不大于一次
 # startup_timeout（默认 35s）：超时后通过取消标志让 get_or_start 在
 # attempt 边界放弃，per-serial 启动锁至多再被占用一次启动预算，而不是
@@ -1915,6 +1919,7 @@ async def screen_stream(
             # 鸿蒙官方 H.264：订阅队列中的协议帧并直接转发。
             first_video_deadline = time.monotonic() + DEFAULT_HARMONY_H264_FIRST_FRAME_TIMEOUT
             first_video_received = False
+            last_ws_ping_at = time.monotonic()
             while frame_source.h264_stream_running() and not stream_stop_event.is_set():
                 if (
                     not first_video_received
@@ -1959,6 +1964,18 @@ async def screen_stream(
                             stream_stop_event,
                         )
                         return
+                    # 死连接保活：队列为空时循环不出网数据，TCP 断开永远无法被
+                    # 发送侧感知（租约滞留 → 空闲回收不启动 → 僵尸会话长存）。
+                    # 周期 ping 强制走一次发送以探测断连；前端忽略未知 meta.type。
+                    now = time.monotonic()
+                    if now - last_ws_ping_at >= DEFAULT_WS_H264_DEAD_LINK_PING_INTERVAL:
+                        last_ws_ping_at = now
+                        await _send_websocket_message(
+                            websocket,
+                            '{"type":"ping"}',
+                            stop_event=stream_stop_event,
+                            timeout=send_timeout,
+                        )
                     continue
                 h264_diag_sent_packets += 1
                 h264_diag_sent_bytes += len(frame)

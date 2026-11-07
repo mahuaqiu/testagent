@@ -30,6 +30,10 @@ public final class StreamBridge {
     private static final long STATS_INTERVAL_MS = 60_000L;
     private static final long BACKPRESSURE_LOG_INTERVAL_MS = 600_000L;
     private static final long WRITE_BLOCK_THRESHOLD_MS = 100L;
+    // 停止采集的上限耗时：设备端失联时 SDK 调用可能永久阻塞，超时后必须放弃
+    // 并硬退出 JVM，否则进程会带着已断的 stdin 存活成僵尸（worker 侧持续
+    // 写入失败且无法感知会话已死）。需小于 worker 侧 bridge.stop 的 5s 等待。
+    private static final long STOP_CAPTURE_TIMEOUT_MS = 3_000L;
 
     private final String serial;
     private final String deviceType;
@@ -91,7 +95,15 @@ public final class StreamBridge {
                 serial,
                 deviceType,
                 new HosRemoteDevice(config));
-        bridge.run();
+        try {
+            bridge.run();
+        } finally {
+            // main 线程是唯一的非 daemon 生命周期锚点：run() 返回（含
+            // READY_TIMEOUT / CAPTURE_FAILED / shutdown 完成等全部路径）后
+            // 必须硬退出，不给 SDK 内部可能挂死的非 daemon 线程留下僵尸 JVM
+            // 的机会（对齐官方 demo 关窗 EXIT_ON_CLOSE 的强杀语义）。
+            System.exit(0);
+        }
     }
 
     private void run() throws Exception {
@@ -427,10 +439,26 @@ public final class StreamBridge {
                 Thread.currentThread().interrupt();
             }
         }
+        // 设备端失联时 stopCaptureScreen 可能永久阻塞（官方桌面 demo 靠关窗
+        // System.exit 兜底）；无人值守场景必须限时执行，超时放弃并交给 main()
+        // 的 System.exit 强制退出，避免残留僵尸 JVM 占住设备端采集会话。
+        Thread stopThread = new Thread(() -> {
+            try {
+                device.stopCaptureScreen();
+            } catch (Throwable throwable) {
+                System.err.println("停止采集失败: " + safeMessage(throwable));
+            }
+        }, "hoscrcpy-poc-stop-capture");
+        stopThread.setDaemon(true);
+        stopThread.start();
         try {
-            device.stopCaptureScreen();
-        } catch (Throwable throwable) {
-            System.err.println("停止采集失败: " + safeMessage(throwable));
+            stopThread.join(STOP_CAPTURE_TIMEOUT_MS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (stopThread.isAlive()) {
+            System.err.println("STREAM_STOP_TIMEOUT action=stopCaptureScreen timeout_ms="
+                    + STOP_CAPTURE_TIMEOUT_MS + " serial=" + serial);
         }
         sendText(EOF, "serial=" + serial + " reason=stopped");
         System.err.println("STREAM_STOP serial=" + serial);
