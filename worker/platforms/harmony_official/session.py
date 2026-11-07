@@ -53,6 +53,13 @@ H264_STALE_STREAM_SECONDS = 15.0
 # 触发时合并，避免对设备形成命令与幽灵指针风暴。
 H264_WAKE_MIN_INTERVAL_SECONDS = 1.0
 
+# 鸿蒙官方通道冷启动跨设备全局串行锁：fport 清理、残留进程清理、SDK 启动
+# 全部挤在同一台 hdc server 上，多台设备同时启动远程会互相踩踏（并发 hdc
+# 命令失败、拉起中的会话被打断）。冷启动阶段全局排队，一次只起一台；已运行
+# 会话的复用完全不经过此锁（快路径零影响）；排队方携带前端订阅预算的
+# cancel_event，不会无限卡死。
+_HOSCRCPY_COLD_START_LOCK = threading.Lock()
+
 # Java Bridge 被 taskkill /F 强杀（或 Worker 进程直接退出）时，SDK 的
 # stopCaptureScreen 没机会执行：宿主机会残留 fport 转发规则，设备端会残留
 # singleness/uitest 采集进程（scrcpy 服务的宿主），下次 startCaptureScreen
@@ -1373,6 +1380,19 @@ class HarmonyOfficialSessionManager:
             if start_lock.acquire(timeout=0.25):
                 return True
 
+    @staticmethod
+    def _acquire_cold_start_lock(cancel_event: threading.Event | None) -> bool:
+        """获取跨设备全局冷启动锁；等待期间周期性检查取消标志。
+
+        与 per-serial 启动锁配合：per-serial 只串行同一设备，此锁把所有设备
+        的冷启动排队成一次一台，消除多台同时启动时对 hdc server 的并发踩踏。
+        """
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            if _HOSCRCPY_COLD_START_LOCK.acquire(timeout=0.25):
+                return True
+
     def get_or_start(
         self,
         serial: str,
@@ -1425,6 +1445,7 @@ class HarmonyOfficialSessionManager:
                     "鸿蒙官方会话启动在等待 per-serial 启动锁时被取消: serial=%s", serial
                 )
                 return None
+            cold_start_locked = False
             try:
                 with self._lock:
                     if (
@@ -1448,6 +1469,17 @@ class HarmonyOfficialSessionManager:
                                 serial,
                                 exc,
                             )
+
+                # 跨设备冷启动排队：一次只允许一台设备执行 fport/残留清理与
+                # SDK 启动，避免多台同时启动远程时挤爆 hdc server 互相踩踏。
+                # 已运行会话的复用不经过此锁（上方已返回）；排队方携带前端
+                # 订阅预算的 cancel_event，不会无限卡死。
+                cold_start_locked = self._acquire_cold_start_lock(cancel_event)
+                if not cold_start_locked:
+                    logger.info(
+                        "鸿蒙官方会话冷启动在等待全局启动队列时被取消: serial=%s", serial
+                    )
+                    return None
 
                 attempts = max(
                     1,
@@ -1490,7 +1522,7 @@ class HarmonyOfficialSessionManager:
                     )
                     session.set_wake_poke_gate(self._wake_poke_gate)
                     try:
-                        # start() 持 per-serial 启动锁在全局锁外执行。
+                        # start() 在 per-serial 启动锁与跨设备冷启动队列锁内执行。
                         session.start()
                     except Exception as exc:
                         last_error = str(exc)
@@ -1564,6 +1596,8 @@ class HarmonyOfficialSessionManager:
                         return session
                 return self._handle_start_failure(last_error)
             finally:
+                if cold_start_locked:
+                    _HOSCRCPY_COLD_START_LOCK.release()
                 start_lock.release()
         except Exception as exc:
             # 官方链路是可选加速路径，任何启动阶段异常都必须交给调用方回退 HDC。

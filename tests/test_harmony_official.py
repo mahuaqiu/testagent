@@ -1580,3 +1580,95 @@ def test_get_or_start_skips_device_process_cleanup_while_task_busy(monkeypatch) 
     calls.clear()
     assert manager.get_or_start("device-1") is None
     assert calls == ["fport", "processes"]
+
+
+def _make_cold_start_manager(monkeypatch) -> "HarmonyOfficialSessionManager":
+    manager = HarmonyOfficialSessionManager("harmony_pc")
+    manager._settings["reconnect_attempts"] = 1
+    manager._settings["reconnect_backoff_seconds"] = 0.01
+    manager.set_hdc_path("hdc.exe")
+    monkeypatch.setattr(manager, "_clean_up_hdc_fport", lambda serial: None)
+    monkeypatch.setattr(manager, "_clean_up_device_processes", lambda serial: None)
+    return manager
+
+
+def test_cold_start_serializes_across_devices(monkeypatch) -> None:
+    """多台设备同时冷启动：全局队列一次只起一台，避免挤爆 hdc server。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    manager = _make_cold_start_manager(monkeypatch)
+    concurrency = {"active": 0, "max": 0}
+    counter_lock = threading.Lock()
+
+    def slow_start(self) -> None:
+        with counter_lock:
+            concurrency["active"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["active"])
+        time.sleep(0.2)
+        with counter_lock:
+            concurrency["active"] -= 1
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", slow_start)
+
+    results: dict[str, object] = {}
+    threads = [
+        threading.Thread(
+            target=lambda serial=serial: results.__setitem__(
+                serial, manager.get_or_start(serial)
+            ),
+            daemon=True,
+        )
+        for serial in ("device-1", "device-2", "device-3")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10.0)
+
+    assert all(results[serial] is not None for serial in ("device-1", "device-2", "device-3"))
+    assert concurrency["max"] == 1
+    manager.stop_all()
+
+
+def test_cold_start_queue_wait_is_cancellable(monkeypatch) -> None:
+    """冷启动全局排队可被 cancel_event 打断：不无限卡死后续连接。"""
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    manager = _make_cold_start_manager(monkeypatch)
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_start(self) -> None:
+        started.set()
+        release.wait(5.0)
+
+    monkeypatch.setattr(HarmonyOfficialSession, "start", blocked_start)
+
+    first_result: dict[str, object] = {}
+
+    def first_cold_start() -> None:
+        first_result["session"] = manager.get_or_start("device-1")
+
+    first_thread = threading.Thread(target=first_cold_start, daemon=True)
+    first_thread.start()
+    assert started.wait(5.0), "device-1 冷启动未开始"
+
+    cancel = threading.Event()
+    begin = time.monotonic()
+    second_result: dict[str, object] = {}
+
+    def second_cold_start() -> None:
+        second_result["session"] = manager.get_or_start("device-2", cancel_event=cancel)
+
+    second_thread = threading.Thread(target=second_cold_start, daemon=True)
+    second_thread.start()
+    time.sleep(0.3)  # 让 device-2 进入全局队列排队
+    cancel.set()
+    second_thread.join(timeout=5.0)
+
+    elapsed = time.monotonic() - begin
+    assert second_result["session"] is None
+    assert elapsed < 3.0, f"排队取消耗时过长: {elapsed:.1f}s"
+
+    release.set()
+    first_thread.join(timeout=5.0)
+    assert first_result["session"] is not None
+    manager.stop_all()
