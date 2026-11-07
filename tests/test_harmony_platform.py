@@ -9,7 +9,7 @@ import pytest
 from worker.actions.spec import ActionTimedOutError, ExecutionControl
 from worker.actions.unlock import UnlockScreenAction
 from worker.config import PlatformConfig, WorkerConfig
-from worker.constants import HARMONY_KEYPAD_COORDINATES, HARMONY_MOBILE_UNLOCK_SWIPE
+from worker.constants import HARMONY_KEYPAD_COORDINATES, HARMONY_MOBILE_UNLOCK_SWIPE, HARMONY_PC_PASSWORD_BOX
 from worker.discovery.harmony import HarmonyDeviceInfo
 from worker.platforms import harmony_capture, harmony_hdc
 from worker.platforms.harmony import HarmonyPlatformManager
@@ -2004,3 +2004,44 @@ def test_harmony_keycode_map_covers_official_codes() -> None:
     assert resolve_harmony_key("Del") == ("DELETE", 2071)
     assert resolve_harmony_key("unknown") is None
 
+
+
+def test_harmony_unlock_pc_password_flow_skips_swipe(monkeypatch) -> None:
+    """鸿蒙 PC 带密码解锁：锁屏的文本密码框直接可见，不再执行多余的上滑步骤。
+
+    上滑是手机式锁屏的遗留假设（占位坐标从未校准）；PC 密码解锁应直接
+    点击密码框 → 清空 → 输入 → 回车，全程零滑动。无密码 PC 仍保留上滑。
+    """
+    monkeypatch.setattr("worker.actions.unlock.time.sleep", lambda _s: None)
+    swipes: list[object] = []
+    taps: list[tuple[int, int]] = []
+    texts: list[str] = []
+    presses: list[str] = []
+    lock_states = iter([True, False])
+
+    client = SimpleNamespace(
+        display_size=lambda: (3120, 2080),
+        is_locked=lambda: next(lock_states),
+        is_screen_on=lambda: True,
+        is_interactive=lambda: True,
+        swipe=lambda x1, y1, x2, y2: swipes.append((x1, y1, x2, y2)),
+        tap=lambda x, y: taps.append((x, y)) or True,
+        input_text=lambda text: texts.append(text) or True,
+    )
+    platform = SimpleNamespace(
+        platform="harmony_pc",
+        _device_clients={"udid-1": client},
+        _current_device="udid-1",
+        press=lambda key, hdc: presses.append(key),
+    )
+
+    result = UnlockScreenAction().execute(
+        platform, Action(action_type="unlock_screen", value="P@ssw0rd"), context=client
+    )
+
+    assert result.status == ActionStatus.SUCCESS
+    assert swipes == []
+    box = HARMONY_PC_PASSWORD_BOX
+    assert taps == [(box["x"], box["y"])]
+    assert texts == ["P@ssw0rd"]
+    assert presses == ["ctrl+a", "BACKSPACE", "ENTER"]

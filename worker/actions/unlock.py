@@ -63,7 +63,8 @@ class UnlockScreenAction(ActionExecutor):
 
         支持两种场景：
         - 无密码设备：唤醒屏幕 + 滑动解锁
-        - 有密码设备：唤醒屏幕 + 滑动 + 输入密码
+        - 有密码设备：唤醒屏幕 + 输入密码（鸿蒙手机先上滑唤出九宫格；
+          鸿蒙 PC 锁屏的文本密码框直接可见，跳过滑动直接点击输入）
         """
         start_time = time.time()
 
@@ -164,7 +165,9 @@ class UnlockScreenAction(ActionExecutor):
             # 4. 触发解锁界面（根据机型配置选择方式）
             unlock_method = self._get_unlock_method(platform, resolution)
             logger.info(f"Using unlock method: {unlock_method}")
-            self._trigger_password_screen(platform, context, unlock_method)
+            self._trigger_password_screen(
+                platform, context, unlock_method, has_password=bool(password)
+            )
             self._sleep(action, 1.0)  # 等待解锁界面出现
 
             # 截止时间检查点：进入密码输入前
@@ -603,9 +606,13 @@ class UnlockScreenAction(ActionExecutor):
         return "swipe_up"
 
     def _trigger_password_screen(
-        self, platform: "PlatformManager", context: object, method: str
+        self,
+        platform: "PlatformManager",
+        context: object,
+        method: str,
+        has_password: bool = False,
     ) -> None:
-        """触发密码输入界面。"""
+        """触发密码输入界面（``has_password`` 区分纯滑动解锁与密码输入前置）。"""
         platform_type = platform.platform
 
         if platform_type == "ios":
@@ -635,10 +642,16 @@ class UnlockScreenAction(ActionExecutor):
 
         elif platform_type == "harmony_pc":
             hdc = context or platform._device_clients.get(platform._current_device)
-            if hdc:
-                # Harmony PC: 上滑唤出密码框（占位坐标，按 3120x2080 真机预估，后期校准）
-                hdc.swipe(*HARMONY_PC_UNLOCK_SWIPE)
-                logger.info("Harmony PC unlock via swipe up")
+            if not hdc:
+                return
+            if has_password:
+                # 鸿蒙 PC 锁屏的文本密码框直接可见可点（坐标已按真机校准），
+                # 无需手机式上滑唤出——上滑是遗留的多余步骤，直接进入密码输入。
+                logger.info("Harmony PC password box directly visible, skip swipe up")
+                return
+            # 无密码 PC：上滑仍是唯一解锁手势，保留。
+            hdc.swipe(*HARMONY_PC_UNLOCK_SWIPE)
+            logger.info("Harmony PC unlock via swipe up")
 
     def _input_password_pc(self, platform: "PlatformManager", context: object, password: str) -> None:
         """鸿蒙 PC 锁屏密码输入：点击密码框聚焦 → Ctrl+A 全选 → BackSpace 清空 → 整串输入 → 回车确认。
