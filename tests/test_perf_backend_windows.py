@@ -1,6 +1,7 @@
 """PerfwinBackend 和 PerformanceCollector 的 mock 单测。"""
 
 import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from worker.perf_backends.perfharmony_backend import PerfharmonyBackend
 from worker.perf_backends.perfwin_backend import PerfwinBackend
 from worker.performance_monitor import (
     CollectStartRequest,
+    CollectStopRequest,
     PerformanceCollector,
     TargetProcess,
 )
@@ -183,22 +185,99 @@ class TestPerformanceCollector:
             result = collector.start_collect(_make_start_request())
         assert result["status"] == "already_started"
 
-    def test_conflict_different_collect_id(self):
-        """测试不同 collect_id 冲突。"""
-        collector, _ = self._make_collector_with_mock_backend()
+    def test_preempt_different_collect_id_stops_old_and_starts_new(self):
+        """测试不同 collect_id 的 start 抢占：停掉旧任务并启动新任务。"""
+        collector, old_monitor = self._make_collector_with_mock_backend()
+        old_collect_id = collector._collect_id
+        # 隔离网络与本地 spool 副作用
+        collector._flush_spool = MagicMock()
+        collector._notify_terminal = MagicMock()
+
+        mock_perfwin = MagicMock()
+        mock_perfwin.ProcessFilter.return_value = MagicMock()
+        new_monitor = _make_mock_monitor()
+        mock_perfwin.Monitor.return_value = new_monitor
+
+        other = CollectStartRequest(
+            collect_id="other-id",
+            interval=2,
+            timeout=60,
+            target_processes=[TargetProcess(name="proc")],
+        )
+        with patch.dict(sys.modules, {"perfwin": mock_perfwin}):
+            result = collector.start_collect(other)
+        assert result["status"] == "started"
+        old_monitor.stop.assert_called()
+        assert old_collect_id == "test-collect-001"
+        assert collector._collect_id == "other-id"
+        assert collector.get_status().is_collecting
+
+    def test_start_recovers_from_stale_stopping_state(self):
+        """测试上一任务停止卡死（_stopping 滞留）时新 start 能恢复而非永远 409。"""
+        collector = PerformanceCollector("test-device")
+        collector._flush_spool = MagicMock()
+        collector._notify_terminal = MagicMock()
+        collector._stopping = True  # 模拟上一任务停止流程卡死
+        collector._collect_id = "old-id"
+
         mock_perfwin = MagicMock()
         mock_perfwin.ProcessFilter.return_value = MagicMock()
         mock_perfwin.Monitor.return_value = _make_mock_monitor()
 
         with patch.dict(sys.modules, {"perfwin": mock_perfwin}):
-            other = CollectStartRequest(
-                collect_id="other-id",
-                interval=2,
-                timeout=60,
-                target_processes=[TargetProcess(name="proc")],
-            )
-            result = collector.start_collect(other)
-        assert result["status"] == "conflict"
+            result = collector.start_collect(_make_start_request())
+        assert result["status"] == "started"
+        assert collector._stopping is False
+
+    def test_stop_with_mismatched_collect_id_stops_current(self):
+        """测试平台带过期 collect_id 请求停止时，停掉当前任务而不是报冲突。"""
+        collector, mock_monitor = self._make_collector_with_mock_backend()
+        collector._flush_spool = MagicMock()
+        collector._notify_terminal = MagicMock()
+
+        result = collector.stop_collect(CollectStopRequest(collect_id="stale-platform-id"))
+        assert result["status"] == "stopped"
+        mock_monitor.stop.assert_called()
+        assert not collector.get_status().is_collecting
+
+    def test_backend_stop_hang_does_not_block_stop(self, monkeypatch):
+        """测试 backend.stop() 挂死时停止流程限时返回，_stopping 不会永久卡住。"""
+        monkeypatch.setattr("worker.performance_monitor.BACKEND_STOP_TIMEOUT_SECS", 0.3)
+
+        class HangingBackend:
+            """stop() 永远不返回的模拟后端。"""
+
+            def stop(self):
+                time.sleep(5)
+
+            def is_running(self):
+                return True
+
+            def buffer_len(self):
+                return 0
+
+            def get_result(self):
+                raise AssertionError("超时放弃后不应读取缓冲区")
+
+            def last_error(self):
+                return None
+
+        collector = PerformanceCollector("test-device")
+        collector._flush_spool = MagicMock()
+        collector._notify_terminal = MagicMock()
+        collector._backend = HangingBackend()
+        collector._collecting = True
+        collector._collect_id = "hang-id"
+        collector._stopping = True
+
+        started_at = time.monotonic()
+        result = collector.stop_collect(CollectStopRequest())
+        elapsed = time.monotonic() - started_at
+
+        assert result["status"] == "stopped"
+        assert elapsed < 3
+        assert collector._stopping is False
+        assert collector._backend is None
 
     def test_mixed_filter_raises_error(self):
         """测试混合筛选模式抛出错误。"""

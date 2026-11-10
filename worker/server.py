@@ -1194,7 +1194,8 @@ async def get_processes(
         device_id, device_type, device_sn
     )
     try:
-        processes = collector.get_processes(search)
+        # 鸿蒙进程列表走 hdc ps -ef（秒级子进程调用），放线程池避免阻塞事件循环。
+        processes = await asyncio.to_thread(collector.get_processes, search)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -1239,7 +1240,9 @@ async def start_collect(device_id: str, request: CollectStartRequest):
         collector.set_backend_host(worker.config.platform_api)
 
     request = request.model_copy(update={"device_type": normalized_type, "device_sn": normalized_sn})
-    result = collector.start_collect(request)
+    # start/stop 内部含 hdc 子进程调用与积压补发（requests 同步网络），
+    # 放线程池执行，避免阻塞事件循环拖慢整个 Worker 的所有请求。
+    result = await asyncio.to_thread(collector.start_collect, request)
 
     if result.get("status") == "conflict":
         raise HTTPException(status_code=409, detail=result)
@@ -1280,7 +1283,7 @@ async def stop_collect(device_id: str, request: CollectStopRequest | None = None
         request_sn,
         require_identity=bool(request_type or request_sn),
     )
-    result = collector.stop_collect(request)
+    result = await asyncio.to_thread(collector.stop_collect, request)
 
     if result.get("status") == "error":
         raise HTTPException(status_code=409, detail=result)

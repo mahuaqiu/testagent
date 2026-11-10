@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # 鸿蒙后端的进程检查节奏；性能样本仍按请求的 interval 排空和上报。
 HARMONY_HEARTBEAT_INTERVAL_SECS = 10.0
 
+# 停止采集后端的限时等待：后端 stop 可能阻塞在 hdc/子进程清理上，
+# 无限等待会让 HTTP 停止请求挂起并使 _stopping 长期为 True。
+BACKEND_STOP_TIMEOUT_SECS = 8.0
+
 
 class ProcessInfo(BaseModel):
     """进程信息模型。"""
@@ -175,6 +179,10 @@ class PerformanceCollector:
     def start_collect(self, request: CollectStartRequest) -> dict[str, Any]:
         """开始采集。
 
+        同一设备同一时刻只保留一个采集任务：相同任务幂等返回已启动；
+        上一任务未结束（仍在采集或停止卡住）时先抢占结束旧任务并上报
+        interrupted，再启动新任务，保证新 start 不会被旧任务永久阻塞。
+
         Args:
             request: 开始采集请求
 
@@ -199,59 +207,76 @@ class PerformanceCollector:
                 update={"device_type": normalized_type, "device_sn": self._device_sn}
             )
 
-        with self._lock:
-            if self._stopping:
-                logger.warning("拒绝在采集停止期间启动新任务: current=%s, requested=%s", self._collect_id, request.collect_id)
-                return {"status": "conflict", "message": "设备正在停止上一采集任务"}
-            if self._collecting:
-                # 检查是否是相同任务
-                if self._is_same_task(request):
+        while True:
+            with self._lock:
+                if self._collecting and self._is_same_task(request):
                     logger.info(f"任务已存在且参数相同: {request.collect_id}")
                     return {"status": "already_started", "message": "任务已开始"}
-                # 同一设备不允许用新任务静默覆盖旧任务
-                logger.warning("拒绝覆盖正在运行的采集任务: current=%s, requested=%s", self._collect_id, request.collect_id)
-                return {"status": "conflict", "message": f"设备已有采集任务运行: {self._collect_id}"}
-            self._start_time = datetime.now(timezone.utc)
-            self._collecting = True
-            self._stopping = False
-            self._stop_event.clear()
-            self._last_sequence = None
-            self._last_elapsed_ms = None
-            self._collect_id = request.collect_id
-            self._interval = request.interval
-            self._timeout = request.timeout
-            self._target_processes = list(request.target_processes)
-            self._match_mode = request.match_mode or "fuzzy"
-            self._gpu_fallback_logged = False
-            self._gpu_source_last = None
+                if self._collecting or self._stopping:
+                    # 先标记停止，避免新任务在清理期间覆盖当前任务。
+                    old_collect_id = self._collect_id
+                    self._collecting = False
+                    self._stopping = True
+                else:
+                    return self._start_locked(request)
 
-            # 创建采集后端
-            try:
-                self._create_backend(request)
-            except Exception as e:
-                self._collecting = False
-                self._collect_id = None
-                self._target_processes = []
-                return {"status": "error", "message": str(e)}
-
-            # 启动采集线程
-            self._collect_thread = threading.Thread(
-                target=self._collect_loop,
-                daemon=True,
+            logger.warning(
+                "新采集任务抢占未结束的旧任务: old=%s, new=%s",
+                old_collect_id,
+                request.collect_id,
             )
-            self._collect_thread.start()
-
-            logger.info(
-                f"开始采集: collect_id={self._collect_id}, "
-                f"interval={self._interval}s, "
-                f"timeout={self._timeout}s, "
-                f"target_processes={len(self._target_processes)}"
+            # 锁外结束旧任务（与 stop_collect 相同路径），完成后重试加锁启动。
+            self._stop_collect_internal(
+                terminal_status="interrupted",
+                terminal_message="被新采集任务取代",
             )
 
-            return {
-                "status": "started",
-                "message": f"开始采集，频率{self._interval}秒，超时{self._timeout}秒",
-            }
+    def _start_locked(self, request: CollectStartRequest) -> dict[str, Any]:
+        """在持有 _lock 的前提下启动新采集任务。"""
+        self._start_time = datetime.now(timezone.utc)
+        self._collecting = True
+        self._stopping = False
+        # 每个任务独立的停止事件：旧线程等待的事件不会被新任务清零。
+        stop_event = threading.Event()
+        self._stop_event = stop_event
+        self._last_sequence = None
+        self._last_elapsed_ms = None
+        self._collect_id = request.collect_id
+        self._interval = request.interval
+        self._timeout = request.timeout
+        self._target_processes = list(request.target_processes)
+        self._match_mode = request.match_mode or "fuzzy"
+        self._gpu_fallback_logged = False
+        self._gpu_source_last = None
+
+        # 创建采集后端
+        try:
+            self._create_backend(request)
+        except Exception as e:
+            self._collecting = False
+            self._collect_id = None
+            self._target_processes = []
+            return {"status": "error", "message": str(e)}
+
+        # 启动采集线程
+        self._collect_thread = threading.Thread(
+            target=self._collect_loop,
+            args=(request.collect_id, stop_event),
+            daemon=True,
+        )
+        self._collect_thread.start()
+
+        logger.info(
+            f"开始采集: collect_id={self._collect_id}, "
+            f"interval={self._interval}s, "
+            f"timeout={self._timeout}s, "
+            f"target_processes={len(self._target_processes)}"
+        )
+
+        return {
+            "status": "started",
+            "message": f"开始采集，频率{self._interval}秒，超时{self._timeout}秒",
+        }
 
     def _is_same_task(self, request: CollectStartRequest) -> bool:
         """检查新请求是否与当前任务相同。
@@ -375,14 +400,12 @@ class PerformanceCollector:
                 }
 
             if request and request.collect_id and request.collect_id != self._collect_id:
+                # 平台带着过期/不一致的 collect_id 时仍停掉当前任务：
+                # 若拒绝，DB 已终态而 Worker 残留的任务将永远无法停止。
                 logger.warning(
-                    f"停止采集 ID 不匹配: 请求={request.collect_id}, "
+                    f"停止采集 ID 不匹配，仍停止当前任务: 请求={request.collect_id}, "
                     f"当前={self._collect_id}"
                 )
-                return {
-                    "status": "error",
-                    "message": f"采集ID不匹配，当前采集ID为 {self._collect_id}",
-                }
 
             # 先标记停止，避免新任务在清理期间覆盖当前任务。
             self._collecting = False
@@ -396,59 +419,99 @@ class PerformanceCollector:
             "message": "采集已停止",
         }
 
-    def _stop_collect_internal(self) -> None:
+    def _stop_collect_internal(
+        self,
+        *,
+        terminal_status: str = "stopped",
+        terminal_message: str = "用户停止采集",
+    ) -> None:
         """内部停止采集方法（不加锁）。"""
         self._collecting = False
         self._stop_event.set()
 
-        # 先停止采集后端，确保不会再产生新样本。
         backend = self._backend
-        if backend:
+        try:
+            # 先停止采集后端，确保不会再产生新样本。
+            if backend:
+                self._stop_backend_with_timeout(backend)
+                self._backend = None
+
+            # 主线程等待采集循环退出；采集线程不能 join 自己。
+            if (
+                self._collect_thread
+                and self._collect_thread.is_alive()
+                and threading.current_thread() is not self._collect_thread
+            ):
+                self._collect_thread.join(timeout=2)
+
+            # 停止后再排空缓冲区，避免最后一个采样周期丢失。
+            self._drain_backend_buffer(backend)
+            self._collect_thread = None
+
+            self._notify_terminal(self._collect_id, terminal_status, terminal_message)
+        finally:
+            # 无论停止流程是否异常都复位状态，避免 _stopping 滞留导致
+            # 后续 start 被永久拒绝。
+            self._collect_id = None
+            self._stopping = False
+            self._target_processes = []
+            self._match_mode = "fuzzy"
+            self._start_time = None
+
+            logger.info(f"采集已停止: device_id={self.device_id}")
+
+    def _stop_backend_with_timeout(self, backend: CollectBackend) -> None:
+        """限时停止采集后端。
+
+        后端 stop 可能阻塞在 hdc/子进程清理上；无限等待会让 HTTP 停止
+        请求挂起并使 _stopping 长期为 True。超时后放弃等待并丢弃后端
+        （鸿蒙 SP_daemon 为设备单例，新 Monitor 启动会顶掉旧流）。
+        """
+        def _stop() -> None:
             try:
                 backend.stop()
             except Exception as e:
                 logger.warning(f"停止采集后端异常: {e}")
-            self._backend = None
 
-        # 主线程等待采集循环退出；采集线程不能 join 自己。
-        if (
-            self._collect_thread
-            and self._collect_thread.is_alive()
-            and threading.current_thread() is not self._collect_thread
-        ):
-            self._collect_thread.join(timeout=2)
+        thread = threading.Thread(
+            target=_stop,
+            daemon=True,
+            name=f"perf-backend-stop-{self.device_id}",
+        )
+        thread.start()
+        thread.join(timeout=BACKEND_STOP_TIMEOUT_SECS)
+        if thread.is_alive():
+            logger.error(
+                "停止采集后端超时(%.1fs)，放弃等待: device_id=%s",
+                BACKEND_STOP_TIMEOUT_SECS,
+                self.device_id,
+            )
 
-        # 停止后再排空缓冲区，避免最后一个采样周期丢失。
-        self._drain_backend_buffer(backend)
-        self._collect_thread = None
+    def _collect_loop(self, collect_id: str, stop_event: threading.Event) -> None:
+        """采集循环（后台线程）。
 
-        collect_id = self._collect_id
-        self._notify_terminal(collect_id, "stopped", "用户停止采集")
-
-        # 清理状态
-        self._collect_id = None
-        self._stopping = False
-        self._target_processes = []
-        self._match_mode = "fuzzy"
-        self._start_time = None
-
-        logger.info(f"采集已停止: device_id={self.device_id}")
-
-    def _collect_loop(self) -> None:
-        """采集循环（后台线程）。"""
+        ``collect_id``/``stop_event`` 绑定本次任务：任务被抢占或结束后，
+        旧线程只静默退出，不再触碰新任务的共享状态和后端。
+        """
         next_collect_at = time.monotonic() + self._interval
         is_harmony = self._device_type in ("harmony_pc", "harmony_mobile")
         next_heartbeat_at = (
             time.monotonic() + HARMONY_HEARTBEAT_INTERVAL_SECS if is_harmony else None
         )
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
+            if self._collect_id != collect_id:
+                # 任务已被抢占/清理，新任务已接管共享状态。
+                break
             now = time.monotonic()
             next_wakeup_at = next_collect_at
             if next_heartbeat_at is not None:
                 next_wakeup_at = min(next_wakeup_at, next_heartbeat_at)
-            if self._stop_event.wait(max(0.0, next_wakeup_at - now)):
+            if stop_event.wait(max(0.0, next_wakeup_at - now)):
+                break
+            if self._collect_id != collect_id:
                 break
 
+            backend = None
             try:
                 now = time.monotonic()
                 backend = self._backend
@@ -462,13 +525,14 @@ class PerformanceCollector:
                 if now >= next_collect_at:
                     # 先发送历史 spool，再读取本轮增量数据。
                     self._flush_spool()
-                    self._drain_backend_buffer()
+                    self._drain_backend_buffer(backend)
                     next_collect_at = time.monotonic() + self._interval
             except Exception as error:
-                collect_id = self._collect_id
                 logger.error(f"采集线程异常: {error}", exc_info=True)
-                self._stop_event.set()
-                backend = self._backend
+                stop_event.set()
+                # 仅在仍是本任务的归属者时清理共享状态，避免覆盖新任务。
+                if self._collect_id != collect_id:
+                    break
                 self._backend = None
                 if backend:
                     try:
@@ -490,16 +554,15 @@ class PerformanceCollector:
                 break
 
             # 后端自停：有 last_error 视为设备/采集失败，否则视为 duration 到期。
-            if self._backend and not self._backend.is_running():
-                collect_id = self._collect_id
-                backend = self._backend
+            backend = self._backend
+            if self._collect_id == collect_id and backend and not backend.is_running():
                 self._backend = None
                 terminal_error = None
                 try:
                     terminal_error = backend.last_error()
                 except Exception as error:
                     logger.warning("读取采集后端 last_error 失败: %s", error)
-                self._stop_event.set()
+                stop_event.set()
                 self._drain_backend_buffer(backend)
                 if terminal_error:
                     logger.error(
