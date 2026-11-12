@@ -23,6 +23,7 @@ from worker.actions.base import (
     _parse_row_tolerance,
     _region_b64,
 )
+from worker.actions.failure import format_find_failure
 from worker.actions.spec import ActionTimedOutError
 from worker.task import Action, ActionResult, ActionStatus
 
@@ -61,11 +62,16 @@ class OcrClickAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), action.value,
+                index=index, kind="text",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -128,11 +134,16 @@ class OcrInputAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), action.value,
+                index=index, kind="text",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -410,11 +421,16 @@ class OcrMoveAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), action.value,
+                index=index, kind="text",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -473,11 +489,16 @@ class OcrDoubleClickAction(BaseActionExecutor):
         position = self._find_text_with_fallback(platform, screenshot, action.value, index)
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), action.value,
+                index=index, kind="text",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Text not found: {action.value}" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )

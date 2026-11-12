@@ -271,6 +271,20 @@ class BaseActionExecutor(ActionExecutor):
                 return ocr_info
         return None
 
+    def _get_last_failure(self, platform: "PlatformManager") -> dict | None:
+        """
+        获取最后一次 OCR/Image 调用的失败诊断。
+
+        Args:
+            platform: 平台管理器
+
+        Returns:
+            dict | None: 失败/未命中诊断为 None 时返回 None
+        """
+        if platform.ocr_client and hasattr(platform.ocr_client, "get_last_failure"):
+            return platform.ocr_client.get_last_failure()
+        return None
+
     def _find_text_position(
         self,
         platform: "PlatformManager",
@@ -324,14 +338,13 @@ class BaseActionExecutor(ActionExecutor):
         """
         position = platform._find_image_position(source_bytes, template_base64, threshold, index)
 
-        # 图像匹配失败时打印原始响应
+        # 图像匹配失败时打一行可读摘要（与报告文案同源，不再倾倒原始响应）
         if position is None and platform.ocr_client:
-            last_response = platform.ocr_client.get_last_response()
-            ocr_info = platform.ocr_client.get_last_ocr_info()
+            failure = self._get_last_failure(platform) or {}
             logger.warning(
-                f"Image match failed, threshold={threshold}, "
-                f"ocr_info={ocr_info}, "
-                f"ocr_response={last_response}"
+                f"Image match failed: threshold={threshold}, index={index}, "
+                f"reason={failure.get('not_found_reason')}, best={failure.get('best_confidence')}, "
+                f"error={failure.get('error')}"
             )
 
         return position
@@ -367,14 +380,12 @@ class BaseActionExecutor(ActionExecutor):
         # 直接透传给 OCR 服务端，服务端自动处理精确→模糊降级匹配
         position = platform._find_text_position(image_bytes, actual_text, "exact", index)
 
-        # OCR 失败时打印原始响应
+        # OCR 查找失败时打一行可读摘要（识别条数即可判断"没识别到"还是"识别了但不对"）
         if position is None and platform.ocr_client:
-            last_response = platform.ocr_client.get_last_response()
-            ocr_info = platform.ocr_client.get_last_ocr_info()
+            failure = self._get_last_failure(platform) or {}
             logger.warning(
-                f"OCR find text failed, target=\"{text}\", "
-                f"ocr_info={ocr_info}, "
-                f"ocr_response={last_response}"
+                f"OCR find text failed: target=\"{text}\", "
+                f"reason={failure.get('not_found_reason')}, error={failure.get('error')}"
             )
 
         return position

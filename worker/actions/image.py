@@ -20,6 +20,7 @@ from worker.actions.base import (
     _parse_row_tolerance,
     _region_b64,
 )
+from worker.actions.failure import format_find_failure
 from worker.actions.spec import ActionTimedOutError
 from worker.task import Action, ActionResult, ActionStatus
 
@@ -50,6 +51,7 @@ class ImageClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取截图
@@ -65,11 +67,16 @@ class ImageClickAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), "",
+                threshold=threshold, index=index, kind="image",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -123,6 +130,7 @@ class ImageWaitAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         timeout = action.timeout / 1000
@@ -214,6 +222,7 @@ class ImageAssertAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         threshold = action.threshold if action.threshold is not None else 0.9
@@ -267,11 +276,16 @@ class ImageAssertAction(BaseActionExecutor):
                 status=ActionStatus.SUCCESS,
                 output="Image not found as expected",
             )
+        error_msg, error_type = format_find_failure(
+            self._get_last_failure(platform), "",
+            threshold=threshold, index=index, kind="image",
+        )
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.FAILED,
-            error="Image not found" + (f" at index {index}" if index > 0 else ""),
+            error=error_msg,
+            error_type=error_type,
             region_screenshot=_region_b64(last_screenshot, bool(action.region)),
         )
 
@@ -297,6 +311,7 @@ class ImageClickNearTextAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         if not action.value:
@@ -328,11 +343,16 @@ class ImageClickNearTextAction(BaseActionExecutor):
         )
 
         if not match:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), action.value,
+                threshold=threshold, kind="image",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error=f"Image not found near text: {action.value}",
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -383,6 +403,7 @@ class ImageMoveAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取截图
@@ -398,11 +419,16 @@ class ImageMoveAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), "",
+                threshold=threshold, index=index, kind="image",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -453,6 +479,7 @@ class ImageDoubleClickAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取截图
@@ -468,11 +495,16 @@ class ImageDoubleClickAction(BaseActionExecutor):
         )
 
         if not position:
+            error_msg, error_type = format_find_failure(
+                self._get_last_failure(platform), "",
+                threshold=threshold, index=index, kind="image",
+            )
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="Image not found" + (f" at index {index}" if index > 0 else ""),
+                error=error_msg,
+                error_type=error_type,
                 ocr_info=self._get_last_ocr_info(platform),
                 region_screenshot=_region_b64(screenshot, bool(action.region)),
             )
@@ -528,6 +560,7 @@ class OcrClickSameRowImageAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取完整截图
@@ -648,6 +681,7 @@ class OcrCheckSameRowImageAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取完整截图
@@ -748,6 +782,7 @@ class ImageExistAction(BaseActionExecutor):
                 action_type=self.name,
                 status=ActionStatus.FAILED,
                 error="image_base64 is required",
+                error_type="其他",
             )
 
         # 获取截图

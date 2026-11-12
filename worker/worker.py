@@ -1288,6 +1288,7 @@ class Worker:
                     finished_at=datetime.now(),
                     actions=actions_results,
                     error=result.error,
+                    error_type=result.error_type,
                     error_screenshot=error_screenshot,
                     artifacts=[artifact for action_result in actions_results for artifact in action_result.artifacts] + error_artifacts,
                 )

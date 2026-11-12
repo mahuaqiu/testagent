@@ -426,6 +426,7 @@ class AndroidPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
                 error=str(e),
+                error_type="其他",
             )
 
     # ========== 平台特有动作实现 ==========

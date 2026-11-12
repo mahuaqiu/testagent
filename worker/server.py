@@ -393,9 +393,11 @@ def _format_action_results(actions: list[dict[str, Any]]) -> list[dict[str, Any]
     formatted = []
     for action in actions:
         result = action.copy()
-        # 替换截图字段
+        # 替换截图字段（region_screenshot 同样是 base64，必须一并脱敏）
         if result.get("screenshot"):
             result["screenshot"] = "<base64_data>"
+        if result.get("region_screenshot"):
+            result["region_screenshot"] = "<base64_data>"
         formatted.append(result)
 
     return formatted

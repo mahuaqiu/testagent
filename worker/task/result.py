@@ -41,6 +41,7 @@ class ActionResult:
     duration_ms: int = 0
     output: str | None = None
     error: str | None = None
+    error_type: str | None = None  # 失败类型（8 词词汇表，见 worker/actions/failure.py）
     screenshot: str | None = None  # base64 或文件路径
     context: Any = None  # 执行后更新的 context（如 start_app 后返回新 page）
     # cmd_exec 专用字段
@@ -66,6 +67,7 @@ class ActionResult:
             duration_ms=data.get("duration_ms", 0),
             output=data.get("output"),
             error=data.get("error"),
+            error_type=data.get("error_type"),
             screenshot=data.get("screenshot"),
             context=data.get("context"),
             exit_code=data.get("exit_code"),
@@ -91,6 +93,8 @@ class ActionResult:
             result["output"] = self.output
         if self.error is not None:
             result["error"] = self.error
+        if self.error_type is not None:
+            result["error_type"] = self.error_type
         if self.screenshot is not None:
             result["screenshot"] = self.screenshot
         if self.exit_code is not None:
@@ -127,6 +131,7 @@ class TaskResult:
     actions: list[ActionResult] = field(default_factory=list)
 
     error: str | None = None
+    error_type: str | None = None  # 首个失败动作的失败类型（见 worker/actions/failure.py）
     error_screenshot: str | None = None  # 失败截图（base64 编码）
     metadata: dict[str, Any] = field(default_factory=dict)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -149,6 +154,7 @@ class TaskResult:
             duration_ms=data.get("duration_ms", 0),
             actions=[ActionResult.from_dict(a) for a in data.get("actions", [])],
             error=data.get("error"),
+            error_type=data.get("error_type"),
             error_screenshot=data.get("error_screenshot"),
             metadata=data.get("metadata", {}),
             artifacts=data.get("artifacts", []),
@@ -184,6 +190,8 @@ class TaskResult:
             result["finished_at"] = self.finished_at.isoformat()
         if self.error is not None:
             result["error"] = self.error
+        if self.error_type is not None:
+            result["error_type"] = self.error_type
         if self.error_screenshot is not None:
             result["error_screenshot"] = self.error_screenshot
 

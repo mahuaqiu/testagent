@@ -1117,6 +1117,7 @@ class WebPlatformManager(PlatformManager):
                 status=ActionStatus.FAILED,
                 duration_ms=duration_ms,
                 error=f"Line {line_no}: {e}",
+                error_type="其他",
             )
 
     # ========== 平台特有动作实现 ==========
