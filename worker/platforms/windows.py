@@ -268,7 +268,7 @@ class WindowsPlatformManager(PlatformManager):
         logger.debug(f"Mouse up {button} at ({x}, {y}) -> global ({global_x}, {global_y})")
 
     def scroll(
-        self, x: int, y: int, direction: str = "up", amount: int = 3, monitor: int | None = None, context: Any = None
+        self, x: int, y: int, direction: str = "down", amount: int = 3, monitor: int | None = None, context: Any = None
     ) -> None:
         """在指定坐标滚动滚轮。
 
