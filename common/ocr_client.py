@@ -149,6 +149,27 @@ class OCRClient:
     def _last_ocr_results(self, value: list["TextBlock"]) -> None:
         self._tls.last_ocr_results = value
 
+    @property
+    def _last_failure(self) -> dict | None:
+        """最后一次调用失败/未命中的诊断（线程隔离）。"""
+        return getattr(self._tls, "last_failure", None)
+
+    @_last_failure.setter
+    def _last_failure(self, value: dict | None) -> None:
+        self._tls.last_failure = value
+
+    def _record_failure(self, response: dict) -> dict:
+        """记录一次失败/未命中的诊断信息，供动作层在返回值之外读取原因。"""
+        self._last_failure = {
+            "status": response.get("status"),
+            "error": response.get("error"),
+            "http_status": response.get("http_status"),
+            "not_found_reason": response.get("not_found_reason"),
+            "best_confidence": response.get("best_confidence"),
+            "nearest_distance": response.get("nearest_distance"),
+        }
+        return self._last_failure
+
     def recognize(
         self,
         image_bytes: bytes,
@@ -170,6 +191,7 @@ class OCRClient:
         Returns:
             list[TextBlock]: 识别到的文字块列表。
         """
+        self._last_failure = None  # 每次调用重置，失败原因始终对应最近一次请求
         compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
         image_base64 = base64.b64encode(compressed).decode("utf-8")
 
@@ -181,6 +203,7 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            self._record_failure(response)
             logger.warning(f"OCR识别失败: status={response.get('status')}, error={response.get('error')}")
             return []
 
@@ -229,6 +252,7 @@ class OCRClient:
         Returns:
             TextBlock | None: 找到的文字块，未找到返回 None。
         """
+        self._last_failure = None  # 每次调用重置，失败原因始终对应最近一次请求
         compressed = _prepare_ocr_source(image_bytes, image_quality, preserve_jpeg)
         image_base64 = base64.b64encode(compressed).decode("utf-8")
 
@@ -239,11 +263,13 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            self._record_failure(response)
             logger.warning(f"OCR查找文字失败: status={response.get('status')}, error={response.get('error')}")
             return None
 
         texts = response.get("texts", [])
         if not texts:
+            self._record_failure(response)
             logger.info(f"OCR查找文字未找到: target=\"{target_text}\"")
             return None
 
@@ -310,6 +336,7 @@ class OCRClient:
         Returns:
             list[MatchResult]: 匹配结果列表。
         """
+        self._last_failure = None  # 每次调用重置，失败原因始终对应最近一次请求
         source_compressed = _prepare_ocr_source(
             source_bytes,
             source_image_quality,
@@ -328,6 +355,7 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            self._record_failure(response)
             logger.warning(f"图像匹配失败: status={response.get('status')}, error={response.get('error')}")
             return []
 
@@ -349,6 +377,7 @@ class OCRClient:
         if matches:
             logger.info(f"图像匹配结果: {matches}")
         else:
+            self._record_failure(response)
             logger.info(f"图像匹配未找到（阈值={threshold}）")
 
         return results
@@ -414,6 +443,7 @@ class OCRClient:
         Returns:
             MatchResult | None: 匹配结果，未找到返回 None。
         """
+        self._last_failure = None  # 每次调用重置，失败原因始终对应最近一次请求
         image_compressed = _prepare_ocr_source(
             image_bytes,
             source_image_quality,
@@ -436,11 +466,13 @@ class OCRClient:
         })
 
         if response.get("status") != "success":
+            self._record_failure(response)
             logger.warning(f"文本附近图像匹配失败: status={response.get('status')}, error={response.get('error')}")
             return None
 
         match = response.get("match")
         if not match:
+            self._record_failure(response)
             logger.info(f"文本附近图像匹配未找到: filter_text=\"{filter_text}\"")
             return None
 
@@ -501,9 +533,16 @@ class OCRClient:
                 if attempt < self.retry:
                     time.sleep(0.5 * (attempt + 1))
 
-        logger.error(f"OCR请求最终失败: {url}, 错误: {last_error}")
+        http_status = None
+        response = getattr(last_error, "response", None)
+        if response is not None:
+            http_status = response.status_code
+        logger.error(f"OCR请求最终失败: {url}, http_status={http_status}, 错误: {last_error}")
         error_result = {"status": "error", "error": str(last_error)}
+        if http_status is not None:
+            error_result["http_status"] = http_status
         self._last_response = error_result  # 缓存错误结果
+        self._record_failure(error_result)
         return error_result
 
     def close(self):
@@ -519,6 +558,16 @@ class OCRClient:
     def get_last_response(self) -> dict:
         """获取最后一次 OCR/Image 调用的原始响应。"""
         return self._last_response
+
+    def get_last_failure(self) -> dict | None:
+        """
+        获取最后一次调用失败/未命中的诊断。
+
+        Returns:
+            dict | None: 失败/未命中时为 {"status", "error", "http_status",
+            "not_found_reason", "best_confidence", "nearest_distance"}；成功为 None。
+        """
+        return self._last_failure
 
     def get_last_ocr_info(self) -> list:
         """
