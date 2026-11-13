@@ -17,6 +17,7 @@ from common.utils import run_cmd
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
+from worker.platforms.keymap import parse_key_combo, to_pyautogui_mac, validate_combo
 from worker.task import Action, ActionResult, ActionStatus
 from worker.tools import get_tools_dir
 
@@ -133,12 +134,14 @@ class MacPlatformManager(PlatformManager):
         pyautogui.mouseUp()
 
     def press(self, key: str, context: Any = None) -> None:
-        """按键。支持组合键，如 "command+c"。"""
-        keys = key.split("+")
+        """按键。统一 pyautogui 风格，支持组合键；ctrl/win 自动按 command 注入。"""
+        parts = parse_key_combo(key)
+        validate_combo(parts)
+        keys = [to_pyautogui_mac(part) for part in parts]
         if len(keys) > 1:
             pyautogui.hotkey(*keys)
         else:
-            pyautogui.press(key)
+            pyautogui.press(keys[0])
 
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（使用 pyautogui）。"""
