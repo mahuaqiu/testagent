@@ -143,11 +143,14 @@ Playwright 风格（Control+A、ArrowUp）不再支持，解析时直接报错�
 
 # 修饰键别名（小写）→ 统一修饰键语义名（ctrl/alt/shift/win/command）
 _MODIFIER_ALIASES = {
+    "ctrl": "ctrl",
     "ctrlleft": "ctrl",
     "ctrlright": "ctrl",
+    "alt": "alt",
     "altleft": "alt",
     "altright": "alt",
     "altgr": "alt",
+    "shift": "shift",
     "shiftleft": "shift",
     "shiftright": "shift",
     # Windows 徽标键（mac 上语义等同 command）
