@@ -1606,42 +1606,33 @@ components:
         key:
           type: string
           description: |
-            按键名称，仅 press 动作必填。不同平台支持的按键不同：
+            按键名称，仅 press 动作必填。所有平台统一 pyautogui 风格：
+            小写命名键，组合键用 "+" 分隔、修饰键在前、最后一个为功能键；
+            单字符保留原大小写（"A" 等价 shift+a）。
 
-            【Web/Windows/Mac 桌面端】支持所有标准键盘按键：
-            - 功能键: Enter、Escape、Tab、Backspace、Delete
-            - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight
-            - 修饰键: Control、Alt、Shift、Meta
-            - 组合键示例: Control+A、Control+C、Alt+F4
+            【通用键名】桌面端（Web/Windows/Mac）+ 移动端公共子集：
+            - 修饰键: ctrl、alt、shift、win（mac 上 ctrl/win 自动按 command 注入）
+            - 功能键: enter、tab、esc、backspace、del、space、up、down、left、right、
+              home、end、pageup、pagedown、insert、capslock、f1-f12
+            - 字母/数字/符号: 单字符直传，如 a、5、@
+            - 组合键示例: ctrl+a、ctrl+shift+t、alt+f4、win+e
 
-            【Android 移动端】支持的按键：
-            - 导航键: Home（主屏幕）、Back（返回）、Menu（菜单）、Search（搜索）
-            - 功能键: Enter、Escape、Tab、Backspace、Delete
-            - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight
-            - 音量键: Volume_Up、Volume_Down
-            - 电源键: Power、Lock（锁屏）
-            - 媒体键: Media_Play_Pause、Media_Stop、Media_Next、Media_Previous
-            - 数字 KeyCode: 直接传入数字，如 "26" 表示电源键
+            【Windows】cmd/command 为 mac 语义不可用（请用 ctrl 或 win）
 
-            【鸿蒙 mobile/PC】按键注入对齐官方 HOScrcpy DEMO（uinput -K 通道）：
-            - 系统/导航键: Home、Back、Power、Menu、Volume_Up、Volume_Down、Volume_Mute
-            - 功能键: Enter、Backspace、Delete、Escape、Tab、Space、Insert、
-              PageUp、PageDown、Home/End（End 为光标移到末尾）、CapsLock、F1-F12
-            - 方向键: ArrowUp、ArrowDown、ArrowLeft、ArrowRight（等同 DPAD 方向键）
-            - 字母/数字: A-Z、0-9（或 Digit0-Digit9）
-            - 符号键: Grave(`)、Minus(-)、Equals(=)、LeftBracket([)、RightBracket(])、
-              Backslash(\\)、Semicolon(;)、Quote(')、Slash(/)、Comma(,)、Period(.)、At(@)、Plus(+)
-            - 修饰键: Shift、Ctrl、Alt、Meta（兼容 Control、Win、Cmd 等别名）
-            - 组合键（鸿蒙 PC）: 修饰键在前、功能键在最后，如 Ctrl+A、Ctrl+C、
-              Ctrl+V、Alt+F4、Ctrl+Alt+F4、Shift+Tab、Ctrl+Shift+T
-            - 数字 KeyCode: 直接传入数字（OpenHarmony KeyCode 键值，如 "2055" 为退格）
+            【Android 特有键】home、back、menu、search、volume_up（volumeup）、
+            power、camera、media_play_pause/media_stop/media_next/media_previous、
+            数字 KeyCode 直传（如 "26" 电源键）；不支持组合键
 
-            【iOS 移动端】支持的按键（取决于设备型号）：
-            - iPhone 8 (Touch ID): Home、Volume_Up、Volume_Down
-            - iPhone X+ (Face ID): 可能支持更多按键
-            - 不支持的按键: Back、Enter、Escape、Lock 等（iOS 无物理键）
-              → Back: 请使用 OCR 点击导航栏返回按钮
-              → Enter: 请使用 OCR 点击键盘上的完成/搜索按钮
+            【鸿蒙 mobile/PC】通用键名均可用（大小写不敏感），另有 home、back、
+            power、volume_up/volume_down/volume_mute、数字原始键码
+            （OpenHarmony KeyCode，如 "2055" 退格）；鸿蒙 PC 组合键要求
+            修饰键在前、功能键在最后
+
+            【iOS】仅 home、volume_up、volume_down（取决于设备机型；
+            Back/Enter 请用 OCR 点击导航按钮）
+
+            注意：Playwright 风格（Control+A、ArrowUp、Meta）已不再支持，
+            传错会报错并提示正确写法。
         background:
           type: boolean
           default: false
@@ -1966,40 +1957,40 @@ components:
   # {"action_type": "paste", "text": "hello world"}
 
   # ---------- 其他动作 ----------
-  # press - 按键操作
+  # press - 按键操作（统一 pyautogui 风格：小写、组合键修饰键在前）
   # 示例 1: 按回车键（桌面端）
-  # {"action_type": "press", "key": "Enter"}
+  # {"action_type": "press", "key": "enter"}
   # 示例 2: 按 Escape 键（桌面端）
-  # {"action_type": "press", "key": "Escape"}
+  # {"action_type": "press", "key": "esc"}
   # 示例 3: 按下箭头键（桌面端）
-  # {"action_type": "press", "key": "ArrowDown"}
-  # 示例 4: Ctrl+A 全选（桌面端组合键）
-  # {"action_type": "press", "key": "Control+A"}
+  # {"action_type": "press", "key": "down"}
+  # 示例 4: Ctrl+A 全选（桌面端组合键，mac 上自动按 command+a 注入）
+  # {"action_type": "press", "key": "ctrl+a"}
 
-  # 鸿蒙按键示例:
+  # 鸿蒙按键示例（通用键名可用，大小写不敏感）:
   # 示例 5: 退格键（鸿蒙 PC，uinput -K 通道）
-  # {"action_type": "press", "key": "Backspace", "platform": "harmony_pc"}
+  # {"action_type": "press", "key": "backspace", "platform": "harmony_pc"}
   # 示例 6: Ctrl+C 复制（鸿蒙 PC 组合键）
-  # {"action_type": "press", "key": "Ctrl+C", "platform": "harmony_pc"}
+  # {"action_type": "press", "key": "ctrl+c", "platform": "harmony_pc"}
   # 示例 7: Ctrl+Shift+T 三键组合（鸿蒙 PC）
-  # {"action_type": "press", "key": "Ctrl+Shift+T", "platform": "harmony_pc"}
+  # {"action_type": "press", "key": "ctrl+shift+t", "platform": "harmony_pc"}
 
   # 移动端按键示例（Android）:
   # 示例 8: 返回键
-  # {"action_type": "press", "key": "Back"}
+  # {"action_type": "press", "key": "back"}
   # 示例 9: 主屏幕键
-  # {"action_type": "press", "key": "Home"}
+  # {"action_type": "press", "key": "home"}
   # 示例 10: 音量增加
-  # {"action_type": "press", "key": "Volume_Up"}
+  # {"action_type": "press", "key": "volume_up"}
   # 示例 11: 电源键/锁屏
-  # {"action_type": "press", "key": "Power"}
+  # {"action_type": "press", "key": "power"}
 
   # 移动端按键示例（iOS）:
   # 示例 12: 主屏幕键
-  # {"action_type": "press", "key": "Home"}
+  # {"action_type": "press", "key": "home"}
   # 示例 13: 音量增加
-  # {"action_type": "press", "key": "Volume_Up"}
-  # 注意: iOS 不支持 Back、Enter、Lock 等按键
+  # {"action_type": "press", "key": "volume_up"}
+  # 注意: iOS 不支持 back、enter、lock 等按键
 
   # screenshot - 截图
   # 示例: 截取当前屏幕，命名为 "result"
@@ -2086,7 +2077,7 @@ components:
   # {"action_type": "click", "x": 500, "y": 300, "level": "system"}
 
   # 示例 6: 系统级按键（在原生对话框中按键）
-  # {"action_type": "press", "key": "Enter", "level": "system"}
+  # {"action_type": "press", "key": "enter", "level": "system"}
 
   # 示例 7: 系统级等待文字（等待原生对话框文字出现）
   # {"action_type": "ocr_wait", "value": "共享", "timeout": 5000, "level": "system"}
@@ -2102,7 +2093,7 @@ components:
   # {"action_type": "click", "x": 500, "y": 300}
   # 第二步：等待并操作原生文件选择器（system 级别）
   # {"action_type": "ocr_click", "value": "选择文件", "level": "system"}
-  # {"action_type": "press", "key": "Enter", "level": "system"}
+  # {"action_type": "press", "key": "enter", "level": "system"}
 
   # ocr_get_position - 获取文字坐标列表
   # 返回 {"positions": [[x1, y1], [x2, y2], ...]}

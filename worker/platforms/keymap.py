@@ -74,8 +74,7 @@ for _i in range(10):
     PYAUTOGUI_TO_PLAYWRIGHT[f"num{_i}"] = f"Numpad{_i}"
 
 _LEGACY_HINT = (
-    "请使用统一小写 pyautogui 风格（如 ctrl+a、enter、up、f5）；"
-    "Playwright 风格（如 Control+A、ArrowUp）已不支持。"
+    "请使用统一小写 pyautogui 风格（如 ctrl+a、enter、up、f5）；" "Playwright 风格（如 Control+A、ArrowUp）已不支持。"
 )
 
 
@@ -130,9 +129,7 @@ def to_pyautogui_win(part: str) -> str:
     modifier = _resolve_modifier(part)
     if modifier is not None:
         if modifier == "command":
-            raise ValueError(
-                f"Unsupported key '{part}': cmd/command 为 mac 语义，Windows 请使用 ctrl 或 win。"
-            )
+            raise ValueError(f"Unsupported key '{part}': cmd/command 为 mac 语义，Windows 请使用 ctrl 或 win。")
         if modifier == "win":
             return "winleft"
         return modifier  # ctrl / alt / shift
@@ -173,9 +170,7 @@ def to_playwright_combo(parts: list[str], on_mac: bool) -> str:
         modifier = _resolve_modifier(part)
         if modifier is not None:
             if modifier == "command" and not on_mac:
-                raise ValueError(
-                    f"Unsupported key '{part}': cmd/command 为 mac 语义，Windows 请使用 ctrl 或 win。"
-                )
+                raise ValueError(f"Unsupported key '{part}': cmd/command 为 mac 语义，Windows 请使用 ctrl 或 win。")
             if modifier == "ctrl":
                 resolved.append("Meta" if on_mac else "Control")
             elif modifier == "alt":

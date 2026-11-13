@@ -242,7 +242,7 @@ class PasteAction(BaseActionExecutor):
 
         try:
             pyperclip.copy(action.text)
-            platform.press("Control+v", context)
+            platform.press("ctrl+v", context)
         except Exception as e:
             # 粘贴失败时返回错误
             return ActionResult(
