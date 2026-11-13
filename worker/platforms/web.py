@@ -23,6 +23,13 @@ from common.packaging import get_base_dir
 from worker.actions import ActionRegistry
 from worker.config import PlatformConfig
 from worker.platforms.base import PlatformManager
+from worker.platforms.keymap import (
+    parse_key_combo,
+    to_playwright_combo,
+    to_pyautogui_mac,
+    to_pyautogui_win,
+    validate_combo,
+)
 from worker.task import Action, ActionResult, ActionStatus
 
 logger = logging.getLogger(__name__)
@@ -875,7 +882,10 @@ class WebPlatformManager(PlatformManager):
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
         pyperclip.copy(text)
-        pyautogui.hotkey('ctrl', 'v')
+        if sys.platform.startswith("darwin"):
+            pyautogui.hotkey("command", "v")
+        else:
+            pyautogui.hotkey("ctrl", "v")
         logger.debug(f"System-level input: {text}")
 
     def swipe(self, start_x: int, start_y: int, end_x: int, end_y: int,
@@ -957,38 +967,29 @@ class WebPlatformManager(PlatformManager):
         logger.debug(f"Browser-level scroll {direction} x{amount} at ({x}, {y}) delta={delta}")
 
     def press(self, key: str, context: Any = None, level: str = None) -> None:
-        """按键。"""
+        """按键。统一 pyautogui 风格（如 ctrl+a），browser/system 两层共用同一格式。"""
+        parts = parse_key_combo(key)
+        validate_combo(parts)
         effective_level = level or self._current_level
         if effective_level == "system":
-            self._system_press(key)
+            self._system_press(key, parts)
             return
         page = context or self._current_page
         if page:
-            _run_async(page.keyboard.press(key))
+            playwright_key = to_playwright_combo(parts, on_mac=sys.platform.startswith("darwin"))
+            _run_async(page.keyboard.press(playwright_key))
 
-    def _system_press(self, key: str) -> None:
-        """系统级按键（使用 pyautogui）。"""
+    def _system_press(self, key: str, parts: list[str]) -> None:
+        """系统级按键（pyautogui），键名按运行 host 平台适配，支持组合键。"""
         if not SYSTEM_LEVEL_AVAILABLE:
             raise RuntimeError("System-level operations not available")
-        # 转换 Playwright 键名到 pyautogui 键名
-        key_map = {
-            "Enter": "enter",
-            "Tab": "tab",
-            "Escape": "escape",
-            "Backspace": "backspace",
-            "Delete": "delete",
-            "ArrowUp": "up",
-            "ArrowDown": "down",
-            "ArrowLeft": "left",
-            "ArrowRight": "right",
-            "Control": "ctrl",
-            "Alt": "alt",
-            "Shift": "shift",
-            "Meta": "win",  # Windows 键
-        }
-        pyautogui_key = key_map.get(key, key.lower())
-        pyautogui.press(pyautogui_key)
-        logger.debug(f"System-level press: {key} -> {pyautogui_key}")
+        on_mac = sys.platform.startswith("darwin")
+        native_parts = [to_pyautogui_mac(part) if on_mac else to_pyautogui_win(part) for part in parts]
+        if len(native_parts) > 1:
+            pyautogui.hotkey(*native_parts)
+        else:
+            pyautogui.press(native_parts[0])
+        logger.debug(f"System-level press: {key} -> {native_parts}")
 
     def take_screenshot(self, context: Any = None, level: str = None, monitor: int = None) -> bytes:
         """获取截图。根据 _current_level 决定使用 Playwright 还是系统级截图。"""
