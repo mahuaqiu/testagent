@@ -70,6 +70,16 @@ class AndroidPlatformManager(PlatformManager):
         "MEDIA_PREVIOUS": 88,
     }
 
+    # 统一 pyautogui 风格别名（press 对外契约，见 keymap.py）
+    _KEY_ALIASES = {
+        "ESC": "ESCAPE",
+        "UP": "ARROWUP",
+        "DOWN": "ARROWDOWN",
+        "LEFT": "ARROWLEFT",
+        "RIGHT": "ARROWRIGHT",
+        "DEL": "DELETE",
+    }
+
     def __init__(self, config: PlatformConfig, ocr_client=None, unlock_config=None):
         super().__init__(config, ocr_client)
         self._device_clients: dict[str, u2.Device] = {}
@@ -307,15 +317,22 @@ class AndroidPlatformManager(PlatformManager):
         logger.debug(f"pinch {direction} executed: scale={scale}, duration={duration}ms")
 
     def press(self, key: str, context: Any = None) -> None:
-        """按键。
+        """按键。统一小写风格（enter、esc、up…）；Android 不支持组合键。
 
-        Android 支持的按键：HOME, BACK, MENU, ENTER, SEARCH, VOLUME_UP, VOLUME_DOWN, POWER 等
-        详见 KEY_MAP 定义。
+        支持的按键：home、back、menu、search、enter、escape、tab、backspace、
+        delete、up、down、left、right、volume_up、volume_down、power、camera、
+        media_* 等，详见 KEY_MAP；数字 KeyCode 直传。
         """
         device = context or self._device_clients.get(self._current_device)
         if not device:
             raise RuntimeError("No device context")
-        key_name = key.upper() if key else ""
+        if "+" in (key or ""):
+            raise ValueError(
+                f"Unsupported key '{key}': Android 不支持组合键（无物理修饰键盘）。"
+                "请拆分为多次 press，或使用 OCR 点击完成对应操作。"
+            )
+        key_name = (key or "").upper()
+        key_name = self._KEY_ALIASES.get(key_name, key_name)
         key_code = self.KEY_MAP.get(key_name)
 
         if key_code:
