@@ -15,6 +15,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 from typing import Any
 
 from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
@@ -49,7 +50,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# 使用全局工作线程和事件循环
+# create_context 失败重试参数：登录跳转等场景下页面/上下文可能短暂不可用，
+# 最多重试 2 次，每次间隔 3 秒（第 3 秒、第 6 秒各一次），允许等待。
+CREATE_CONTEXT_MAX_RETRIES = 2
+CREATE_CONTEXT_RETRY_INTERVAL = 3.0
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 _event_loop: asyncio.AbstractEventLoop | None = None
 _event_loop_lock = threading.Lock()
@@ -697,8 +701,17 @@ class WebPlatformManager(PlatformManager):
     # ========== 上下文管理 ==========
 
     def create_context(self, device_id: str | None = None, options: dict | None = None) -> Any:
-        """创建浏览器页面（基于持久化上下文）。"""
+        """创建浏览器页面（基于持久化上下文）。
+
+        登录跳转等场景下页面/上下文可能短暂不可用（如目标页在跳转中被关闭、
+        连接抖动导致 Playwright 报 "Target page, context or browser has been closed"），
+        失败时按固定间隔重试：第 3 秒、第 6 秒各一次，最多重试 2 次。
+
+        最终失败时输出逐步诊断日志（is_available / 会话 / pages 状态），
+        并在上下文确实失效时重置状态，让下次任务可以正常重启浏览器。
+        """
         if not self.is_available():
+            self._log_context_diagnostics(RuntimeError("Web platform not started"))
             raise RuntimeError("Web platform not started")
 
         if self.has_active_session():
@@ -708,26 +721,138 @@ class WebPlatformManager(PlatformManager):
                 self._current_page = existing_page
                 return existing_page
 
-        page = _run_async(self._async_create_page())
+        last_error: Exception | None = None
+        for attempt in range(CREATE_CONTEXT_MAX_RETRIES + 1):
+            if attempt > 0:
+                logger.warning(
+                    f"create_context attempt {attempt}/{CREATE_CONTEXT_MAX_RETRIES} failed, "
+                    f"retrying in {CREATE_CONTEXT_RETRY_INTERVAL}s: {last_error}"
+                )
+                time.sleep(CREATE_CONTEXT_RETRY_INTERVAL)
+                # 等待期间平台可能被停止，重试前重新检查
+                if not self.is_available():
+                    self._log_context_diagnostics(
+                        RuntimeError("Web platform stopped during create_context retry")
+                    )
+                    raise RuntimeError("Web platform not started")
 
-        self._sessions["default"] = {
-            "context": self._browser_context,
-            "page": page,
-        }
-        self._current_page = page
+            try:
+                page = _run_async(self._async_create_page())
+            except Exception as e:
+                last_error = e
+                continue
 
-        logger.info("Web context created")
-        return page
+            self._sessions["default"] = {
+                "context": self._browser_context,
+                "page": page,
+            }
+            self._current_page = page
+
+            logger.info(
+                f"Web context created (attempt {attempt + 1}/{CREATE_CONTEXT_MAX_RETRIES + 1})"
+            )
+            return page
+
+        # 最终失败：输出详细诊断日志，便于定位问题
+        self._log_context_diagnostics(last_error)
+        # 上下文可能已失效（浏览器被关闭/连接断开）：重置状态，
+        # 让下次任务通过 start_app / auto_start 正常重启浏览器，避免一直报 "Target closed"
+        if not self._browser_context_is_valid():
+            logger.warning(
+                "Browser context invalid after create_context retries, "
+                "resetting browser state for next start"
+            )
+            self._reset_browser_state()
+        raise RuntimeError(
+            f"Failed to create Web context after "
+            f"{CREATE_CONTEXT_MAX_RETRIES + 1} attempts: {last_error}"
+        ) from last_error
 
     async def _async_create_page(self) -> Page:
-        """异步获取或创建页面。"""
+        """异步获取或创建页面（跳过已关闭的页面，与 start_app 逻辑一致）。"""
         pages = self._browser_context.pages
-        if pages:
-            page = pages[0]
-        else:
+        page: Page | None = None
+        for candidate in pages:
+            try:
+                if not candidate.is_closed():
+                    page = candidate
+                    break
+            except Exception:
+                continue
+        if page is None:
             page = await self._browser_context.new_page()
         page.set_default_timeout(self.timeout)
         return page
+
+    def _log_context_diagnostics(self, error: Exception | None) -> None:
+        """create_context 失败时输出逐步诊断信息，便于定位问题。
+
+        每一步探测都独立 try/except，避免诊断本身被异常打断。
+        """
+        logger.error(
+            "Web create_context failed: %s\n%s",
+            error,
+            "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            if error
+            else "",
+        )
+
+        # 环节 1：平台可用性（is_available）
+        try:
+            available = self.is_available()
+            logger.error(
+                "  [diag] is_available=%s (started=%s, browser_context=%s, playwright=%s)",
+                available,
+                self._started,
+                "set" if self._browser_context else "None",
+                "set" if self._playwright else "None",
+            )
+        except Exception as exc:
+            logger.error(f"  [diag] is_available check crashed: {exc}")
+
+        # 环节 2：已有会话状态（has_active_session）
+        try:
+            has_session = self.has_active_session()
+            session_page = self._sessions.get("default", {}).get("page")
+            session_state = "<none>"
+            if session_page is not None:
+                try:
+                    session_state = f"closed={session_page.is_closed()}, url={session_page.url}"
+                except Exception as exc:
+                    session_state = f"<state check failed: {exc}>"
+            logger.error(f"  [diag] has_active_session={has_session}, session_page={session_state}")
+        except Exception as exc:
+            logger.error(f"  [diag] has_active_session check crashed: {exc}")
+
+        # 环节 3：context/pages 实际状态（_async_create_page 依赖的部分）
+        context = self._browser_context
+        if context is None:
+            logger.error("  [diag] browser_context is None (browser not started or already reset)")
+            return
+        try:
+            pages = context.pages
+            logger.error(f"  [diag] context.pages accessible, count={len(pages)}")
+            for i, p in enumerate(pages):
+                try:
+                    logger.error(f"  [diag] page[{i}]: closed={p.is_closed()}, url={p.url}")
+                except Exception as exc:
+                    logger.error(f"  [diag] page[{i}]: state check failed: {exc}")
+        except Exception as exc:
+            logger.error(
+                f"  [diag] context.pages check failed: {exc} "
+                "(browser process may have exited or connection lost)"
+            )
+
+        try:
+            valid = self._browser_context_is_valid()
+            logger.error(f"  [diag] _browser_context_is_valid={valid}")
+        except Exception as exc:
+            logger.error(f"  [diag] _browser_context_is_valid crashed: {exc}")
+
+        logger.error(
+            f"  [diag] browser_type={self.browser_type}, headless={self.headless}, "
+            f"timeout={self.timeout}, user_data_dir={self._get_user_data_dir()}"
+        )
 
     def close_context(self, context: Any, close_session: bool = False) -> None:
         """关闭浏览器上下文。"""

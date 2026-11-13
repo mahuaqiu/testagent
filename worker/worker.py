@@ -1025,12 +1025,17 @@ class Worker:
                 except Exception as e:
                     exc_type, exc_value, exc_tb = sys.exc_info()
                     line_no = exc_tb.tb_lineno if exc_tb else "unknown"
+                    # create_context 失败也要有系统截图：系统级截图不依赖
+                    # Playwright/设备连接，浏览器已关闭时仍然可用，便于报告诊断
+                    error_screenshot, error_artifacts = self._capture_error_screenshot(manager, task)
                     return TaskResult(
                         task_id=task.task_id,
                         request_id=request_id,
                         status=TaskStatus.FAILED,
                         platform=platform,
                         error=f"Line {line_no}: Failed to create context: {e}",
+                        error_screenshot=error_screenshot,
+                        artifacts=error_artifacts,
                     )
 
             # 执行动作列表
@@ -1067,6 +1072,40 @@ class Worker:
                     logger.warning(
                         f"清除设备任务忙标记失败: device_id={task.device_id}, {exc}"
                     )
+    def _capture_error_screenshot(
+        self,
+        manager: PlatformManager,
+        task: Task,
+        context: Any = None,
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """失败时抓取系统级截图并保存为 artifact，供报告诊断。
+
+        任何异常都被捕获并记录警告，截图失败不影响任务结果返回。
+
+        Returns:
+            (error_screenshot base64 或 None, artifacts 列表)
+        """
+        error_screenshot = None
+        error_artifacts: list[dict[str, Any]] = []
+        try:
+            screenshot_bytes = manager.get_screenshot(context)
+            if not screenshot_bytes:
+                # 平台返回空截图（如 sidecar 失败、浏览器无法截图）：
+                # 不生成空 base64，也不保存无效 artifact
+                logger.warning("Failed to get error screenshot: platform returned empty screenshot")
+                return None, []
+            # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
+            compressed = compress_image_to_jpeg(screenshot_bytes, quality=80)
+            error_screenshot = base64.b64encode(compressed).decode("utf-8")
+            reference = self.artifact_service.save_bytes(
+                task.task_id, compressed, artifact_type="error_screenshot",
+                mime_type="image/jpeg", extension="jpg",
+            )
+            error_artifacts.append(reference.to_dict())
+        except Exception as e:
+            logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
+        return error_screenshot, error_artifacts
+
     def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:
         """登记动作产生的截图和录屏文件。"""
         references: list[dict[str, Any]] = []
@@ -1264,20 +1303,9 @@ class Worker:
                 )
 
                 # 获取失败截图
-                error_screenshot = None
-                error_artifacts: list[dict[str, Any]] = []
-                try:
-                    screenshot_bytes = manager.get_screenshot(context)
-                    # 压缩为 JPEG q=80，减少传输体积（返回给调用方查看）
-                    compressed = compress_image_to_jpeg(screenshot_bytes, quality=80)
-                    error_screenshot = base64.b64encode(compressed).decode("utf-8")
-                    reference = self.artifact_service.save_bytes(
-                        task.task_id, compressed, artifact_type="error_screenshot",
-                        mime_type="image/jpeg", extension="jpg",
-                    )
-                    error_artifacts.append(reference.to_dict())
-                except Exception as e:
-                    logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
+                error_screenshot, error_artifacts = self._capture_error_screenshot(
+                    manager, task, context=context
+                )
 
                 failed_result = TaskResult(
                     task_id=task.task_id,
