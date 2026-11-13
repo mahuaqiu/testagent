@@ -3,6 +3,8 @@
 import sys
 from unittest.mock import Mock, patch
 
+import pytest
+
 from worker.config import PlatformConfig
 from worker.platforms.windows import WindowsPlatformManager
 
@@ -28,3 +30,28 @@ def test_windows_key_alias_uses_pyautogui_winleft() -> None:
         manager.press("win+e")
 
     hotkey.assert_called_once_with("winleft", "e")
+
+
+def test_windows_legacy_style_raises_with_hint() -> None:
+    manager = WindowsPlatformManager(PlatformConfig())
+    with pytest.raises(ValueError, match="Playwright"):
+        manager.press("Control+A")
+
+
+def test_windows_unknown_key_raises() -> None:
+    manager = WindowsPlatformManager(PlatformConfig())
+    with pytest.raises(ValueError, match="未知按键名"):
+        manager.press("arrowup")
+
+
+def test_windows_combo_function_key_first_rejected() -> None:
+    manager = WindowsPlatformManager(PlatformConfig())
+    with pytest.raises(ValueError, match="不是修饰键"):
+        manager.press("a+ctrl")
+
+
+def test_windows_ctrl_a_uses_hotkey() -> None:
+    manager = WindowsPlatformManager(PlatformConfig())
+    with patch("worker.platforms.windows.pyautogui.hotkey") as hotkey:
+        manager.press("ctrl+a")
+    hotkey.assert_called_once_with("ctrl", "a")

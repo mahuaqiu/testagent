@@ -30,6 +30,7 @@ from worker.actions import ActionRegistry  # noqa: E402
 from worker.actions.spec import ActionCancelledError, ActionTimedOutError  # noqa: E402
 from worker.config import PlatformConfig  # noqa: E402
 from worker.platforms.base import PlatformManager  # noqa: E402
+from worker.platforms.keymap import parse_key_combo, to_pyautogui_win, validate_combo  # noqa: E402
 from worker.task import Action, ActionResult, ActionStatus  # noqa: E402
 from worker.tools import get_tools_dir  # noqa: E402
 
@@ -330,30 +331,21 @@ class WindowsPlatformManager(PlatformManager):
         logger.debug(f"Swipe from ({start_x}, {start_y}) to ({end_x}, {end_y}) -> global ({global_start_x}, {global_start_y}) to ({global_end_x}, {global_end_y})")
 
     def press(self, key: str, context: Any = None) -> None:
-        """按键。支持组合键，如 "ctrl+c"。"""
-        keys = [self._normalize_key(item) for item in key.split("+")]
-        normalized_keys = {item.strip().lower() for item in keys}
+        """按键。统一 pyautogui 风格，支持组合键，如 "ctrl+c"。"""
+        parts = parse_key_combo(key)
+        validate_combo(parts)
 
         # Ctrl+Alt+Delete 是 Windows 安全注意序列，普通 SendInput/pyautogui
         # 注入会被 Winlogon 丢弃，必须通过系统 SendSAS 接口触发。
-        if len(keys) == 3 and normalized_keys == {"ctrl", "alt", "delete"}:
+        if len(parts) == 3 and set(parts) == {"ctrl", "alt", "delete"}:
             self._send_secure_attention_sequence()
             return
 
+        keys = [to_pyautogui_win(part) for part in parts]
         if len(keys) > 1:
             pyautogui.hotkey(*keys)
         else:
             pyautogui.press(keys[0])
-
-    @staticmethod
-    def _normalize_key(key: str) -> str:
-        """将平台通用按键名转换为 PyAutoGUI 的 Windows 按键名。"""
-        key = key.strip()
-        aliases = {
-            "win": "winleft",
-            "windows": "winleft",
-        }
-        return aliases.get(key.lower(), key)
 
     @staticmethod
     def _send_secure_attention_sequence() -> None:
