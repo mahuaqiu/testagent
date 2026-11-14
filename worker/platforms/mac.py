@@ -37,8 +37,8 @@ class MacPlatformManager(PlatformManager):
     使用 pyautogui 控制 macOS 桌面，支持 OCR/图像识别定位。
     """
 
-    # Mac 平台特有动作
-    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app"}
+    # Mac 平台特有动作（activate_window 仅 class 模式：按应用名激活）
+    SUPPORTED_ACTIONS: set[str] = {"start_app", "stop_app", "activate_window"}
 
     def __init__(self, config: PlatformConfig, ocr_client=None):
         super().__init__(config, ocr_client)
