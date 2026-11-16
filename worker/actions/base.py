@@ -232,6 +232,11 @@ class BaseActionExecutor(ActionExecutor):
 
     # 断言轮询间隔（秒）：ocr_assert/image_assert 显式传入 timeout 时每隔该时间复查一次
     ASSERT_POLL_INTERVAL = 1.0
+    # 轮询间隔边界容差（秒）：Windows time.monotonic 用 GetTickCount64（精度 15.6ms），
+    # remaining 恰好卡在间隔边界 +1e-13 级浮点残差时，若返回≈0 的等待值，
+    # ExecutionControl.wait 会立即返回造成循环无等待空转（时钟冻结期内 remaining
+    # 不再变化，退出条件永不触发）。残差视为窗口耗尽。
+    ASSERT_POLL_EPSILON = 1e-6
 
     def _next_assert_poll_wait(self, action: Action) -> float | None:
         """
@@ -251,7 +256,7 @@ class BaseActionExecutor(ActionExecutor):
         remaining = action.execution_control.remaining_seconds()
         if remaining is None:
             return None
-        if remaining <= self.ASSERT_POLL_INTERVAL:
+        if remaining <= self.ASSERT_POLL_INTERVAL + self.ASSERT_POLL_EPSILON:
             return None
         return min(self.ASSERT_POLL_INTERVAL, remaining - self.ASSERT_POLL_INTERVAL)
 

@@ -223,3 +223,39 @@ def test_ocr_assert_short_window_still_polls() -> None:
     OcrAssertAction().execute(platform, action)
 
     assert platform.ocr_client.recognize_count >= 2
+
+
+# ========== 轮询窗口边界：浮点残差应视为窗口耗尽 ==========
+
+
+def test_next_assert_poll_wait_boundary_residual_ends_window(monkeypatch) -> None:
+    """remaining 恰好比轮询间隔大一个浮点残差时，应视为窗口耗尽（返回 None）。
+
+    真实场景：Windows time.monotonic 用 GetTickCount64，精度 15.6ms。轮询若干轮后
+    remaining 可能落在间隔边界 +1e-13 级浮点残差上；若调度返回≈0 的等待值，
+    ExecutionControl.wait 立即返回，循环无等待空转，且时钟冻结期内 remaining
+    不再变化、退出条件永不触发，直到把后续检查次数烧完。
+    """
+    fake_now = 100.0
+    monkeypatch.setattr(time, "monotonic", lambda: fake_now)
+    for cls in (OcrAssertAction, ImageAssertAction):
+        action = Action.from_dict({"action_type": "x", "value": "y", "timeout": 300})
+        action.timeout_explicit = True
+        action.execution_control = ExecutionControl(
+            deadline_monotonic=fake_now + cls.ASSERT_POLL_INTERVAL + 1.8e-13
+        )
+        assert cls()._next_assert_poll_wait(action) is None, cls.__name__
+
+
+def test_next_assert_poll_wait_normal_remaining_still_polls(monkeypatch) -> None:
+    """边界修正是收窄：剩余时间充足时仍按原语义返回等待值。"""
+    fake_now = 100.0
+    monkeypatch.setattr(time, "monotonic", lambda: fake_now)
+    for cls in (OcrAssertAction, ImageAssertAction):
+        action = Action.from_dict({"action_type": "x", "value": "y", "timeout": 300})
+        action.timeout_explicit = True
+        action.execution_control = ExecutionControl(
+            deadline_monotonic=fake_now + 3 * cls.ASSERT_POLL_INTERVAL
+        )
+        wait = cls()._next_assert_poll_wait(action)
+        assert wait == cls.ASSERT_POLL_INTERVAL, cls.__name__
