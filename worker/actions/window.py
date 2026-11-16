@@ -23,6 +23,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _show_window_async(hwnd: int, cmd: int) -> None:
+    """ShowWindowAsync：跨进程异步显示/恢复窗口。
+
+    win32gui 未封装此 API；ShowWindow 会阻塞等待目标窗口的线程处理消息，
+    目标进程卡死时会拖住本进程，故改用 ctypes 直调 user32。
+    """
+    import ctypes
+
+    ctypes.windll.user32.ShowWindowAsync(hwnd, cmd)
+
+
 def _resolve_window_filters(action: Action) -> tuple[str | None, str | None, str | None, str | None]:
     """从 Action 解析 title / class_name / exe_name。
 
@@ -59,6 +70,11 @@ class ActivateWindowAction(BaseActionExecutor):
     name = "activate_window"
     requires_context = False
 
+    # 激活验证参数：SetForegroundWindow 后轮询前台是否真的切换成功
+    _ACTIVATE_ATTEMPTS = 2          # Alt+激活最大尝试次数（失败重试一次）
+    _ACTIVATE_VERIFY_TIMEOUT = 0.5  # 单次尝试的验证窗口（秒）
+    _ACTIVATE_POLL_INTERVAL = 0.05  # 验证轮询间隔（秒）
+
     def execute(self, platform: "PlatformManager", action: Action, context=None) -> ActionResult:
         """执行窗口激活。"""
         value = action.value
@@ -84,6 +100,14 @@ class ActivateWindowAction(BaseActionExecutor):
 
         # Windows 平台和 Web 平台（运行在 Windows 上）都使用 Windows 逻辑
         if platform.platform in ("windows", "web"):
+            # web headless 没有 OS 窗口：跳过激活，也不去动真实屏幕上的鼠标
+            if platform.platform == "web" and getattr(platform, "headless", False):
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output="Headless web platform has no OS window, activate skipped",
+                )
             return self._activate_windows(value, match_by, exe_name)
         elif platform.platform == "mac":
             return self._activate_mac(value, match_by)
@@ -98,8 +122,9 @@ class ActivateWindowAction(BaseActionExecutor):
     def _activate_windows(self, value: str, match_by: str, exe_name: str | None = None) -> ActionResult:
         """Windows 平台窗口激活。
 
-        先通过标题或类名找到窗口句柄 HWND，然后用 Win32Window 激活并移动鼠标到窗口中心。
-        找不到句柄或激活异常时，走移动 500 兜底逻辑。
+        流程：查窗口句柄 → 恢复最小化 → Alt 键解除前台锁 → SetForegroundWindow
+        激活并轮询验证（失败重试）→ 移动鼠标到窗口中心。
+        句柄找不到或激活验证失败时，走移动 500 兜底逻辑。
 
         Args:
             value: 窗口标题或窗口类名
@@ -107,7 +132,6 @@ class ActivateWindowAction(BaseActionExecutor):
             exe_name: 进程 exe 名称过滤（可选），如 "chrome.exe"
         """
         import pyautogui
-        import pygetwindow as gw
 
         # 1. 查找窗口句柄
         hwnd = self._find_hwnd(value, match_by, exe_name)
@@ -122,30 +146,88 @@ class ActivateWindowAction(BaseActionExecutor):
                 output=f"Window not found: {match_by}={value} (activate skipped, moved to 500,500)",
             )
 
-        # 2. 激活窗口并移动鼠标到窗口中心
+        # 2-4. 恢复最小化 + Alt 解锁 + 激活验证
         try:
-            win = gw.Win32Window(hwnd)
-            if not win.isActive:
-                win.activate()
-                time.sleep(0.2)
-            pyautogui.moveTo(win.center[0] + randint(0, 20), win.center[1] + randint(0, 20), duration=0.1)
-            logger.info(f"Activated window: {match_by}={value}")
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.SUCCESS,
-                output=f"Activated window: {match_by}={value}",
-            )
-        except gw.PyGetWindowException as e:
-            logger.error(f"Failed to activate window: {e}")
-            # 激活异常，走移动 500 兜底
-            pyautogui.moveTo(500 + randint(0, 20), 500 + randint(0, 20), duration=0.1)
-            return ActionResult(
-                number=0,
-                action_type=self.name,
-                status=ActionStatus.SUCCESS,
-                output=f"Failed to activate window: {e} (moved to 500,500)",
-            )
+            activated = self._bring_window_to_front(hwnd)
+        except Exception as e:
+            logger.error(f"Failed to bring window to front: {match_by}={value}, {e}")
+            activated = False
+
+        if activated:
+            # 5. 激活成功：移动鼠标到窗口中心
+            try:
+                import win32gui
+
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                pyautogui.moveTo(
+                    (left + right) // 2 + randint(0, 20),
+                    (top + bottom) // 2 + randint(0, 20),
+                    duration=0.1,
+                )
+                logger.info(f"Activated window: {match_by}={value}")
+                return ActionResult(
+                    number=0,
+                    action_type=self.name,
+                    status=ActionStatus.SUCCESS,
+                    output=f"Activated window: {match_by}={value}",
+                )
+            except Exception as e:
+                logger.error(f"Activated but failed to move mouse to center: {e}")
+
+        # 6. 激活验证失败：走移动 500 兜底
+        pyautogui.moveTo(500 + randint(0, 20), 500 + randint(0, 20), duration=0.1)
+        return ActionResult(
+            number=0,
+            action_type=self.name,
+            status=ActionStatus.SUCCESS,
+            output=f"Failed to activate window: {match_by}={value} (moved to 500,500)",
+        )
+
+    def _bring_window_to_front(self, hwnd: int) -> bool:
+        """把窗口带到前台并验证，返回是否真的切到了前台。
+
+        Windows 有前台锁（SetForegroundWindow restrictions）：只有前台进程、
+        其子进程或最后一个输入事件的接收者才能设置前台窗口。worker 作为后台
+        进程直接调用 SetForegroundWindow 会被拒绝（返回 0，错误码是残留脏值）。
+
+        处理方式：
+        - 已在前台：直接成功，不注入任何按键
+        - 最小化：先 SW_RESTORE（SetForegroundWindow 无法还原最小化窗口；
+          仅最大化未最小化的窗口不处理，避免被拉回普通尺寸）
+        - Alt 键 tap 后立刻 SetForegroundWindow：让本进程成为最后一个输入
+          事件的接收者，解除前台锁
+        - 条件轮询验证 GetForegroundWindow()==hwnd，未成功则重试
+        """
+        import win32api
+        import win32con
+        import win32gui
+
+        # 已是前台：快路径
+        if win32gui.GetForegroundWindow() == hwnd:
+            return True
+
+        # 恢复最小化窗口
+        if win32gui.IsIconic(hwnd):
+            _show_window_async(hwnd, win32con.SW_RESTORE)
+
+        for _ in range(self._ACTIVATE_ATTEMPTS):
+            # Alt 键 tap：解除前台锁。紧挨着 SetForegroundWindow，中间不插入等待
+            win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception as e:
+                # 如 pywintypes.error（UIPI 拒绝等）；最终成败以轮询验证为准
+                logger.warning(f"SetForegroundWindow raised: {e}")
+
+            # 条件轮询验证，替代固定 sleep
+            deadline = time.monotonic() + self._ACTIVATE_VERIFY_TIMEOUT
+            while time.monotonic() < deadline:
+                if win32gui.GetForegroundWindow() == hwnd:
+                    return True
+                time.sleep(self._ACTIVATE_POLL_INTERVAL)
+
+        return False
 
     def _find_hwnd(self, value: str, match_by: str, exe_name: str | None = None) -> int:
         """查找窗口句柄。
