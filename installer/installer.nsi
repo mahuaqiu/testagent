@@ -9,6 +9,10 @@
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\test-worker.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
+; PATH 写入后广播环境变量变更（HWND_BROADCAST / WM_SETTINGCHANGE 来自
+; WinMessages.nsh，MUI2 已传递包含；PATH 写入后无需重启即可感知）
+!include "WinMessages.nsh"
+
 ; Modern UI 2 configuration
 !include "MUI2.nsh"
 !define MUI_ABORTWARNING
@@ -21,7 +25,10 @@
 ; Installer basic info
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "..\dist\test-worker-installer.exe"
-InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
+; 默认目录不含空格：HOScrcpy SDK 按空格拆分 hdc 命令行，带空格目录会导致
+; 鸿蒙 PC 首次连接上传 agent 失败。升级安装通过 InstallDirRegKey 和升级链路
+; 显式 /D= 继续使用原目录，存量带空格目录不受此默认值影响。
+InstallDir "C:\TestWorker"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
 RequestExecutionLevel admin
@@ -47,6 +54,7 @@ Var DiscoverIos
 Var DiscoverHarmonyMobile
 Var DiscoverHarmonyPc
 Var AutoStart
+Var AddToPath
 Var IsUpgrade
 
 ; Page order
@@ -83,6 +91,9 @@ Section "MainSection" SEC01
   CreateDirectory "$INSTDIR\_internal\config"
   CreateDirectory "$INSTDIR\temp"
   CreateDirectory "$INSTDIR\data"
+  ; java tmp 兜底目录（安装目录带空格时 Worker 将 java.io.tmpdir 指到这里，
+  ; 避免 HOScrcpy SDK 按空格拆分 hdc file send 命令）；升级安装也会执行。
+  CreateDirectory "$COMMONPROGRAMDATA\TestWorker"
 
   ; Copy files - first copy _internal directory (includes _internal\config)
   DetailPrint "Copying internal files..."
@@ -115,6 +126,13 @@ Section "MainSection" SEC01
     autostart_off:
     autostart_done:
   skip_autostart:
+
+  ; 系统 PATH：仅全新安装且勾选时写入（升级安装不动系统环境变量）
+  StrCmp $IsUpgrade "1" skip_addpath
+    StrCmp $AddToPath ${BST_CHECKED} 0 skip_addpath
+      DetailPrint "Adding ADB/HDC to system PATH..."
+      Call AddToolsToSystemPath
+  skip_addpath:
 
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\uninst.exe"
@@ -153,6 +171,9 @@ Section Uninstall
   ; HDC 只能清理 Worker 自己启动并登记的实例，不能按进程名或路径批量杀用户的 HDC
   Call un.KillOwnedHdcProcesses
 
+  ; 移除安装时写入的系统 PATH 条目（幂等，未写入则不动）并广播
+  Call un.RemoveToolsFromSystemPath
+
   ; 清理开机自启注册表项
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "test-worker"
 
@@ -167,6 +188,8 @@ Section Uninstall
   RMDir /r "$INSTDIR\data"
   RMDir /r "$INSTDIR\temp"
   RMDir /r "$INSTDIR\playwright"
+  ; java tmp 兜底目录（仅本产品命名空间，不影响其他软件的 ProgramData 数据）
+  RMDir /r "$COMMONPROGRAMDATA\TestWorker"
 
   ; Delete all files in install directory
   RMDir /r "$INSTDIR"
@@ -298,6 +321,39 @@ Function un.KillOwnedHdcProcesses
   Pop $0
   Pop $0
   un_done_owned_hdc:
+FunctionEnd
+
+; 将 $INSTDIR\tools\adb、$INSTDIR\tools\hdc 幂等追加到系统 PATH（HKLM）。
+; 直调注册表 API：GetValue 用 DoNotExpandEnvironmentNames 读原始值，按分号
+; 精确匹配（大小写无关）去重后追加，以 REG_EXPAND_SZ 写回，不破坏已有
+; 可展开条目；完成后广播 WM_SETTINGCHANGE 免重启生效。
+Function AddToolsToSystemPath
+  StrCpy $2 "$INSTDIR"
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment', $$true); "
+  StrCpy $1 "$1$$v = $$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); "
+  StrCpy $1 "$1$$add = @('$2\tools\adb', '$2\tools\hdc') | Where-Object { ($$v -split ';') -inotcontains $$_ }; "
+  StrCpy $1 "$1if ($$add) { $$k.SetValue('Path', (($$v.TrimEnd(';') + ';' + ($$add -join ';')).Trim(';')), [Microsoft.Win32.RegistryValueKind]::ExpandString) }; "
+  StrCpy $1 "$1$$k.Close()$\""
+  nsExec::Exec $1
+  Pop $0
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" $0 /TIMEOUT=2000
+FunctionEnd
+
+; 从系统 PATH 移除本产品写入的 tools\adb、tools\hdc 条目（幂等、保类型）。
+; 只有条目数确实减少时才回写，避免误覆盖；完成后同样广播。
+Function un.RemoveToolsFromSystemPath
+  StrCpy $2 "$INSTDIR"
+  StrCpy $1 "powershell -NoProfile -ExecutionPolicy Bypass -Command $\""
+  StrCpy $1 "$1$$k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment', $$true); "
+  StrCpy $1 "$1$$v = $$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); "
+  StrCpy $1 "$1$$rm = @('$2\tools\adb', '$2\tools\hdc'); "
+  StrCpy $1 "$1$$parts = @($$v -split ';' | Where-Object { $$rm -inotcontains $$_ }); "
+  StrCpy $1 "$1if ($$parts.Count -ne @($$v -split ';').Count) { $$k.SetValue('Path', ($$parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString) }; "
+  StrCpy $1 "$1$$k.Close()$\""
+  nsExec::Exec $1
+  Pop $0
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" $0 /TIMEOUT=2000
 FunctionEnd
 
 ; Auto IP detection - registry only (no PowerShell fallback to avoid UI freeze)
@@ -508,8 +564,13 @@ Function OptionsPageCreate
   ${NSD_CreateCheckbox} 0 106 140 12u "开机自动启动"
   Pop $AutoStart
 
+  ; Environment（ADB/HDC 加入系统 PATH）
+  ${NSD_CreateCheckbox} 0 128 280 12u "将 ADB/HDC 添加到系统环境变量"
+  Pop $AddToPath
+
   ; 默认勾上（控件创建后同步状态）
   ${NSD_SetState} $AutoStart ${BST_CHECKED}
+  ${NSD_SetState} $AddToPath ${BST_CHECKED}
 
   nsDialogs::Show
 
@@ -529,6 +590,7 @@ Function OptionsPageLeave
   ${NSD_GetState} $DiscoverHarmonyMobile $DiscoverHarmonyMobile
   ${NSD_GetState} $DiscoverHarmonyPc $DiscoverHarmonyPc
   ${NSD_GetState} $AutoStart $AutoStart
+  ${NSD_GetState} $AddToPath $AddToPath
 
   done:
   silent_install:
@@ -662,6 +724,7 @@ Function .onInit
   StrCpy $DiscoverHarmonyMobile ${BST_UNCHECKED}
   StrCpy $DiscoverHarmonyPc ${BST_UNCHECKED}
   StrCpy $AutoStart ${BST_CHECKED}
+  StrCpy $AddToPath ${BST_CHECKED}
 
   ; Get command line parameters
   ${GetParameters} $0

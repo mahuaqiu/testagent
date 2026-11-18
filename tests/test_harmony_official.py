@@ -9,6 +9,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 from queue import Empty, Queue
 from types import SimpleNamespace
 
@@ -40,6 +41,7 @@ from worker.platforms.harmony_official.session import (
     _find_residual_device_pids,
     _h264_websocket_packets,
     _parse_fport_rules,
+    resolve_java_temp_root,
 )
 from worker.screen.frame_source import HarmonyOfficialFrameSource
 from worker.screen.mjpeg_proxy import MJPEGProxy
@@ -1672,3 +1674,38 @@ def test_cold_start_queue_wait_is_cancellable(monkeypatch) -> None:
     first_thread.join(timeout=5.0)
     assert first_result["session"] is not None
     manager.stop_all()
+
+
+def test_resolve_java_temp_root_keeps_space_free_install_dir() -> None:
+    """安装目录无空格时维持安装目录内 tmpdir，行为不变。"""
+    root = resolve_java_temp_root(r"D:\TestWorker")
+    assert root == Path(r"D:\TestWorker\data\harmony_official")
+
+    root = resolve_java_temp_root(r"C:\TestWorker")
+    assert root == Path(r"C:\TestWorker\data\harmony_official")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="兜底目录为 Windows 系统路径")
+def test_resolve_java_temp_root_falls_back_when_install_dir_has_space() -> None:
+    """安装目录带空格（如 C:/Program Files/Test Worker）时
+    兜底到无空格的 ProgramData 目录，避免 HOScrcpy SDK 按空格拆分 file send 命令。"""
+    root = resolve_java_temp_root(r"C:\Program Files\Test Worker")
+    assert root == Path(r"C:\ProgramData\TestWorker\data\harmony_official")
+
+    root = resolve_java_temp_root(r"D:\code\Test Worker")
+    assert root == Path(r"C:\ProgramData\TestWorker\data\harmony_official")
+    assert " " not in str(root)
+
+
+def test_settings_for_serial_temp_dir_has_no_space_when_base_dir_spaced(tmp_path, monkeypatch) -> None:
+    """_settings_for_serial 产出的 java_tmp 路径在安装目录带空格时同样无空格。"""
+    import worker.platforms.harmony_official.session as session_module
+
+    spaced_base = tmp_path / "Test Worker"
+    monkeypatch.setattr(session_module, "get_base_dir", lambda: str(spaced_base))
+
+    manager = HarmonyOfficialSessionManager("harmony_pc", {})
+    temp_dir = Path(manager._settings_for_serial("PC-001")["temp_dir"])
+
+    assert " " not in str(temp_dir)
+    assert temp_dir.name == "java_tmp"

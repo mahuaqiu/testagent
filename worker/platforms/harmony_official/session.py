@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -37,6 +38,22 @@ from worker.platforms.harmony_official.protocol import (
 logger = logging.getLogger(__name__)
 
 H264_IDR_RETRY_DELAYS_SECONDS = (0.8, 2.0, 4.0)
+
+# HOScrcpy SDK 内部用 String.format 拼出单条 "hdc ... file send %s %s" 再按空格
+# split 执行，本地路径来自 java.io.tmpdir（File.createTempFile 上传 agent.so）。
+# 安装目录带空格（如 C:\Program Files\Test Worker）时该路径会被拆碎，首次连接
+# 上传必失败；此时兜底到系统共享数据目录（Windows 保证无空格），其余场景维持
+# 安装目录内路径不变。
+HARMONY_JAVA_TMP_FALLBACK_ROOT = Path(r"C:\ProgramData\TestWorker\data\harmony_official")
+
+
+def resolve_java_temp_root(base_dir: str | Path) -> Path:
+    """计算鸿蒙官方 Java Bridge 的 java.io.tmpdir 根目录。"""
+    root = Path(base_dir) / "data" / "harmony_official"
+    if os.name == "nt" and " " in str(root):
+        return HARMONY_JAVA_TMP_FALLBACK_ROOT
+    return root
+
 
 H264_BACKPRESSURE_LOG_INTERVAL_SECONDS = 600.0
 
@@ -1894,7 +1911,6 @@ class HarmonyOfficialSessionManager:
 
     def _settings_for_serial(self, serial: str) -> dict[str, Any]:
         settings = dict(self._settings)
-        temp_root = Path(get_base_dir()) / "data" / "harmony_official"
         safe_serial = re.sub(r"[^A-Za-z0-9_.-]", "_", serial)
-        settings["temp_dir"] = str(temp_root / safe_serial / "java_tmp")
+        settings["temp_dir"] = str(resolve_java_temp_root(get_base_dir()) / safe_serial / "java_tmp")
         return settings
