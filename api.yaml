@@ -1257,6 +1257,8 @@ components:
             - screenshot: 截图名称/标识
             - wait: 等待的毫秒数，如 "1000"
             - ocr_assert/ocr_exist: 单个文字或文字列表
+            - press: 单个按键名，或按顺序执行的按键名列表；列表按顺序逐项执行，click_duration 对列表不生效
+              示例：连续按两次空格键 {"action_type": "press", "value": ["space", "space"]}
             - pinch: 缩放方向，"in" 表示缩小，"out" 表示放大
             - set_volume: 音量百分比（0-100）
             - start_app: 应用包名或浏览器类型
@@ -1589,11 +1591,13 @@ components:
         click_duration:
           type: integer
           description: |
-            点击持续时间（毫秒），用于实现长按效果：
-            - 0: 普通点击（默认）
-            - >0: 长按指定时间，如 2000 表示长按 2 秒
-            适用动作：ocr_click、image_click、click、ocr_input、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
+            点击或按键持续时间（毫秒），用于实现长按效果：
+            - 0: 普通点击或普通按键（默认）
+            - >0: 按住指定时间，如 2000 表示长按 2 秒
+            适用动作：press、ocr_click、image_click、click、ocr_input、ocr_click_same_row_text、ocr_click_same_row_image、image_click_near_text
             示例：长按 2 秒 {"action_type": "ocr_click", "value": "确认", "click_duration": 2000}
+            press 示例：长按 Home 键 1 秒 {"action_type": "press", "value": "home", "click_duration": 1000}
+            press 仅对单个按键名长按；`ctrl+v` 等组合键仍执行普通组合键操作。按键列表按顺序执行，并忽略 click_duration。
         steps:
           type: integer
           description: |
@@ -1604,9 +1608,16 @@ components:
             适用动作：swipe、drag
             示例：平滑滑动 {"action_type": "swipe", "x": 100, "y": 500, "end_x": 100, "end_y": 100, "steps": 10}
         key:
-          type: string
+          oneOf:
+            - type: string
+            - type: array
+              minItems: 1
+              items:
+                type: string
           description: |
-            按键名称，仅 press 动作必填。所有平台统一 pyautogui 风格：
+            按键名称，仅 press 动作使用；兼容字段，优先使用 value。可传单个按键名，
+            或按顺序执行的按键名数组。数组中的每项都按普通按键操作逐项执行。
+            所有平台统一 pyautogui 风格：
             小写命名键，组合键用 "+" 分隔、修饰键在前、最后一个为功能键；
             单字符保留原大小写（"A" 等价 shift+a）。
 
@@ -1621,7 +1632,8 @@ components:
 
             【Android 特有键】home、back、menu、search、volume_up（volumeup）、
             power、camera、media_play_pause/media_stop/media_next/media_previous、
-            数字 KeyCode 直传（如 "26" 电源键）；不支持组合键
+            数字 KeyCode 直传（如 "26" 电源键）；不支持组合键。长按使用系统
+            `input keyevent --duration`，需要设备系统支持该参数
 
             【鸿蒙 mobile/PC】通用键名均可用（大小写不敏感），另有 home、back、
             power、volume_up/volume_down/volume_mute、数字原始键码
@@ -1958,13 +1970,17 @@ components:
 
   # ---------- 其他动作 ----------
   # press - 按键操作（统一 pyautogui 风格：小写、组合键修饰键在前）
-  # 示例 1: 按回车键（桌面端）
+  # 示例 1: 按回车键（桌面端；兼容 key 字段）
   # {"action_type": "press", "key": "enter"}
-  # 示例 2: 按 Escape 键（桌面端）
+  # 示例 2: 连续按两次空格键
+  # {"action_type": "press", "value": ["space", "space"]}
+  # 示例 3: 长按 Home 键 1 秒
+  # {"action_type": "press", "value": "home", "click_duration": 1000}
+  # 示例 4: 按 Escape 键（桌面端）
   # {"action_type": "press", "key": "esc"}
-  # 示例 3: 按下箭头键（桌面端）
+  # 示例 5: 按下箭头键（桌面端）
   # {"action_type": "press", "key": "down"}
-  # 示例 4: Ctrl+A 全选（桌面端组合键，mac 上自动按 command+a 注入）
+  # 示例 6: Ctrl+A 全选（桌面端组合键，mac 上自动按 command+a 注入）
   # {"action_type": "press", "key": "ctrl+a"}
 
   # 鸿蒙按键示例（通用键名可用，大小写不敏感）:

@@ -245,6 +245,10 @@ class PlatformManager(ABC):
         """
         pass
 
+    def press_for_duration(self, key: str, duration_ms: int, context: Any = None) -> None:
+        """按住单个按键指定时间；平台未实现时显式报错。"""
+        raise NotImplementedError(f"{self.platform} 不支持按住按键指定时长")
+
     @abstractmethod
     def take_screenshot(self, context: Any = None) -> bytes:
         """

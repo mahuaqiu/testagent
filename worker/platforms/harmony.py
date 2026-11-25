@@ -693,6 +693,36 @@ class HarmonyPlatformManager(PlatformManager):
         if not ok:
             raise HarmonyError(f"HDC 按键失败: {key}")
 
+    def press_for_duration(self, key: str, duration_ms: int, context=None) -> None:
+        """使用 HDC uinput 按下并保持按键指定时间。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if not key or not key.strip():
+            raise ValueError("Key is required")
+
+        if "+" in key:
+            raise ValueError("长按只支持单个按键，组合键按普通组合键操作")
+
+        resolved = resolve_harmony_key(key)
+        if resolved is not None:
+            key_code = resolved[1]
+        elif key.isdigit():
+            key_code = int(key)
+        else:
+            supported = ", ".join(sorted(set(HARMONY_KEY_MAP) | set(HARMONY_MODIFIER_KEY_MAP)))
+            raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
+
+        pressed = False
+        try:
+            if not client.key_down(key_code):
+                raise HarmonyError(f"HDC 按键按下失败: {key}")
+            pressed = True
+            time.sleep(duration_ms / 1000)
+        finally:
+            if pressed and not client.key_up(key_code):
+                raise HarmonyError(f"HDC 按键释放失败: {key}")
+
     # ========== 动作执行 ==========
 
     def execute_action(self, context: Any, action: Action) -> ActionResult:

@@ -1104,6 +1104,41 @@ class WebPlatformManager(PlatformManager):
             playwright_key = to_playwright_combo(parts, on_mac=sys.platform.startswith("darwin"))
             _run_async(page.keyboard.press(playwright_key))
 
+    def press_for_duration(self, key: str, duration_ms: int, context: Any = None) -> None:
+        """浏览器或系统层保持单个按键按下指定时间。"""
+        parts = parse_key_combo(key)
+        validate_combo(parts)
+        if len(parts) != 1:
+            raise ValueError("长按只支持单个按键，组合键按普通组合键操作")
+        if self._current_level == "system":
+            if not SYSTEM_LEVEL_AVAILABLE:
+                raise RuntimeError("System-level operations not available")
+            on_mac = sys.platform.startswith("darwin")
+            native_key = to_pyautogui_mac(parts[0]) if on_mac else to_pyautogui_win(parts[0])
+            pressed = False
+            try:
+                pyautogui.keyDown(native_key)
+                pressed = True
+                time.sleep(duration_ms / 1000)
+            finally:
+                if pressed:
+                    pyautogui.keyUp(native_key)
+            return
+
+        page = context or self._current_page
+        if not page:
+            raise RuntimeError("No active page")
+        on_mac = sys.platform.startswith("darwin")
+        playwright_key = to_playwright_combo(parts, on_mac=on_mac)
+        pressed = False
+        try:
+            _run_async(page.keyboard.down(playwright_key))
+            pressed = True
+            time.sleep(duration_ms / 1000)
+        finally:
+            if pressed:
+                _run_async(page.keyboard.up(playwright_key))
+
     def _system_press(self, key: str, parts: list[str]) -> None:
         """系统级按键（pyautogui），键名按运行 host 平台适配，支持组合键。"""
         if not SYSTEM_LEVEL_AVAILABLE:

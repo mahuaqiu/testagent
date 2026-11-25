@@ -344,6 +344,28 @@ class AndroidPlatformManager(PlatformManager):
             supported = ", ".join(sorted(self.KEY_MAP.keys()))
             raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
 
+    def press_for_duration(self, key: str, duration_ms: int, context: Any = None) -> None:
+        """按住 Android 按键指定时间，再由系统释放。"""
+        device = context or self._device_clients.get(self._current_device)
+        if not device:
+            raise RuntimeError("No device context")
+        if "+" in (key or ""):
+            raise ValueError("Android 不支持组合键长按")
+
+        key_name = (key or "").upper()
+        key_name = self._KEY_ALIASES.get(key_name, key_name)
+        key_code = self.KEY_MAP.get(key_name)
+        if key_code is None and key and key.isdigit():
+            key_code = int(key)
+        if key_code is None:
+            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            raise ValueError(f"Unsupported key '{key}' for Android. Supported keys: {supported}")
+
+        result = device.shell(f"input keyevent --duration {duration_ms} {key_code}")
+        if getattr(result, "exit_code", 0) != 0:
+            output = getattr(result, "output", str(result))
+            raise RuntimeError(f"Android 按键长按失败: {output}")
+
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（minicap 单帧优先，回退 uiautomator2）。
 

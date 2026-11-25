@@ -347,6 +347,23 @@ class WindowsPlatformManager(PlatformManager):
         else:
             pyautogui.press(keys[0])
 
+    def press_for_duration(self, key: str, duration_ms: int, context: Any = None) -> None:
+        """保持按键按下指定时间，结束时始终释放已按下的键。"""
+        parts = parse_key_combo(key)
+        validate_combo(parts)
+        if len(parts) != 1:
+            raise ValueError("长按只支持单个按键，组合键按普通组合键操作")
+
+        native_key = to_pyautogui_win(parts[0])
+        pressed = False
+        try:
+            pyautogui.keyDown(native_key)
+            pressed = True
+            time.sleep(duration_ms / 1000)
+        finally:
+            if pressed:
+                pyautogui.keyUp(native_key)
+
     @staticmethod
     def _send_secure_attention_sequence() -> None:
         """触发 Windows Ctrl+Alt+Delete 安全注意序列。"""

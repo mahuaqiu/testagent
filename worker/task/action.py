@@ -75,7 +75,7 @@ class Action:
     """
 
     action_type: str                         # 动作类型
-    value: str | list[str] | None = None    # 文字/URL/按键值（支持 list 批量验证）
+    value: str | list[str] | None = None    # 文字/URL/按键值（支持 OCR 批量校验和 press 按序执行）
     image_base64: str | None = None       # 图像模板 base64 编码
     offset: dict[str, int] | None = None  # 点击偏移 {"x": 10, "y": 5}
     threshold: float = 0.9                   # 图像匹配阈值

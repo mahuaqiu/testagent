@@ -189,6 +189,30 @@ class WDAClient:
             logger.error(f"Press button failed: {e}")
             return False
 
+    def press_button_for_duration(self, name: str, duration: float) -> bool:
+        """通过 WDA HID 事件长按 HOME 或音量键。"""
+        hid_usages = {"home": 0x40, "volumeup": 0xE9, "volumedown": 0xEA}
+        usage = hid_usages.get(name.lower())
+        if usage is None:
+            logger.warning(f"Unsupported WDA long-press button: {name}")
+            return False
+        try:
+            session_id = self._get_session()
+            response = self.session.post(
+                f"{self.base_url}/session/{session_id}/wda/performIoHidEvent",
+                json={"page": 0x0C, "usage": usage, "duration": duration},
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "Long press button failed: status=%s, body=%s",
+                    response.status_code,
+                    response.text,
+                )
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Long press button failed: {e}")
+            return False
+
     def touch_and_hold(self, x: int, y: int, duration: float = 1.0) -> bool:
         """长按指定坐标。
 

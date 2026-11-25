@@ -1437,6 +1437,22 @@ class iOSPlatformManager(PlatformManager):  # noqa: N801 -- iOS 为 Apple 品牌
             supported = ", ".join(sorted(self.KEY_MAP.keys()))
             raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
 
+    def press_for_duration(self, key: str, duration_ms: int, context: Any = None) -> None:
+        """通过 WDA HID 按键接口保持按键指定时间。"""
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise RuntimeError("No device context")
+        key_upper = key.upper()
+        if key_upper in self.UNSUPPORTED_KEYS:
+            raise ValueError(f"Unsupported key '{key}' for iOS. {self.UNSUPPORTED_KEYS[key_upper]}")
+
+        wda_key = self.KEY_MAP.get(key_upper)
+        if not wda_key:
+            supported = ", ".join(sorted(self.KEY_MAP.keys()))
+            raise ValueError(f"Unsupported key '{key}' for iOS. Supported keys: {supported}")
+        if not client.press_button_for_duration(wda_key, duration_ms / 1000):
+            raise RuntimeError(f"Press button failed: {key}")
+
     def take_screenshot(self, context: Any = None) -> bytes:
         """获取截图（WDA 单帧截图，返回设备原生分辨率 PNG）。"""
         return self._take_screenshot_fallback(context)

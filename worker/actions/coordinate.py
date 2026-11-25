@@ -386,21 +386,47 @@ class PressAction(BaseActionExecutor):
         # 设置执行层级（Web 平台专用）
         self._set_level(platform, action)
 
-        if not action.value:
+        value = action.value
+        if isinstance(value, str):
+            keys = [value.strip()]
+            is_sequence = False
+        elif isinstance(value, list) and all(isinstance(key, str) for key in value):
+            keys = [key.strip() for key in value]
+            is_sequence = True
+        else:
+            keys = []
+            is_sequence = False
+
+        if not keys or any(not key.strip() for key in keys):
             return ActionResult(
                 number=0,
                 action_type=self.name,
                 status=ActionStatus.FAILED,
-                error="Key is required",
+                error="press 的 value 必须是按键名字符串或非空按键名数组",
             )
 
-        platform.press(action.value, context)
+        click_duration = max(0, action.click_duration or 0)
+        long_press = not is_sequence and click_duration > 0 and "+" not in keys[0]
+        if is_sequence:
+            for key in keys:
+                platform.press(key, context)
+        elif long_press:
+            platform.press_for_duration(keys[0], click_duration, context)
+        else:
+            platform.press(keys[0], context)
+
+        if is_sequence:
+            output = f"Processed press sequence: {', '.join(keys)}"
+        elif long_press:
+            output = f"Long pressed: {keys[0]} for {click_duration}ms"
+        else:
+            output = f"Pressed: {keys[0]}"
 
         return ActionResult(
             number=0,
             action_type=self.name,
             status=ActionStatus.SUCCESS,
-            output=f"Pressed: {action.value}",
+            output=output,
         )
 
 
