@@ -93,6 +93,18 @@ def _wrap_powershell_script(cmd: str) -> str:
     )
 
 
+# 本机实测：目标不存在时输出 `ERROR: The process "..." not found.`，退出码为 128。
+# 按退出码判断，避免依赖 Windows 的显示语言。
+def _is_taskkill_missing_process(cmd: str, returncode: int) -> bool:
+    """按 taskkill 的目标不存在返回码判断是否可视为成功。"""
+    if os.name != "nt" or returncode != 128:
+        return False
+
+    first, _ = _split_first_token(cmd.lstrip().removeprefix("@").lstrip())
+    executable = _unquote(first).replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    return executable in {"taskkill", "taskkill.exe"}
+
+
 class CmdExecAction(BaseActionExecutor):
     """命令执行动作。在宿主机上执行 shell/cmd 命令。"""
 
@@ -173,7 +185,12 @@ class CmdExecAction(BaseActionExecutor):
                 timeout=timeout_sec,
             )
 
-            status = ActionStatus.SUCCESS if result.returncode == 0 else ActionStatus.FAILED
+            missing_process = _is_taskkill_missing_process(cmd, result.returncode)
+            succeeded = result.returncode == 0 or missing_process
+            status = ActionStatus.SUCCESS if succeeded else ActionStatus.FAILED
+
+            if missing_process:
+                logger.info("taskkill 目标进程不存在，按成功处理")
 
             logger.info(f"Command completed: exit_code={result.returncode}")
 
@@ -184,13 +201,13 @@ class CmdExecAction(BaseActionExecutor):
 
             if result.stderr:
                 stderr_preview = result.stderr[-500:] if len(result.stderr) > 500 else result.stderr
-                if result.returncode != 0:
+                if not succeeded:
                     logger.error(f"Script error: {stderr_preview}")
                 else:
                     logger.info(f"Script stderr: {stderr_preview}")
 
             # 成功时 output 返回 stdout，失败时返回 stderr（最多 500 字符）
-            if result.returncode == 0:
+            if succeeded:
                 output_text = result.stdout or ""
             else:
                 output_text = result.stderr or ""
@@ -204,7 +221,7 @@ class CmdExecAction(BaseActionExecutor):
                 stdout=result.stdout,
                 stderr=result.stderr,
                 output=output_preview,
-                error=result.stderr if result.returncode != 0 else None,
+                error=result.stderr if not succeeded else None,
             )
 
         except subprocess.TimeoutExpired:
