@@ -43,6 +43,21 @@ from worker.tools import get_all_script_versions
 logger = logging.getLogger(__name__)
 
 
+def _is_long_press_action(action: Any) -> bool:
+    """判断 background 异步是否有意义：仅长按类动作（click_duration>0）。
+
+    press 的长按语义与 PressAction 保持一致：仅"单个非组合键 + click_duration"
+    生效；按键列表与组合键忽略 click_duration，视为非长按。
+    """
+    duration = getattr(action, "click_duration", None) or 0
+    if duration <= 0:
+        return False
+    if action.action_type == "press":
+        value = action.value
+        return isinstance(value, str) and "+" not in value.strip()
+    return True
+
+
 @dataclass
 class WorkerStatus:
     """Worker 状态。"""
@@ -1106,6 +1121,38 @@ class Worker:
             logger.warning(f"Failed to get error screenshot: {e}\n{traceback.format_exc()}")
         return error_screenshot, error_artifacts
 
+    def _run_background_action(
+        self,
+        manager: PlatformManager,
+        context: Any,
+        action: Any,
+        task_id: str,
+        index: int,
+    ) -> None:
+        """后台线程执行长按动作；失败仅记日志，不回传任务结果。
+
+        与 cmd_exec 的 background 语义一致：不纳入任务取消和 Worker 生命周期。
+        鸿蒙长按走官方 uinput -K -r 单条命令，设备端自行完成整个长按闭环，
+        即使 Worker 中途退出按键也会正常释放。
+        """
+        try:
+            result = manager.execute_action(context, action)
+            if result.status == ActionStatus.FAILED:
+                logger.warning(
+                    "Background long press failed: task_id=%s action=%d type=%s error=%s",
+                    task_id, index, action.action_type, result.error,
+                )
+            else:
+                logger.info(
+                    "Background long press finished: task_id=%s action=%d type=%s output=%s",
+                    task_id, index, action.action_type, result.output,
+                )
+        except Exception as exc:  # noqa: BLE001 - 后台线程兜底，异常只记日志
+            logger.warning(
+                "Background long press raised: task_id=%s action=%d type=%s error=%s",
+                task_id, index, action.action_type, exc,
+            )
+
     def _attach_action_artifacts(self, task: Task, result: ActionResult) -> list[dict[str, Any]]:
         """登记动作产生的截图和录屏文件。"""
         references: list[dict[str, Any]] = []
@@ -1189,6 +1236,48 @@ class Worker:
                     error=f"Task timeout after {timeout_ms}ms",
                 )
             action_started = time.monotonic()
+            # background 后台异步：仅长按类动作（click_duration>0；press 须为
+            # 单个非组合键）与 cmd_exec 有意义——异步只有在长按时才有意义，
+            # 普通点击/按键传 background 显式判失败（结果与普通动作失败一致，
+            # 走共享失败收尾）。长按动作派发到后台线程后立即返回 SUCCESS，任务
+            # 继续执行后续动作；设备端命令自行完成"按下-保持-释放"闭环，后台
+            # 失败仅记日志、不回传任务结果（对齐 cmd_exec 后台语义：不纳入任务
+            # 取消和 Worker 生命周期）。
+            result: ActionResult | None = None
+            if action.background and action.action_type != "cmd_exec":
+                if not _is_long_press_action(action):
+                    result = ActionResult(
+                        number=i,
+                        action_type=action.action_type,
+                        status=ActionStatus.FAILED,
+                        error=(
+                            "background=true 仅对长按动作（click_duration>0，"
+                            "press 为单个非组合键）或 cmd_exec 生效"
+                        ),
+                    )
+                    logger.info(
+                        "Background rejected for non-long-press action: task_id=%s action=%d type=%s",
+                        task.task_id, i, action.action_type,
+                    )
+                else:
+                    # 脱离任务取消与动作截止时间约束，由设备端命令原子完成长按
+                    action.execution_control = None
+                    threading.Thread(
+                        target=self._run_background_action,
+                        args=(manager, context, action, task.task_id, i),
+                        daemon=True,
+                        name=f"bg-action-{task.task_id}-{i}",
+                    ).start()
+                    logger.info(
+                        "Long press dispatched in background: task_id=%s action=%d type=%s duration=%sms",
+                        task.task_id, i, action.action_type, action.click_duration,
+                    )
+                    result = ActionResult(
+                        number=i,
+                        action_type=action.action_type,
+                        status=ActionStatus.SUCCESS,
+                        output=f"Long press dispatched in background for {action.click_duration}ms",
+                    )
             configured_action_timeout = (
                 action.timeout if action.timeout_explicit else task.config.action_timeout
             )
@@ -1204,43 +1293,46 @@ class Worker:
             )
             if deadline is not None:
                 action_deadline = min(action_deadline, deadline) if action_deadline else deadline
-            action.execution_control = ExecutionControl(
-                deadline_monotonic=action_deadline,
-                cancel_event=cancel_event or threading.Event(),
-            )
-            result = None
-            try:
-                result = manager.execute_action(context, action)
-                action.execution_control.checkpoint()
-            except ActionCancelledError as exc:
-                return TaskResult(
-                    task_id=task.task_id, request_id=request_id,
-                    status=TaskStatus.CANCELLED, platform=task.platform,
-                    started_at=started_at, finished_at=datetime.now(),
-                    actions=actions_results, error=str(exc),
+            # 截止时间仅注入给真正要执行的动作；background 派发/拒绝的动作
+            # 保持 None，后台线程确定性地脱离任务取消与超时约束。
+            if result is None:
+                action.execution_control = ExecutionControl(
+                    deadline_monotonic=action_deadline,
+                    cancel_event=cancel_event or threading.Event(),
                 )
-            except ActionTimedOutError:
-                if result is None:
-                    result = ActionResult(
-                        number=i,
-                        action_type=action.action_type,
-                        status=ActionStatus.FAILED,
-                        error=f"Action timeout after {action_timeout_ms}ms",
-                    )
-                    result.duration_ms = int((time.monotonic() - action_started) * 1000)
-                    result.request_id = request_id
-                    actions_results.append(result)
+            if result is None:
+                try:
+                    result = manager.execute_action(context, action)
+                    action.execution_control.checkpoint()
+                except ActionCancelledError as exc:
                     return TaskResult(
                         task_id=task.task_id, request_id=request_id,
-                        status=TaskStatus.TIMEOUT, platform=task.platform,
+                        status=TaskStatus.CANCELLED, platform=task.platform,
                         started_at=started_at, finished_at=datetime.now(),
-                        actions=actions_results, error=result.error,
+                        actions=actions_results, error=str(exc),
                     )
-                # 动作已自行返回终态（如断言轮询最后一轮超出窗口后按 FAILED 收尾），
-                # 保留动作自身结果，不把单个动作超预算升级为整个任务 TIMEOUT；
-                # 任务整体超时由动作后的 deadline 检查兜底。
-            finally:
-                action.execution_control = None
+                except ActionTimedOutError:
+                    if result is None:
+                        result = ActionResult(
+                            number=i,
+                            action_type=action.action_type,
+                            status=ActionStatus.FAILED,
+                            error=f"Action timeout after {action_timeout_ms}ms",
+                        )
+                        result.duration_ms = int((time.monotonic() - action_started) * 1000)
+                        result.request_id = request_id
+                        actions_results.append(result)
+                        return TaskResult(
+                            task_id=task.task_id, request_id=request_id,
+                            status=TaskStatus.TIMEOUT, platform=task.platform,
+                            started_at=started_at, finished_at=datetime.now(),
+                            actions=actions_results, error=result.error,
+                        )
+                    # 动作已自行返回终态（如断言轮询最后一轮超出窗口后按 FAILED 收尾），
+                    # 保留动作自身结果，不把单个动作超预算升级为整个任务 TIMEOUT；
+                    # 任务整体超时由动作后的 deadline 检查兜底。
+                finally:
+                    action.execution_control = None
             if result.duration_ms <= 0:
                 result.duration_ms = int((time.monotonic() - action_started) * 1000)
             result.number = i

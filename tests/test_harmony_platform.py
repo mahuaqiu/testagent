@@ -1971,6 +1971,159 @@ def test_hdc_key_down_up_primitives(monkeypatch: pytest.MonkeyPatch) -> None:
     assert commands == ["uinput -K -d 2047", "uinput -K -u 2047"]
 
 
+def test_hdc_long_press_key_builds_one_shot_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """长按走官方 uinput -K -r 一次性命令，shell 超时按时长放大。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    timeouts: list[int] = []
+
+    def _record_shell(command: str, timeout: int = 30) -> CommandResult:
+        commands.append(command)
+        timeouts.append(timeout)
+        return CommandResult("", "", 0)
+
+    monkeypatch.setattr(wrapper, "shell", _record_shell)
+
+    assert wrapper.long_press_key(2050, 2000) is True
+
+    assert commands == ["uinput -K -r 2050 2000"]
+    # 2s 长按未超默认 30s 窗口
+    assert timeouts == [30]
+
+
+def test_hdc_long_press_key_scales_timeout_for_long_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    timeouts: list[int] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: timeouts.append(timeout)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.long_press_key(2050, 60000) is True
+
+    # 60s 长按超过默认 30s 窗口，必须放大否则命令被误杀
+    assert timeouts == [75]
+
+
+def test_hdc_long_press_key_rejects_non_positive_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.long_press_key(2050, 0) is False
+    assert wrapper.long_press_key(2050, -100) is False
+    assert commands == []
+
+
+def test_hdc_tap_keys_builds_batch_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """按键序列合并为一条 uinput 批量命令：-i 只出现在相邻按键之间。"""
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.tap_keys([2050, 2050]) is True
+    assert wrapper.tap_keys([2017, 2049, 2054], interval_ms=50) is True
+    assert wrapper.tap_keys([2054]) is True
+
+    assert commands == [
+        "uinput -K -d 2050 -u 2050 -i 100 -d 2050 -u 2050",
+        "uinput -K -d 2017 -u 2017 -i 50 -d 2049 -u 2049 -i 50 -d 2054 -u 2054",
+        "uinput -K -d 2054 -u 2054",
+    ]
+
+
+def test_hdc_tap_keys_rejects_empty_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    wrapper = HarmonyHdcWrapper.__new__(HarmonyHdcWrapper)
+    commands: list[str] = []
+    monkeypatch.setattr(
+        wrapper,
+        "shell",
+        lambda command, timeout=30: commands.append(command)
+        or CommandResult("", "", 0),
+    )
+
+    assert wrapper.tap_keys([]) is False
+    assert commands == []
+
+
+def test_harmony_press_for_duration_uses_one_shot_command() -> None:
+    """长按按键改走单条官方命令，不再 key_down + sleep + key_up。"""
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    calls: list[tuple[int, int]] = []
+    client = SimpleNamespace(
+        long_press_key=lambda key_code, duration_ms: calls.append((key_code, duration_ms)) or True,
+    )
+
+    manager.press_for_duration("space", 2000, context=client)
+
+    assert calls == [(2050, 2000)]
+
+
+def test_harmony_press_for_duration_rejects_combo_and_bad_duration() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+
+    with pytest.raises(ValueError, match="长按只支持单个按键"):
+        manager.press_for_duration("ctrl+v", 1000, context=SimpleNamespace())
+
+    with pytest.raises(ValueError, match="长按时长必须大于 0"):
+        manager.press_for_duration("space", 0, context=SimpleNamespace())
+
+
+def test_harmony_press_sequence_batches_single_keys() -> None:
+    """纯单键列表合并为一条批量命令（["space","space"] 场景）。"""
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    batches: list[tuple[list[int], int]] = []
+    client = SimpleNamespace(
+        tap_keys=lambda codes, interval_ms=100: batches.append((list(codes), interval_ms)) or True,
+    )
+
+    manager.press_sequence(["space", "space"], context=client)
+
+    assert batches == [([2050, 2050], 100)]
+
+
+def test_harmony_press_sequence_falls_back_to_per_key_for_combo() -> None:
+    """列表含组合键时回退逐键 press，保持既有组合键语义。"""
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+    pressed: list[int] = []
+    combos: list[tuple[int, list[int]]] = []
+    batches: list[list[int]] = []
+    client = SimpleNamespace(
+        tap_key=lambda key_code: pressed.append(key_code) or True,
+        tap_key_combination=lambda key_code, modifiers: combos.append((key_code, list(modifiers))) or True,
+        tap_keys=lambda codes, interval_ms=100: batches.append(list(codes)) or True,
+    )
+
+    manager.press_sequence(["a", "ctrl+s"], context=client)
+
+    assert batches == []  # 不应尝试批量
+    assert pressed == [2017]
+    assert combos == [(2035, [2072])]
+
+
+def test_harmony_press_sequence_rejects_unknown_key() -> None:
+    manager = HarmonyPlatformManager(PlatformConfig(), device_type="harmony_pc")
+
+    with pytest.raises(ValueError, match="Unsupported key"):
+        manager.press_sequence(["space", "NotAKey"], context=SimpleNamespace())
+
+
 def test_harmony_keycode_map_covers_official_codes() -> None:
     from worker.platforms.harmony_keycodes import (
         HARMONY_MODIFIER_KEY_MAP,

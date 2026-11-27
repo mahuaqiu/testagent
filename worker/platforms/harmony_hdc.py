@@ -1244,6 +1244,58 @@ class HarmonyHdcWrapper:
         result = self.shell(f"uinput -K{downs} -d {key_code} -u {key_code}{ups}")
         return self._check_result(result, "发送组合键")
 
+    def long_press_key(self, key_code: int, duration_ms: int) -> bool:
+        """
+        一次性长按一个按键（官方 uinput -K -r 命令）。
+
+        命令在设备端一次完成"按下 -> 保持 -> 释放"整个闭环，Worker 不再
+        自行 key_down + sleep + key_up：即使 Worker 中途退出，设备侧命令
+        也会完整执行并释放按键，不会卡键。
+
+        Args:
+            key_code: 按键代码（OpenHarmony KeyCode）
+            duration_ms: 长按时长（毫秒，必须大于 0）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        if duration_ms <= 0:
+            logger.error(f"长按时长必须大于 0: {duration_ms}")
+            return False
+        # 设备端命令会阻塞 duration_ms，shell 超时按实际时长放大
+        timeout = max(30, duration_ms / 1000 + 15)
+        result = self.shell(f"uinput -K -r {key_code} {duration_ms}", timeout=timeout)
+        return self._check_result(result, "长按按键")
+
+    def tap_keys(self, key_codes: list[int], interval_ms: int = 100) -> bool:
+        """
+        一条 uinput 命令批量注入按键序列。
+
+        格式：`uinput -K -d c1 -u c1 -i {interval} -d c2 -u c2 ...`，
+        `-i` 为相邻两次按键之间的事件间隔（毫秒），首个按键前不加。
+        单条命令替代逐键多条 shell 命令，键间节奏由设备端保证。
+
+        Args:
+            key_codes: 按键代码列表（OpenHarmony KeyCode，非空）
+            interval_ms: 相邻按键间隔（毫秒）
+
+        Returns:
+            bool: True 表示成功，False 表示失败
+        """
+        if not key_codes:
+            logger.error("按键序列为空")
+            return False
+        if interval_ms < 0:
+            logger.error(f"按键间隔不能为负数: {interval_ms}")
+            return False
+        parts: list[str] = []
+        for index, code in enumerate(key_codes):
+            if index:
+                parts.append(f"-i {interval_ms}")
+            parts.append(f"-d {code} -u {code}")
+        result = self.shell(f"uinput -K {' '.join(parts)}")
+        return self._check_result(result, "按键序列")
+
     def key_down(self, key_code: int) -> bool:
         """
         按下按键（保持按住，供自定义按住时序使用）。

@@ -1598,6 +1598,7 @@ components:
             示例：长按 2 秒 {"action_type": "ocr_click", "value": "确认", "click_duration": 2000}
             press 示例：长按 Home 键 1 秒 {"action_type": "press", "value": "home", "click_duration": 1000}
             press 仅对单个按键名长按；`ctrl+v` 等组合键仍执行普通组合键操作。按键列表按顺序执行，并忽略 click_duration。
+            配合 background: true 可后台异步长按（立即返回，不阻塞后续动作）；background 对非长按动作无效并校验失败。
         steps:
           type: integer
           description: |
@@ -1648,7 +1649,14 @@ components:
         background:
           type: boolean
           default: false
-          description: "仅 cmd_exec 使用；为 true 时后台启动命令并立即返回，不等待命令完成"
+          description: |
+            后台异步执行（不等待结果直接返回，动作结果不回传）：
+            - cmd_exec: 后台启动命令并立即返回
+            - 长按动作（click_duration>0；press 须为单个非组合键）：后台注入长按并
+              立即返回 SUCCESS，任务继续执行后续动作，可在按住期间执行其它操作；
+              设备端命令自行完成"按下-保持-释放"闭环，后台失败仅记录日志
+            - 其它动作传 true 校验失败（异步只有在长按的时候才有意义）
+            示例：后台长按空格 2 秒 {"action_type": "press", "value": "space", "click_duration": 2000, "background": true}
       example:
         action_type: "ocr_wait"
         value: "加载完成"

@@ -408,8 +408,9 @@ class PressAction(BaseActionExecutor):
         click_duration = max(0, action.click_duration or 0)
         long_press = not is_sequence and click_duration > 0 and "+" not in keys[0]
         if is_sequence:
-            for key in keys:
-                platform.press(key, context)
+            # 列表按键由平台决定注入方式：鸿蒙合并为一条 uinput 批量命令，
+            # 其余平台默认逐键执行（行为不变）
+            platform.press_sequence(keys, context=context)
         elif long_press:
             platform.press_for_duration(keys[0], click_duration, context)
         else:

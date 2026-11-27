@@ -249,6 +249,16 @@ class PlatformManager(ABC):
         """按住单个按键指定时间；平台未实现时显式报错。"""
         raise NotImplementedError(f"{self.platform} 不支持按住按键指定时长")
 
+    def press_sequence(self, keys: list[str], interval_ms: int = 100, context: Any = None) -> None:
+        """按顺序注入按键序列（press 动作 value 为列表时）。
+
+        默认逐键调用 press()，保持既有行为；平台可覆盖为单条命令批量
+        注入（如鸿蒙 uinput -K 批量格式）。`interval_ms` 仅对支持批量的
+        平台有意义，表示相邻按键的事件间隔。
+        """
+        for key in keys:
+            self.press(key, context)
+
     @abstractmethod
     def take_screenshot(self, context: Any = None) -> bytes:
         """

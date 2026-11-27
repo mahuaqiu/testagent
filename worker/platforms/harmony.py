@@ -693,13 +693,22 @@ class HarmonyPlatformManager(PlatformManager):
         if not ok:
             raise HarmonyError(f"HDC 按键失败: {key}")
 
+    # press 序列批量注入的键间隔（毫秒）：-i 事件间隔，对齐远程前端逐键节奏
+    KEY_SEQUENCE_INTERVAL_MS = 100
+
     def press_for_duration(self, key: str, duration_ms: int, context=None) -> None:
-        """使用 HDC uinput 按下并保持按键指定时间。"""
+        """长按按键：官方 uinput -K -r 一次性完成"按下-保持-释放"。
+
+        命令在设备端原子完成整个长按闭环，Worker 不再 key_down + sleep +
+        key_up；即使 Worker 中途退出，设备侧也会完整执行并释放按键。
+        """
         client = context or self._device_clients.get(self._current_device)
         if not client:
             raise HarmonyError("No device context")
         if not key or not key.strip():
             raise ValueError("Key is required")
+        if duration_ms <= 0:
+            raise ValueError(f"长按时长必须大于 0: {duration_ms}")
 
         if "+" in key:
             raise ValueError("长按只支持单个按键，组合键按普通组合键操作")
@@ -713,15 +722,44 @@ class HarmonyPlatformManager(PlatformManager):
             supported = ", ".join(sorted(set(HARMONY_KEY_MAP) | set(HARMONY_MODIFIER_KEY_MAP)))
             raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
 
-        pressed = False
-        try:
-            if not client.key_down(key_code):
-                raise HarmonyError(f"HDC 按键按下失败: {key}")
-            pressed = True
-            time.sleep(duration_ms / 1000)
-        finally:
-            if pressed and not client.key_up(key_code):
-                raise HarmonyError(f"HDC 按键释放失败: {key}")
+        if not client.long_press_key(key_code, duration_ms):
+            raise HarmonyError(f"HDC 长按失败: {key} ({duration_ms}ms)")
+
+    def press_sequence(self, keys: list[str], interval_ms: int | None = None, context=None) -> None:
+        """按顺序注入按键序列。
+
+        纯单键列表合并为一条 uinput 命令批量注入（`-K -d c1 -u c1 -i t
+        -d c2 -u c2 ...`）；列表中含组合键（"ctrl+s"）时无法并入单条
+        命令，回退为逐键 press，保持既有组合键语义。
+        """
+        client = context or self._device_clients.get(self._current_device)
+        if not client:
+            raise HarmonyError("No device context")
+        if not keys:
+            raise ValueError("Key sequence is required")
+
+        interval = interval_ms if interval_ms is not None else self.KEY_SEQUENCE_INTERVAL_MS
+
+        codes: list[int] = []
+        for key in keys:
+            if "+" in key:
+                # 组合键回退逐键执行（校验先行，不会出现前半段重复注入）
+                super().press_sequence(keys, interval, context)
+                return
+            resolved = resolve_harmony_key(key)
+            if resolved is not None:
+                codes.append(resolved[1])
+            elif key.strip().isdigit():
+                # 纯数字按原始键码直传，与 press() 保持一致
+                codes.append(int(key.strip()))
+            else:
+                supported = ", ".join(
+                    sorted(set(HARMONY_KEY_MAP) | set(HARMONY_MODIFIER_KEY_MAP))
+                )
+                raise ValueError(f"Unsupported key '{key}'. Supported: {supported}")
+
+        if not client.tap_keys(codes, interval):
+            raise HarmonyError(f"HDC 按键序列失败: {', '.join(keys)}")
 
     # ========== 动作执行 ==========
 

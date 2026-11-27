@@ -150,8 +150,10 @@ class Action:
     watermark: bool = True                    # 是否开启时间水印
     recording_timeout: int | None = None      # 录屏超时时间（毫秒，默认使用代码固定值）
 
-    # 命令执行参数（cmd_exec 专用）
-    background: bool = False                  # 是否后台异步执行（不等待结果直接返回）
+    # 后台异步参数（cmd_exec 与长按动作）
+    background: bool = False                  # 是否后台异步执行：cmd_exec 后台执行命令；
+                                              # 长按动作（click_duration>0，press 须为单个非组合键）
+                                              # 后台注入长按立即返回；其它动作传 true 校验失败
 
     # 运行时注入，不参与请求序列化；由 Worker 为当前动作设置截止时间。
     execution_control: Any = None
